@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routes.utils import select_all_tables
+from utils import select_all_tables
 import uvicorn
 
 app = FastAPI()
