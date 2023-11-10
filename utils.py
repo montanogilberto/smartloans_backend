@@ -6,10 +6,11 @@ import json
 app = FastAPI()
 conn = connection()
 
+
 def select_all_tables(table_name: str):
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_select_all_tables @table_name = ?", table_name)
+        cursor.execute("EXEC sp_select_all_tables @table_name = %s", table_name)
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
