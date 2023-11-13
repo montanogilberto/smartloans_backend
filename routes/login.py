@@ -6,10 +6,10 @@ import json
 app = FastAPI()
 conn = connection()
 
-def users_sp(json_file):
+def login_sp(json_file):
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_select_all_tables @table_name = ?", table_name)
+        cursor.execute("EXEC sp_select_all_tables @table_name = %s", json_file)
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
