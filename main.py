@@ -1,9 +1,11 @@
 from fastapi import FastAPI
+from flask_cors import CORS
 from modules.utils import select_all_tables
 from modules.login import login_sp
 import uvicorn
 
 app = FastAPI()
+CORS(app)
 
 @app.get("/select_all_tables/{table_name}")
 def select_all_tables_route(table_name: str):
