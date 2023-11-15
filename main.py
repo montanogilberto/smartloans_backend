@@ -1,11 +1,24 @@
 from fastapi import FastAPI
-from flask_cors import CORS
+from fastapi.middleware.cors import CORSMiddleware
 from modules.utils import select_all_tables
 from modules.login import login_sp
 import uvicorn
 
 app = FastAPI()
-CORS(app)
+
+# Set up CORS
+origins = [
+    "http://localhost",
+    "http://localhost:8100",  # Assuming this is your frontend URL
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/select_all_tables/{table_name}")
 def select_all_tables_route(table_name: str):
