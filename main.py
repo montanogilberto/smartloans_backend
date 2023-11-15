@@ -1,6 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from utils import select_all_tables
-from routes.login import login_sp
+from login import login_sp
 import uvicorn
 
 app = FastAPI()
@@ -9,8 +9,8 @@ app = FastAPI()
 def select_all_tables_route(table_name: str):
     return select_all_tables(table_name)
 
-@app.get("/login_sp/")
-def login_sp(json):
+@app.post("/login")
+def login(json: dict):
     return login_sp(json)
 
 if __name__ == '__main__':
