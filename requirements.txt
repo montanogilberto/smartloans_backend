@@ -1,3 +1,4 @@
 fastapi
 uvicorn
 pymssql
+flask-cors
