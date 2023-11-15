@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException
-from utils import select_all_tables
-from login import login_sp
+from fastapi import FastAPI
+from modules.utils import select_all_tables
+from modules.login import login_sp
 import uvicorn
 
 app = FastAPI()
