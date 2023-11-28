@@ -1,12 +1,18 @@
 import pymssql
-
+import os
 
 def connection():
     # Server
-    server = "smartloans.database.windows.net"
-    database = "smartloan"
-    username = "adminsmart"
-    password = "Admin#8605"
+    server = os.getenv("DB_SERVER")
+    database = os.getenv("DB_NAME")
+    username = os.getenv("DB_USER")
+    password = os.getenv("DB_PASSWORD")
+
+    print(f"server: {server}, database: {database}, username: {username}, password: {password}")
+
+    if None in (server, database, username, password):
+        raise ValueError("One or more required environment variables are missing.")
+
 
     connection_string = {
         "server": server,
@@ -15,5 +21,3 @@ def connection():
         "password": password,
         "autocommit": True,
     }
-
-    return pymssql.connect(**connection_string)
