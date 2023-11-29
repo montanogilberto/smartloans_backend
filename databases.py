@@ -1,3 +1,5 @@
+import os
+
 def connection():
     server = os.getenv("DB_SERVER")
     database = os.getenv("DB_NAME")
