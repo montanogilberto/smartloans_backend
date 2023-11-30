@@ -2,10 +2,10 @@ import os
 import pymssql
 
 def connection():
-    server = os.getenv("DB_SERVER")
-    database = os.getenv("DB_NAME")
-    username = os.getenv("DB_USER")
-    password = os.getenv("DB_PASSWORD")
+    server = os.getenv("LOCAL_DB_SERVER")
+    database = os.getenv("LOCAL_DB_NAME")
+    username = os.getenv("LOCAL_DB_USER")
+    password = os.getenv("LOCAL_DB_PASSWORD")
 
     print(f"server: {server}, database: {database}, username: {username}, password: {password}")
 
