@@ -1,19 +1,22 @@
+import os
 import pymssql
 import os
 
+    #server = "sql.bsite.net\MSSQL2016"
+    #database = "montanogilberto_smartloans"
+    #username = "montanogilberto_smartloans"
+    #password = "Admin#1914"
+
 def connection():
-    # Server
+    server = os.getenv("LOCAL_DB_SERVER")
+    database = os.getenv("LOCAL_DB_NAME")
+    username = os.getenv("LOCAL_DB_USER")
+    password = os.getenv("LOCAL_DB_PASSWORD")
 
-    #server = os.getenv("DB_SERVER")
-    #database = os.getenv("DB_NAME")
-    #username = os.getenv("DB_USER")
-    #password = os.getenv("DB_PASSWORD")
+    print(f"server: {server}, database: {database}, username: {username}, password: {password}")
 
-
-    server = "sql.bsite.net\MSSQL2016"
-    database = "montanogilberto_smartloans"
-    username = "montanogilberto_smartloans"
-    password = "Admin#1914"
+    if None in (server, database, username, password):
+        raise ValueError("One or more required environment variables are missing.")
 
     connection_string = {
         "server": server,
