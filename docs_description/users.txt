@@ -1,0 +1,32 @@
+Log in with the provided JSON credentials.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+    {
+      "users": [
+        {
+          "user_id": "0",
+          "email": "email2@example.com",
+          "name": "test2",
+          "password": "123",
+          "action": "1"
+        }
+      ]
+    }
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }
