@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routes_ import login,utils,swagger
+from routes_ import login,utils,swagger,users
 
 
 import uvicorn
@@ -24,6 +24,7 @@ app.add_middleware(
 app.include_router(swagger.router)
 app.include_router(utils.router)
 app.include_router(login.router)
+app.include_router(users.router)
 
 
 
