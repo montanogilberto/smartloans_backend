@@ -8,10 +8,16 @@ import os
     #password = "Admin#1914"
 
 def connection():
-    server = os.getenv("LOCAL_DB_SERVER")
-    database = os.getenv("LOCAL_DB_NAME")
-    username = os.getenv("LOCAL_DB_USER")
-    password = os.getenv("LOCAL_DB_PASSWORD")
+
+    server = "sql.bsite.net\MSSQL2016"
+    database = "montanogilberto_smartloans"
+    username = "montanogilberto_smartloans"
+    password = "Admin#1914"
+
+    #server = os.getenv("LOCAL_DB_SERVER")
+    #database = os.getenv("LOCAL_DB_NAME")
+    #username = os.getenv("LOCAL_DB_USER")
+    #password = os.getenv("LOCAL_DB_PASSWORD")
 
     print(f"server: {server}, database: {database}, username: {username}, password: {password}")
 
