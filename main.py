@@ -11,7 +11,8 @@ app = FastAPI()
 origins = [
     "http://localhost",
     "http://localhost:8100",
-    "http://localhost:8101/"# Assuming this is your frontend URL
+    "http://localhost:8101",
+    "http://localhost:62739"
 ]
 
 app.add_middleware(
