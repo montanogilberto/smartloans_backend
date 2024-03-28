@@ -1,4 +1,7 @@
-fastapi
-uvicorn
-pymssql
+fastapi~=0.104.1
+uvicorn~=0.24.0.post1
+pymssql~=2.2.10
 flask-cors
+
+openai~=1.13.3
+starlette~=0.27.0
