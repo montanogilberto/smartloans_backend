@@ -1,0 +1,24 @@
+Log in with the provided JSON credentials.
+
+Parameters:
+    ```json
+    {
+        "logins": [
+            {
+                "username": "admin",
+                "password": "567"
+            }
+        ]
+    }
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }
