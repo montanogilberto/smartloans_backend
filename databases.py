@@ -9,7 +9,7 @@ import os
 
 def connection():
 
-    server = "sql.bsite.net\MSSQL2016"
+    server = r"sql.bsite.net\MSSQL2016"
     database = "montanogilberto_smartloans"
     username = "montanogilberto_smartloans"
     password = "Admin#1914"
