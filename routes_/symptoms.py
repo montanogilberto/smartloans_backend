@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.api_gpt import symptoms_sp
+from modules.api_gpt import gpt_sp
 
 
 router = APIRouter()
@@ -10,4 +10,4 @@ with open("docs_description/symptoms.txt", "r") as file:
 
 @router.post("/symptoms",  summary="Medical Recomenations", description=symptoms_docstring)
 def symptoms(json: dict):
-    return  symptoms_sp(json)
+    return  gpt_sp(json,'simptoms')

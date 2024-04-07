@@ -1,15 +1,34 @@
-Log in with the provided JSON credentials.
+Get medical recommendations with the provided JSON credentials.
 
 Parameters:
     ```json
-    {
-        "logins": [
-            {
-                "username": "admin",
-                "password": "567"
+        {
+            "descripcion": {
+                "idioma": "es-EN",
+                "texto": "Necesito una recomendación médica para mis síntomas."
+            },
+            "persona": {
+                "tipoPersona": "Adulto"
+            },
+            "sintomas": {
+                "sintoma1": "Dolor de cabeza",
+                "sintoma2": "Fiebre alta",
+                "sintoma3": "Dolor de garganta",
+                "sintoma4": "Tos persistente con flema"
+            },
+            "formatoResultado": {
+                "formato": {
+                    "recomendaciones": [
+                        {
+                            "sintoma": "",
+                            "tratamiento": "",
+                            "nombre del medicamento": "",
+                            "mg": " mg"
+                        }
+                    ]
+                }
             }
-        ]
-    }
+        }
     ```
 
 Returns:
