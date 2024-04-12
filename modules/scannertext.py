@@ -65,11 +65,14 @@ def generate_json_output(results):
                     "Intended Use(symptoms)": [],
                     "Active Ingredients": "[[name:'',dosage:'']]",  # Placeholder for active ingredients
                     "Packaging": "",
-                    "Route of Administration": ""
+                    "Route of Administration": "",
+                    "expiration_date":"",
+                    "barcode":"",
+                    "restrictions":""
                 }
             },
             {
-                "image": "image1",  # Assuming this is the image identifier
+                "image": "",  # Assuming this is the image identifier
                 "text_lines": results[0]  # Assuming results is a list containing the text lines
             }
         ]
@@ -79,7 +82,6 @@ def generate_json_output(results):
     print(result_json)
 
     return result_json
-
 
 
 def scannertext_sp(json_file: dict) -> JSONResponse:
