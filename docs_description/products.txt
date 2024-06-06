@@ -1,0 +1,21 @@
+Log in with the provided JSON credentials.
+
+Parameters:
+    ```json
+    {
+    }
+    ```
+
+Returns:
+-     {
+          {
+            "products": [
+                {
+                    "name": "exaliv",
+                    "dateOfExpire": "2024-03-12",
+                    "productFormId": 1,
+                    "manufactureId": 1,
+                    "createdAt": "2024-03-12T20:31:06.490"
+                }
+            ]
+        }
