@@ -6,7 +6,7 @@ import json
 app = FastAPI()
 conn = connection()
 
-def users_sp(json_file: dict):
+def products_sp(json_file: dict):
     try:
         cursor = conn.cursor()
         cursor.execute("EXEC sp_users @pjsonfile = %s", (json.dumps(json_file)))
@@ -22,11 +22,11 @@ def users_sp(json_file: dict):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-def all_users_sp():
+def all_products_sp():
 
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC [dbo].[sp_users_all]")
+        cursor.execute("EXEC [dbo].[sp_products_all]")
 
         # Fetch all the results as a list of tuples
         rows = cursor.fetchall()
@@ -41,10 +41,10 @@ def all_users_sp():
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-def one_users_sp(json_file: dict):
+def one_products_sp(json_file: dict):
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_users_one @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC sp_products_one @pjsonfile = %s", (json.dumps(json_file)))
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
