@@ -7,12 +7,13 @@ app = FastAPI()
 conn = connection()
 
 def products_sp(json_file: dict):
+    print(json_file)
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_products @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC [dbo].[sp_products] @pjsonfile = %s", (json.dumps(json_file)))
 
         # Fetch the result as a JSON string
-        json_result = cursor.fetchone()[0]
+        json_result = cursor.fetchall()
 
         # Parse the JSON string to a Python dictionary
         result = json.loads(json_result)
