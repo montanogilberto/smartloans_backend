@@ -9,7 +9,7 @@ conn = connection()
 def products_sp(json_file: dict):
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_users @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC sp_products @pjsonfile = %s", (json.dumps(json_file)))
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
