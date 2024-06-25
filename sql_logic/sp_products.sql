@@ -1,3 +1,8 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
 CREATE PROC [dbo].[sp_products] (@pjsonfile VARCHAR(MAX))
 --INSERT --> 1
 --UPDATE --> 2
@@ -17,8 +22,7 @@ DECLARE @pjsonfile VARCHAR(MAX) = '{
             "productFormId": 1,
             "manufactureId": 1,
             "description": "",
-            "createdAt": "2024-03-12T20:31:06.490",
-            "updatedAt": "1900-01-01T00:00:00"
+            "action": "1"
         }
     ]
 }'
