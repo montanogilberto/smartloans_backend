@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routes_ import login, utils, swagger, users, symptoms, scannertext, products
+from routes_ import login, utils, swagger, users, symptoms, scannertext, products, checks
 import uvicorn
 
 app = FastAPI()
@@ -33,6 +33,8 @@ app.include_router(users.router)
 app.include_router(symptoms.router)
 app.include_router(scannertext.router)
 app.include_router(products.router)
+app.include_router(checks.router)
+
 
 
 
