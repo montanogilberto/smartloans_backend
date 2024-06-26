@@ -15,10 +15,12 @@ def checks_sp(json_file: dict):
         # Fetch the result as a JSON string
         json_result = cursor.fetchall()
 
-        # Parse the JSON string to a Python dictionary
-        result = json.loads(json_result)
+        #print(json_result[0][1])
 
-        return JSONResponse(content=result, status_code=200)
+        # Parse the JSON string to a Python dictionary
+        #result = json.loads(json_result[0][1])
+
+        return JSONResponse(content=json_result[0][1], status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
