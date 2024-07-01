@@ -1,0 +1,16 @@
+Retrieve a single contractor record with the provided JSON.
+
+Parameters:
+    ```
+    JSON
+    {
+      "contractors": [
+        {
+          "contractorId": "1"
+        }
+      ]
+    }
+    ```
+
+Returns:
+- JSON representation of the specified contractor record.

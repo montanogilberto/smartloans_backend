@@ -1,0 +1,6 @@
+Retrieve all project records in JSON format.
+
+No Parameters.
+
+Returns:
+- JSON representation of all project records.

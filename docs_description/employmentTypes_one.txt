@@ -1,0 +1,25 @@
+Retrieve a single employment type record with the provided JSON.
+
+Parameters:
+    ```
+    JSON
+    {
+      "employmentTypes": [
+        {
+          "employmentTypeId": "1"
+        }
+      ]
+    }
+    ```
+
+Returns:
+- JSON representation of the specified employment type record.
+{
+    "employmentTypes": [
+        {
+            "employmentTypeId": "1",
+            "employmentType": "permanent",
+            "createdAt": "2024-06-30T00:00:00Z"
+        }
+    ]
+}

@@ -1,0 +1,44 @@
+Manage employee records with the provided JSON.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+    {
+      "employees": [
+        {
+          "employeeId": "0",
+          "firstName": "John",
+          "lastName": "Doe",
+          "email": "john.doe@example.com",
+          "phoneNumber": "123-456-7890",
+          "address": "123 Main St, City, Country",
+          "employmentTypeId": "1",
+          "position": "Engineer",
+          "departmentId": "2",
+          "statusId": "1",
+          "hireDate": "2021-01-15",
+          "endDate": "NULL",
+          "emergencyContactName": "Jane Doe",
+          "emergencyContactRelationship": "Spouse",
+          "emergencyContactPhone": "123-456-7891",
+          "notes": "Notes about John Doe",
+          "action": "1"
+        }
+      ]
+    }
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "Inserted Successfully", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }

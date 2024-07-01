@@ -1,0 +1,30 @@
+Manage department records with the provided JSON.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+    {
+      "departments": [
+        {
+          "departmentId": "0",
+          "departmentName": "HR",
+          "action": "1"
+        }
+      ]
+    }
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "Inserted Successfully", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }

@@ -1,0 +1,27 @@
+Retrieve a single department record with the provided JSON.
+
+Parameters:
+    ```
+    JSON
+    {
+      "departments": [
+        {
+          "departmentId": "1"
+        }
+      ]
+    }
+    ```
+
+Returns:
+- JSON representation of the specified department record.
+'''
+{
+    "departments": [
+        {
+            "departmentId": "1",
+            "departmentName": "HR",
+            "createdAt": "2024-06-30T00:00:00Z"
+        }
+    ]
+}
+'''

@@ -1,0 +1,22 @@
+Retrieve all employment type records in JSON format.
+
+No Parameters.
+
+Returns:
+- JSON representation of all employment type records.
+'''
+{
+    "employmentTypes": [
+        {
+            "employmentTypeId": "1",
+            "employmentType": "permanent",
+            "createdAt": "2024-06-30T00:00:00Z"
+        },
+        {
+            "employmentTypeId": "2",
+            "employmentType": "temporary",
+            "createdAt": "2024-06-30T00:00:00Z"
+        }
+    ]
+}
+'''
