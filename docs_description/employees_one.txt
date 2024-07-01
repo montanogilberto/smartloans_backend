@@ -1,0 +1,16 @@
+Retrieve a single employee record with the provided JSON.
+
+Parameters:
+    ```
+    JSON
+    {
+      "employees": [
+        {
+          "employeeId": "1"
+        }
+      ]
+    }
+    ```
+
+Returns:
+- JSON representation of the specified employee record.

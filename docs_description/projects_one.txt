@@ -1,0 +1,16 @@
+Retrieve a single project record with the provided JSON.
+
+Parameters:
+    ```
+    JSON
+    {
+      "projects": [
+        {
+          "projectId": "1"
+        }
+      ]
+    }
+    ```
+
+Returns:
+- JSON representation of the specified project record.

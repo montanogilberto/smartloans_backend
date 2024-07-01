@@ -1,0 +1,16 @@
+Retrieve a single employee project assignment record with the provided JSON.
+
+Parameters:
+    ```
+    JSON
+    {
+      "employeeProjectAssignments": [
+        {
+          "assignmentId": "1"
+        }
+      ]
+    }
+    ```
+
+Returns:
+- JSON representation of the specified employee project assignment record.

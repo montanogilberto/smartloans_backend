@@ -1,0 +1,6 @@
+Retrieve all contractor records in JSON format.
+
+No Parameters.
+
+Returns:
+- JSON representation of all contractor records.

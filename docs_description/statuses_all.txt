@@ -1,0 +1,6 @@
+Retrieve all status records in JSON format.
+
+No Parameters.
+
+Returns:
+- JSON representation of all status records.

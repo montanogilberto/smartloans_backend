@@ -1,0 +1,16 @@
+Retrieve a single status record with the provided JSON.
+
+Parameters:
+    ```
+    JSON
+    {
+      "statuses": [
+        {
+          "statusId": "1"
+        }
+      ]
+    }
+    ```
+
+Returns:
+- JSON representation of the specified status record.
