@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes_ import login, utils, swagger, users, symptoms, scannertext, products, checks
-from routes_ import departments, employmentTypes, statuses, employees, projects, employeeProjectAssignments, contractors
+from routes_ import departaments, employmentTypes, statuses, employees, projects, employeeProjectAssignments, contractors
 import uvicorn
 
 app = FastAPI()
@@ -35,7 +35,7 @@ app.include_router(symptoms.router)
 app.include_router(scannertext.router)
 app.include_router(products.router)
 app.include_router(checks.router)
-app.include_router(departments.router)
+app.include_router(departaments.router)
 app.include_router(employmentTypes.router)
 app.include_router(statuses.router)
 app.include_router(employees.router)

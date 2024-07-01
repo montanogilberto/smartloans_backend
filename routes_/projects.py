@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.projects import projects_sp, all_projects_sp, one_project_sp
+from modules.projects import projects_sp, all_projects_sp, one_projects_sp
 
 router = APIRouter()
 
@@ -24,4 +24,4 @@ with open("./docs_description/projects_one.txt", "r") as file:
     project_one_docstring = file.read()
 @router.post("/one_project", summary="one project", description=project_one_docstring)
 def one_project(json: dict):
-    return one_project_sp(json)
+    return one_projects_sp(json)

@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.statuses import statuses_sp, all_statuses_sp, one_status_sp
+from modules.statuses import statuses_sp, all_statuses_sp, one_statuses_sp
 
 router = APIRouter()
 
@@ -24,4 +24,4 @@ with open("./docs_description/statuses_one.txt", "r") as file:
     status_one_docstring = file.read()
 @router.post("/one_status", summary="one status", description=status_one_docstring)
 def one_status(json: dict):
-    return one_status_sp(json)
+    return one_statuses_sp(json)
