@@ -6,7 +6,7 @@ import json
 app = FastAPI()
 conn = connection()
 
-def employee_sp(json_file: dict):
+def employees_sp(json_file: dict):
     try:
         cursor = conn.cursor()
         cursor.execute("EXEC sp_employee @pjsonfile = %s", (json.dumps(json_file)))
@@ -22,7 +22,7 @@ def employee_sp(json_file: dict):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-def all_employee_sp():
+def all_employees_sp():
 
     try:
         cursor = conn.cursor()
