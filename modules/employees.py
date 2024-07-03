@@ -9,7 +9,7 @@ conn = connection()
 def employees_sp(json_file: dict):
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_employee @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC sp_employees @pjsonfile = %s", (json.dumps(json_file)))
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
@@ -41,10 +41,10 @@ def all_employees_sp():
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-def one_employee_sp(json_file: dict):
+def one_employees_sp(json_file: dict):
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_employee_one @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC sp_employees_one @pjsonfile = %s", (json.dumps(json_file)))
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
