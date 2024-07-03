@@ -26,7 +26,7 @@ def all_employees_sp():
 
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC [dbo].[sp_employee_all]")
+        cursor.execute("EXEC [dbo].[sp_employees_all]")
 
         # Fetch all the results as a list of tuples
         rows = cursor.fetchall()
