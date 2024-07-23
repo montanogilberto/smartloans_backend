@@ -8,15 +8,17 @@ app = FastAPI()
 
 # Set up CORS
 origins = [
-    "https://localhost",
-    "http://localhost",
+    "https://*.localhost",
+    "http://*.localhost",
     "https://localhost:8100",
     "http://localhost:8101",
     "http://localhost:8000",
     "http://localhost:8100",
     "http://localhost:3000",
     "https://wonderful-island-0e351d910.5.azurestaticapps.net",
-    "https://delightful-river-039129e0f.5.azurestaticapps.net"
+    "https://delightful-river-039129e0f.5.azurestaticapps.net",
+    "capacitor://localhost",
+    "ionic://localhost",
 ]
 
 app.add_middleware(
