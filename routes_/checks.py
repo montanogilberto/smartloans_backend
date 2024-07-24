@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.checks import checks_sp, all_checks_sp, one_checks_sp
+from modules.checks import checks_sp, all_checks_sp, one_checks_sp, today_checks_sp
 
 
 router = APIRouter()
@@ -26,3 +26,11 @@ with open("./docs_description/checks_one.txt", "r") as file:
 @router.post("/one_checks",  summary="one product", description=product_one_docstring)
 def one_checks(json: dict):
     return  one_checks_sp(json)
+
+
+# Read all checks docstring from the file
+with open("./docs_description/checks_today.txt", "r") as file:
+    checks_today_docstring = file.read()
+@router.get("/today_checks",  summary="today checks", description=checks_today_docstring)
+def today_checks():
+    return  today_checks_sp()
