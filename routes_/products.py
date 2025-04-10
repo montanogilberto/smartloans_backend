@@ -31,6 +31,6 @@ def one_products(json: dict):
 # Read one user docstring from the file
 with open("./docs_description/products_food.txt", "r") as file:
     product_food_docstring = file.read()
-@router.post("/food_products",  summary="food product", description=product_food_docstring)
+@router.get("/food_products",  summary="food product", description=product_food_docstring)
 def food_products():
     return  food_products_sp()

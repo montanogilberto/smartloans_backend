@@ -19,7 +19,7 @@ def connection():
     #username = os.getenv("LOCAL_DB_USER")
     #password = os.getenv("LOCAL_DB_PASSWORD")
 
-    print(f"server: {server}, database: {database}, username: {username}, password: {password}")
+    #print(f"server: {server}, database: {database}, username: {username}, password: {password}")
 
     if None in (server, database, username, password):
         raise ValueError("One or more required environment variables are missing.")
