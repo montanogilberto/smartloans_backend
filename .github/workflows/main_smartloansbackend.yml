@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@2
+      - uses: actions/checkout@v2
 
       - name: Set up Python version
-        uses: actions/setup-python@2
+        uses: actions/setup-python@v2
         with:
           python-version: '3.11'
 
@@ -54,7 +54,7 @@ jobs:
         run: unzip release.zip
 
       - name: 'Deploy to Azure Web App'
-        uses: azure/webapps-deploy@v2  # Use v2 for Azure Web App deploy
+        uses: azure/webapps-deploy@v2
         id: deploy-to-webapp
         with:
           app-name: 'smartLoansBackend'
