@@ -31,7 +31,7 @@ jobs:
         run: zip release.zip ./* -r
 
       - name: Upload artifact for deployment jobs
-        uses: actions/upload-artifact@v4  # Updated to v2
+        uses: actions/upload-artifact@v4 
         with:
           name: python-app
           path: |
@@ -47,7 +47,7 @@ jobs:
 
     steps:
       - name: Download artifact from build job
-        uses: actions/download-artifact@v2  # Updated to v2
+        uses: actions/download-artifact@v4
         with:
           name: python-app
 
@@ -55,7 +55,7 @@ jobs:
         run: unzip release.zip
 
       - name: 'Deploy to Azure Web App'
-        uses: azure/webapps-deploy@v2  # Updated to v2
+        uses: azure/webapps-deploy@v4
         id: deploy-to-webapp
         with:
           app-name: 'smartLoansBackend'
