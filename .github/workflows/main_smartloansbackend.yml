@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@latest  # Use latest version of checkout action
+      - uses: actions/checkout@2
 
       - name: Set up Python version
-        uses: actions/setup-python@latest  # Use latest version of setup-python action
+        uses: actions/setup-python@2
         with:
           python-version: '3.11'
 
