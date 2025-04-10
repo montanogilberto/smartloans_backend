@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes_ import login, utils, swagger, users, symptoms, scannertext, products, checks
-from routes_ import departaments, employmentTypes, statuses, employees, projects, employeeProjectAssignments, contractors
+from routes_ import departaments, employmentTypes, statuses, employees, projects, employeeProjectAssignments, contractors, whatsapp
 import uvicorn
 
 app = FastAPI()
@@ -46,6 +46,7 @@ app.include_router(employees.router)
 app.include_router(projects.router)
 app.include_router(employeeProjectAssignments.router)
 app.include_router(contractors.router)
+app.include_router(whatsapp.router)
 
 if __name__ == '__main__':
     uvicorn.run(app, host="0.0.0.0", port=8000)
