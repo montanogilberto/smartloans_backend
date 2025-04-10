@@ -1,0 +1,386 @@
+Parameters:
+    ```json
+    {
+    }
+    ```
+
+Returns:
+-     {
+    "products_food": [
+        {
+            "productId": 1,
+            "ProductName": "El Buchón",
+            "o": [
+                {
+                    "OptionName": "Tamaño",
+                    "c": [
+                        {
+                            "ChoiceName": "Kid",
+                            "price": -50.00
+                        },
+                        {
+                            "ChoiceName": "Petit",
+                            "price": -30.00
+                        },
+                        {
+                            "ChoiceName": "Chico",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Mediano",
+                            "price": 40.00
+                        },
+                        {
+                            "ChoiceName": "Grande",
+                            "price": 70.00
+                        }
+                    ]
+                },
+                {
+                    "OptionName": "Ingredientes",
+                    "c": [
+                        {
+                            "ChoiceName": "Aguacate",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Tomate",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Cebolla",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Chile Verde Tatemado",
+                            "price": 0.00
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "productId": 2,
+            "ProductName": "El Pariente",
+            "o": [
+                {
+                    "OptionName": "Tamaño"
+                },
+                {
+                    "OptionName": "Ingredientes"
+                }
+            ]
+        },
+        {
+            "productId": 3,
+            "ProductName": "El Ondeado",
+            "o": [
+                {
+                    "OptionName": "Tipo Carne",
+                    "c": [
+                        {
+                            "ChoiceName": "Diezmillo",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Adobada",
+                            "price": 0.00
+                        }
+                    ]
+                },
+                {
+                    "OptionName": "Tamaño",
+                    "c": [
+                        {
+                            "ChoiceName": "Kid",
+                            "price": -50.00
+                        },
+                        {
+                            "ChoiceName": "Petit",
+                            "price": -30.00
+                        },
+                        {
+                            "ChoiceName": "Chico",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Mediano",
+                            "price": 40.00
+                        },
+                        {
+                            "ChoiceName": "Grande",
+                            "price": 70.00
+                        }
+                    ]
+                },
+                {
+                    "OptionName": "Ingredientes",
+                    "c": [
+                        {
+                            "ChoiceName": "Aguacate",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Tomate",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Cebolla",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Chile Verde Tatemado",
+                            "price": 0.00
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "productId": 4,
+            "ProductName": "La Tuneada",
+            "o": [
+                {
+                    "OptionName": "Tipo Carne",
+                    "c": [
+                        {
+                            "ChoiceName": "Diezmillo",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Adobada",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Sin Carne",
+                            "price": 0.00
+                        }
+                    ]
+                },
+                {
+                    "OptionName": "Ingredientes",
+                    "c": [
+                        {
+                            "ChoiceName": "Aguacate",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Tomate",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Cebolla",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Chile Verde Tatemado",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "papa a la francesa",
+                            "price": 0.00
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "productId": 5,
+            "ProductName": "La tradicional",
+            "o": [
+                {
+                    "OptionName": "Tipo Carne",
+                    "c": [
+                        {
+                            "ChoiceName": "Diezmillo",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Adobada",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Sin Carne",
+                            "price": 0.00
+                        }
+                    ]
+                },
+                {
+                    "OptionName": "Ingredientes",
+                    "c": [
+                        {
+                            "ChoiceName": "papa a la francesa",
+                            "price": 0.00
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "productId": 6,
+            "ProductName": "El Trio",
+            "o": [
+                {
+                    "OptionName": "Tipo Carne",
+                    "c": [
+                        {
+                            "ChoiceName": "Diezmillo",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Adobada",
+                            "price": 0.00
+                        }
+                    ]
+                },
+                {
+                    "OptionName": "Ingredientes",
+                    "c": [
+                        {
+                            "ChoiceName": "Aguacate",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Tomate",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Cebolla",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Chile Verde Tatemado",
+                            "price": 0.00
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "productId": 7,
+            "ProductName": "Boneless",
+            "o": [
+                {
+                    "OptionName": "Tipo Salsa",
+                    "c": [
+                        {
+                            "ChoiceName": "Barbecue",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Buffalo",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Natural",
+                            "price": 0.00
+                        }
+                    ]
+                },
+                {
+                    "OptionName": "Complementos",
+                    "c": [
+                        {
+                            "ChoiceName": "Ranch",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Captsup",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Papas a la fransesa",
+                            "price": 0.00
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "productId": 8,
+            "ProductName": "Cono Boneless",
+            "o": [
+                {
+                    "OptionName": "Tipo Salsa",
+                    "c": [
+                        {
+                            "ChoiceName": "Barbecue",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Buffalo",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Natural",
+                            "price": 0.00
+                        }
+                    ]
+                },
+                {
+                    "OptionName": "Complementos",
+                    "c": [
+                        {
+                            "ChoiceName": "Ranch",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Captsup",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Papas a la fransesa",
+                            "price": 0.00
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "productId": 9,
+            "ProductName": "Orden de Papas Francesa",
+            "o": [
+                {
+                    "OptionName": "Complementos",
+                    "c": [
+                        {
+                            "ChoiceName": "Queso Cheddar",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Captsup",
+                            "price": 0.00
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "productId": 10,
+            "ProductName": "Bebidas",
+            "o": [
+                {
+                    "OptionName": "bebida",
+                    "c": [
+                        {
+                            "ChoiceName": "TE ARIZONA",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "FUZE TE",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "JUGO KIDS",
+                            "price": 0.00
+                        },
+                        {
+                            "ChoiceName": "Horachata LT",
+                            "price": 20.00
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

@@ -1,4 +1,4 @@
-Log in with the provided JSON credentials.
+QLog in with the provided JSON credentials.
 
 Parameters:
     ```json
