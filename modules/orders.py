@@ -5,23 +5,33 @@ import json
 
 app = FastAPI()
 conn = connection()
-
 def orders_sp(json_file: dict):
     print(json_file)
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC [dbo].[sp_orders] @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC [dbo].[sp_orders] @pjsonfile = %s", (json.dumps(json_file),))
 
-        # Fetch the result as a JSON string
-        json_result = cursor.fetchall()
-        print(json_result)
+        rows = cursor.fetchall()
+        print(rows)
 
-        # Parse the JSON string to a Python dictionary
-        result = json.loads(json_result)
+        if rows:
+            row = rows[0]
+            result = {
+                "value": row[0],
+                "msg": row[1],
+                "error": row[2]
+            }
+        else:
+            result = {
+                "value": "",
+                "msg": "No data returned",
+                "error": "1"
+            }
 
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 def all_orders_sp():
 
