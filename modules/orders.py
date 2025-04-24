@@ -90,3 +90,29 @@ def list_orders_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+def orders_tracking_status_sp(json_file: dict):
+    try:
+        cursor = conn.cursor()
+        cursor.execute("EXEC [dbo].[sp_orders_tracking_status] @pjsonfile = %s", (json.dumps(json_file),))
+
+        rows = cursor.fetchall()
+        print(rows)
+
+        if rows:
+            row = rows[0]
+            result = {
+                "value": row[0],
+                "msg": row[1],
+                "error": row[2]
+            }
+        else:
+            result = {
+                "value": "",
+                "msg": "No data returned",
+                "error": "1"
+            }
+
+        return JSONResponse(content=result, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
