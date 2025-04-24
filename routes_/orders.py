@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.orders import orders_sp, all_orders_sp, one_orders_sp, list_orders_sp
+from modules.orders import orders_sp, all_orders_sp, one_orders_sp, list_orders_sp, orders_tracking_status_sp
 
 
 router = APIRouter()
@@ -33,3 +33,10 @@ with open("./docs_description/orders_list.txt", "r") as file:
 @router.get("/list_orders",  summary="list orders", description=orders_list_docstring)
 def list_orders():
     return  list_orders_sp()
+
+# Read orders  docstring from the file
+with open("./docs_description/orders_tracking_status.txt", "r") as file:
+    orders_tracking_status_docstring = file.read()
+@router.post("/tracking_status_orders",  summary="orders_tracking_status CRUD", description=orders_tracking_status_docstring)
+def orders_tracking_status(json: dict):
+    return  orders_tracking_status_sp(json)
