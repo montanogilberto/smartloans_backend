@@ -1,0 +1,3 @@
+- [x] Add send_recovery_email function in modules/users.py
+- [x] Add /send_recovery_email route in routes_/users.py
+- [ ] Test the endpoint
