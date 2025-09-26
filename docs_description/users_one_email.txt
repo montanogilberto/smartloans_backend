@@ -1,0 +1,26 @@
+Log in with the provided JSON credentials.
+
+Parameters:
+    ```json
+    {
+        "users": [
+            {
+                "email": "gmontano@smartloan.com"
+            }
+        ]
+    }
+    ```
+
+Returns:
+-     {
+          "result": [
+              {
+                  "userId": 42,
+                  "name": "user123",
+                  "email": "nuevo@correo.com",
+                  "password": "abc123",
+                  "created_at": "2025-09-25T23:00:00.000",
+                  "active": "1"
+              }
+          ]
+        }
