@@ -1,0 +1,1 @@
+Sends a recovery email with the user's password to the specified email address. Input format: {"to": "user@email.com"}
