@@ -8,8 +8,6 @@ app = FastAPI()
 
 # Set up CORS
 origins = [
-    "https://*.localhost",
-    "http://*.localhost",
     "https://localhost",
     "http://localhost",
     "https://localhost:8100",
@@ -21,6 +19,7 @@ origins = [
     "https://delightful-river-039129e0f.5.azurestaticapps.net",
     "capacitor://localhost",
     "ionic://localhost",
+    "https://www.rpmtoolsmx.com",
 ]
 
 app.add_middleware(
