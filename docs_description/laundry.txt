@@ -1,0 +1,30 @@
+Log in with the provided JSON credentials.
+
+Parameters:
+    ```json
+    {
+      "pos_laundry": [
+        {
+          "total": 420.50,
+          "companyId": 1,
+          "action": 1,
+          "details": [
+            {"productId": 201, "cantidad": 4, "precio_unitario": 40.00},
+            {"productId": 202, "cantidad": 2, "precio_unitario": 50.25},
+            {"productId": 203, "cantidad": 1, "precio_unitario": 60.00}
+          ]
+        }
+      ]
+    }
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }
