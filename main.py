@@ -20,6 +20,7 @@ origins = [
     "capacitor://localhost",
     "ionic://localhost",
     "https://www.rpmtoolsmx.com",
+    "https://mango-smoke-0323ed91e.3.azurestaticapps.net/",
 ]
 
 app.add_middleware(
