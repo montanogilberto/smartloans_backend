@@ -1,0 +1,30 @@
+Log in with the provided JSON credentials.
+
+Parameters:
+    ```json
+    {
+  "income": [
+    {
+      "action": 1,
+      "orderId": 1001,
+      "total": 250.50,
+      "paymentMethod": "Tarjeta",
+      "paymentDate": "2025-10-23T22:30:00",
+      "userId": 1,
+      "clientId": 1,
+      "companyId": 1
+    }
+  ]
+}
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }
