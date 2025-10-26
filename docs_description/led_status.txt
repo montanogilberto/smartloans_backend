@@ -1,0 +1,17 @@
+ Log in with the provided JSON credentials.
+
+Parameters:
+    ```json
+    {
+        "led_status": [
+            { "status": "on" }
+        ]
+    }
+    ```
+
+Returns:
+-     {
+        "led_status": [
+            { "status": "on" }
+        ]
+    }
