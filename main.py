@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes_ import login, utils, swagger, users, symptoms, scannertext, products, checks
 from routes_ import (departaments, employmentTypes, statuses, employees, projects, employeeProjectAssignments,
-                     contractors, whatsapp, orders, commands, vending_v2, contact_email, laundry, IOT)
+                     contractors, whatsapp, orders, commands, vending_v2, contact_email, laundry, income,IOT)
+
 import uvicorn
 
 app = FastAPI()
@@ -21,6 +22,7 @@ origins = [
     "capacitor://localhost",
     "ionic://localhost",
     "https://www.rpmtoolsmx.com",
+    "https://mango-smoke-0323ed91e.3.azurestaticapps.net"
 ]
 
 app.add_middleware(
@@ -53,6 +55,8 @@ app.include_router(vending_v2.router)
 app.include_router(contact_email.router)
 app.include_router(laundry.router)
 app.include_router(IOT.router)
+app.include_router(income.router)
+
 
 if __name__ == '__main__':
     uvicorn.run(app, host="0.0.0.0", port=8000)
