@@ -1,0 +1,14 @@
+QLog in with the provided JSON credentials.
+
+Parameters:
+ {
+      "productCategories": [
+        { "action": 1, "name": "Detergentes", "image": "detergentes.png", "companyId": 3 },
+        { "action": 1, "name": "Suavizantes", "image": "suavizantes.png", "companyId": 3 }
+      ]
+    }
+
+Returns:
+{
+          "result":[{ "value":"", "msg":"", "error":"" }]
+        }
