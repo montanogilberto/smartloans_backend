@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from modules.products import (products_sp, all_products_sp, one_products_sp, food_products_sp, food_categories_products_sp, by_company_products_sp,
-                              by_company_products_category_sp)
+                              by_company_products_category_sp, products_categories_sp)
 
 
 router = APIRouter()
@@ -57,3 +57,10 @@ with open("./docs_description/products_category_by_company.txt", "r") as file:
 @router.post("/by_company_products_category",  summary="by company product category", description=products_category_by_company_docstring)
 def by_company_products_category(json: dict):
     return  by_company_products_category_sp(json)
+
+# Read products  docstring from the file
+with open("./docs_description/products_categories.txt", "r") as file:
+    products_categories_docstring = file.read()
+@router.post("/product_categories",  summary="product categories CRUD", description=products_categories_docstring)
+def products_categories(json: dict):
+    return products_categories_sp(json)
