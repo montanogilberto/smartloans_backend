@@ -1,0 +1,56 @@
+Log in with the provided JSON credentials.
+
+Parameters:
+  {
+    "tickets": [
+      { "income": "1" }
+    ]
+  }
+
+Returns:
+-     {
+    "tickets": [
+        {
+            "incomeId": 1,
+            "companyId": 1,
+            "paymentDate": "2025-11-04T01:20:03.330",
+            "paymentMethod": "efectivo",
+            "client": {
+                "clientId": 1,
+                "name": "John Doe",
+                "cellphone": "6621234567",
+                "email": "john.doe@example.com"
+            },
+            "user": {
+                "userId": 1,
+                "name": "admin",
+                "email": "montanogilberto@gmail.com"
+            },
+            "products": [
+                {
+                    "incomeDetailId": 1,
+                    "productId": 1002,
+                    "name": "Servicio de lavado",
+                    "quantity": 1,
+                    "unitPrice": 40.00,
+                    "subtotal": 40.00,
+                    "options": [
+                        {
+                            "productOptionId": 1006,
+                            "optionName": "Ciclo",
+                            "productOptionChoiceId": 1004,
+                            "choiceName": "Corto",
+                            "price": 0.00
+                        }
+                    ]
+                }
+            ],
+            "totals": {
+                "subtotal": 40.00,
+                "iva": 6.40,
+                "total": 40.00
+            },
+            "ticketMeta": {}
+        }
+    ]
+}
