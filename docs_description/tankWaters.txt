@@ -1,0 +1,33 @@
+Manage employee records with the provided JSON.
+
+Parameters:
+    {
+    "action": 1,
+    "waterTanks": [
+        {
+        "tankWaterId": 1,
+        "name": "Tinaco rojo",
+        "metrics": [
+            { "quantity": 1800 }
+        ]
+        },
+        {
+        "tankWaterId": 2,
+        "name": "Purificado",
+        "metrics": [
+            { "quantity": 950 }
+        ]
+        }
+    ]
+    }
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "Inserted Successfully", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }
