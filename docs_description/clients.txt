@@ -1,0 +1,33 @@
+Manage contractor records with the provided JSON.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+    {
+      "clients": [
+        {
+          "clientId": 1,
+          "first_name": "Gilberto",
+          "last_name": "Montaño",
+          "cellphone": "6624737005",
+          "email": "montanogilberto@gmail.com",
+          "action": "2"
+        }
+      ]
+    }
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "Inserted Successfully", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }

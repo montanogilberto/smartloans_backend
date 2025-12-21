@@ -1,0 +1,31 @@
+Manage contractor records with the provided JSON.
+
+Parameters:
+    ```
+    {
+      "clients": [
+        {
+          "clientId": 1,
+        }
+      ]
+    }
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+    "clients": [
+        {
+            "clientId": 1,
+            "first_name": "Gilberto",
+            "last_name": "Montaño",
+            "cellphone": "6624737005",
+            "email": "montanogilberto@gmail.com",
+            "created_At": "2025-11-04T20:33:49.387",
+            "updated_at": "2025-12-21T12:39:31.707"
+        }
+    ]
+}
+          ]
+        }
