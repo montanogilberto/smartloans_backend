@@ -11,7 +11,7 @@ Parameters:
       "paymentMethod": "Tarjeta",
       "paymentDate": "2025-10-23T22:30:00",
       "userId": 1,
-      "clientId": 1,
+      "clientId": 1,a
       "companyId": 1
     }
   ]

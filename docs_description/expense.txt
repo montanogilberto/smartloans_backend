@@ -1,0 +1,50 @@
+Log in with the provided JSON credentials.
+
+Parameters:
+    ```json
+    {
+  "expenses": [
+    {
+      "action": 1,
+      "total": 430.50,
+      "paymentMethod": "Tarjeta",
+      "paymentDate": "2025-10-23T22:30:00",
+      "userId": 1,
+      "supplierId": 3,
+      "companyId": 1,
+      "products": [
+        {
+          "productId": 12,
+          "options": {
+            "productOptionId": 5,
+            "choices": [
+              { "productOptionChoiceId": 42 },
+              { "productOptionChoiceId": 43 }
+            ]
+          }
+        },
+        {
+          "productId": 18,
+          "options": {
+            "productOptionId": 9,
+            "choices": [
+              { "productOptionChoiceId": 77 }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "expenses inserted successfully", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }
