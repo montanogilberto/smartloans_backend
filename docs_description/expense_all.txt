@@ -1,0 +1,17 @@
+Log in with the provided JSON credentials.
+
+Parameters:
+    ```json
+
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "expenses inserted successfully", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }
