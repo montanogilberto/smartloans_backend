@@ -1,0 +1,45 @@
+
+
+
+  Log in with the provided JSON credentials.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+
+    {
+        "costRules": [
+            {
+            "channel": "amazon",
+            "market": "US",
+            "category": "Electronics",
+            "feePercent": 0.150000,
+            "fixedFeeUsd": 0.300000,
+            "adsPercent": 0.050000,
+            "returnsRate": 0.020000,
+            "avgReturnCostUsd": 8.000000,
+            "packagingCostUsd": 0.500000,
+            "otherCostUsd": 0.250000,
+            "effectiveFrom": "2026-01-17",
+            "effectiveTo": null,
+            "action": "1"
+            }
+        ]
+        }
+
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }

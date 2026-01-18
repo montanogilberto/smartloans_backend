@@ -1,0 +1,51 @@
+
+
+
+  Log in with the provided JSON credentials.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+
+    {
+  "marketplaceOrders": [
+    {
+      "channel": "amazon",
+      "market": "US",
+      "channelOrderId": "AMZ-ORDER-000001",
+      "unifiedProductId": 1,
+      "quantity": 1,
+      "soldPriceUsd": 799.99,
+      "buyerAddressJson": {
+        "name": "John Doe",
+        "email": "john@example.com",
+        "phone": "+1-555-0100",
+        "address1": "123 Main St",
+        "address2": "Apt 5",
+        "city": "Phoenix",
+        "state": "AZ",
+        "postalCode": "85001",
+        "country": "US"
+      },
+      "status": "ORDER_NEW",
+      "action": "1"
+    }
+  ]
+}
+
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }
