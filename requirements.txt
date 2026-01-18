@@ -1,5 +1,6 @@
 fastapi~=0.104.1
 uvicorn~=0.24.0.post1
+gunicorn~=21.2.0
 pymssql~=2.2.10
 flask-cors
 openai~=1.13.3
