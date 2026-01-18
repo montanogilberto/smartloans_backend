@@ -6,7 +6,7 @@ import json
 app = FastAPI()
 conn = connection()
 
-def buy_offers_sp(json_file: dict):
+def buyOffers_sp(json_file: dict):
     try:
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_buyOffers] @pjsonfile = %s", (json.dumps(json_file)))
