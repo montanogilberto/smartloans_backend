@@ -1,0 +1,51 @@
+
+
+
+  Log in with the provided JSON credentials.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+
+    {
+    "listingDrafts": [
+        {
+        "unifiedProductId": 1,
+        "channel": "amazon",
+        "market": "US",
+        "payloadJson": {
+            "title": "Apple iPhone 15 128GB",
+            "condition": "new",
+            "quantity": 1,
+            "brand": "Apple",
+            "model": "A2890",
+            "images": ["https://example.com/img1.jpg"]
+        },
+        "suggestedPriceUsd": 799.99,
+        "minPriceUsd": 749.99,
+        "maxPriceUsd": 849.99,
+        "status": "draft",
+        "approvedBy": null,
+        "approvedAt": null,
+        "errorMessage": null,
+        "action": "1"
+        }
+    ]
+    }
+
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }

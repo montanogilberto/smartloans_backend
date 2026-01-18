@@ -1,0 +1,42 @@
+
+
+
+  Log in with the provided JSON credentials.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+
+        {
+          "shipments": [
+            {
+              "marketplaceOrderId": 1,
+              "carrier": "UPS",
+              "serviceLevel": "Ground",
+              "labelRef": "LBL-UPS-000001",
+              "trackingNumber": "1Z999AA10123456784",
+              "status": "LABEL_CREATED",
+              "shippedAt": null,
+              "deliveredAt": null,
+              "lastError": null,
+              "action": "1"
+            }
+          ]
+        }
+
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }

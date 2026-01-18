@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes_ import login, utils, swagger, users, symptoms, scannertext, products, checks
 from routes_ import (departaments, employmentTypes, statuses, employees, projects, employeeProjectAssignments,
                      contractors, whatsapp, orders, commands, vending_v2, contact_email, laundry, income,IOT,
-                     tickets, clients,expenses)
+                     tickets, clients,expenses,exchangeRates,buyOffers,unifiedProducts,costRules,listingDrafts,messageTickets,
+                     procurementJobs, productMatches, publishJobs, sellListings, shipments)
 
 import uvicorn
 
@@ -60,6 +61,17 @@ app.include_router(income.router)
 app.include_router(tickets.router)
 app.include_router(clients.router)
 app.include_router(expenses.router)
+app.include_router(exchangeRates.router)
+app.include_router(buyOffers.router)
+app.include_router(unifiedProducts.router)
+app.include_router(costRules.router)
+app.include_router(listingDrafts.router)
+app.include_router(messageTickets.router)
+app.include_router(procurementJobs.router)
+app.include_router(productMatches.router)
+app.include_router(publishJobs.router)
+app.include_router(sellListings.router)
+app.include_router(shipments.router)
 
 
 if __name__ == '__main__':

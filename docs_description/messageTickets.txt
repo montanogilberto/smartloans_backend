@@ -1,0 +1,41 @@
+
+
+
+  Log in with the provided JSON credentials.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+
+    {
+    "messageTickets": [
+        {
+        "channel": "amazon",
+        "market": "US",
+        "threadId": "THREAD-001",
+        "marketplaceOrderId": 1,
+        "customerMessage": "Hi, when will my order ship?",
+        "suggestedReply": "Hello! Your order is being processed and will ship soon. We will share the tracking once available.",
+        "finalReply": null,
+        "status": "pending",
+        "action": "1"
+        }
+    ]
+    }
+
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }

@@ -2,20 +2,40 @@ Log in with the provided JSON credentials.
 
 Parameters:
     ```json
-    {
-  "income": [
-    {
-      "action": 1,
-      "orderId": 1001,
-      "total": 250.50,
-      "paymentMethod": "Tarjeta",
-      "paymentDate": "2025-10-23T22:30:00",
-      "userId": 1,
-      "clientId": 1,a
-      "companyId": 1
-    }
-  ]
-}
+  {
+    "income": [
+      {
+        "action": 1,
+        "total": 100.00,
+        "paymentMethod": "Tarjeta",
+        "paymentDate": "2025-10-23T22:30:00",
+        "userId": 1,
+        "clientId": 1,
+        "companyId": 1,
+        "products": [
+          {
+            "productId": 1,
+            "options": {
+              "productOptionId": 1,
+              "choices": [
+                { "productOptionChoiceId": 10, "name": "",      "price": 50.00, "quantity": 1 },
+                { "productOptionChoiceId": 11, "name": "Petit", "price": 30.00, "quantity": 2 }
+              ]
+            }
+          },
+          {
+            "productId": 2,
+            "options": {
+              "productOptionId": 5,
+              "choices": [
+                { "productOptionChoiceId": 42, "name": "Grande", "price": 20.00, "quantity": 1 }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
     ```
 
 Returns:

@@ -1,0 +1,49 @@
+
+
+
+  Log in with the provided JSON credentials.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+
+    {
+    "sellListings": [
+      {
+        "sellListingId": 1,
+        "channel": "amazon",
+        "market": "US",
+        "channelItemId": "B0XXXXXXX",
+        "title": "Product X",
+        "sellPriceOriginal": 150.00,
+        "currencyOriginal": "USD",
+        "sellPriceUsd": 150.00,
+        "fxRateToUsd": 1.0,
+        "fxAsOfDate": "2026-01-15",
+        "fulfillmentType": "FBM",
+        "shippingTimeDays": 3,
+        "rating": 4.6,
+        "reviewsCount": 120,
+        "listingTimestamp": "2026-01-15T18:10:00",
+        "unifiedProductId": 1,
+        "action": "1"
+      }
+    ]
+  }
+
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }

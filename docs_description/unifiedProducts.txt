@@ -1,0 +1,37 @@
+
+
+
+  Log in with the provided JSON credentials.
+
+Parameters:
+    ```
+    Actions:
+    INSERT --> 1
+    UPDATE --> 2
+    DELETE --> 3
+    JSON
+    {
+    "unifiedProducts": [
+      {
+        "unifiedProductId": 1,
+        "brand": "Apple",
+        "model": "A2890",
+        "title": "iPhone 15",
+        "ean_upc": "1234567890123",
+        "attributesJson": "{""color"":""black""}",
+        "action":"1"
+      }
+    ]
+  }
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }
