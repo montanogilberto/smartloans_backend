@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+load_dotenv()
 
 # Routers
 from routes_ import (
@@ -16,6 +18,8 @@ app = FastAPI(
     title="SmartLoans Backend API",
     version="1.0.0"
 )
+
+
 
 # --------------------------------------------------
 # Health Check (Azure App Service)
