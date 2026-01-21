@@ -27,6 +27,11 @@ ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "").strip()
 ML_CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "").strip()
 ML_REDIRECT_URI = os.getenv("ML_REDIRECT_URI", "").strip()
 
+logger.info("ML_CLIENT_ID=%s", ML_CLIENT_ID)
+logger.info("ML_REDIRECT_URI=%s", ML_REDIRECT_URI)
+logger.info("ML_CLIENT_SECRET set? %s", bool(ML_CLIENT_SECRET))
+
+
 AUTH_URL = "https://auth.mercadolibre.com.mx/authorization"
 TOKEN_URL = "https://api.mercadolibre.com/oauth/token"
 
