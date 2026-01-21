@@ -57,18 +57,15 @@ def generate_pkce_pair() -> Tuple[str, str]:
 def save_oauth_state(state: str, code_verifier: str) -> None:
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO dbo.ml_oauth_states(state, code_verifier) VALUES (?, ?)",
+        "INSERT INTO dbo.ml_oauth_states(state, code_verifier) VALUES (%s, %s)",
         (state, code_verifier),
     )
     conn.commit()
 
 def pop_code_verifier(state: str) -> Optional[str]:
-    """
-    Fetch verifier once and mark used (prevents reuse).
-    """
     cur = conn.cursor()
     cur.execute(
-        "SELECT code_verifier FROM dbo.ml_oauth_states WHERE state = ? AND used_at IS NULL",
+        "SELECT code_verifier FROM dbo.ml_oauth_states WHERE state = %s AND used_at IS NULL",
         (state,),
     )
     row = cur.fetchone()
@@ -77,7 +74,7 @@ def pop_code_verifier(state: str) -> Optional[str]:
 
     verifier = row[0]
     cur.execute(
-        "UPDATE dbo.ml_oauth_states SET used_at = SYSUTCDATETIME() WHERE state = ?",
+        "UPDATE dbo.ml_oauth_states SET used_at = SYSUTCDATETIME() WHERE state = %s",
         (state,),
     )
     conn.commit()
