@@ -6,12 +6,19 @@ router = APIRouter(prefix="/ml", tags=["MercadoLibreProxy"])
 
 ML_SITE_ID = "MLM"
 
-BASE_HEADERS = {
+# Browser-like headers required by MercadoLibre WAF
+BROWSER_HEADERS = {
     "Accept": "application/json",
     "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-    "User-Agent": "Mozilla/5.0",
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
     "Referer": "https://www.mercadolibre.com.mx/",
+    "Origin": "https://www.mercadolibre.com.mx",
 }
+
 
 @router.get("/search")
 def ml_search_proxy(
@@ -35,12 +42,12 @@ def ml_search_proxy(
     if seller_id:
         params["seller_id"] = seller_id
 
-    r = requests.get(
-        url,
-        params=params,
-        headers={**BASE_HEADERS, "Authorization": f"Bearer {token}"},
-        timeout=30,
-    )
+    headers = {
+        **BROWSER_HEADERS,
+        "Authorization": f"Bearer {token}",
+    }
+
+    r = requests.get(url, params=params, headers=headers, timeout=30)
 
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.text)
@@ -54,11 +61,12 @@ def ml_item_proxy(item_id: str):
 
     url = f"https://api.mercadolibre.com/items/{item_id}"
 
-    r = requests.get(
-        url,
-        headers={**BASE_HEADERS, "Authorization": f"Bearer {token}"},
-        timeout=30,
-    )
+    headers = {
+        **BROWSER_HEADERS,
+        "Authorization": f"Bearer {token}",
+    }
+
+    r = requests.get(url, headers=headers, timeout=30)
 
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.text)
