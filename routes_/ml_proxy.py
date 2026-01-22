@@ -78,19 +78,44 @@ def ml_search_proxy(
     if seller_id:
         params["seller_id"] = seller_id
 
-    # Get token from DB (auto-refresh inside get_valid_access_token)
-    token = get_valid_access_token()
-    logger.info("[%s] /ml/search url=%s params=%s token=%s", rid, url, params, _mask_token(token))
-
-    # Try WITH token
+    # ================================================
+    # DEBUGGING: Check token presence and headers
+    # ================================================
+    try:
+        token = get_valid_access_token()
+        logger.info("[%s] TOKEN present: %s, len: %s", 
+                   rid, bool(token), len(token) if token else 0)
+    except Exception as token_err:
+        logger.error("[%s] Failed to get access token: %s", rid, str(token_err))
+        raise HTTPException(status_code=500, detail=f"Token retrieval failed: {str(token_err)}")
+    
+    # Prepare headers
     headers_with_token = {**BROWSER_HEADERS, "Authorization": f"Bearer {token}"}
+    
+    # DEBUGGING: Log header details (safe, no secrets)
+    logger.info("[%s] Has Authorization: %s", rid, "Authorization" in headers_with_token)
+    logger.info("[%s] UA: %s", rid, headers_with_token.get("User-Agent"))
+    logger.info("[%s] All headers keys: %s", rid, list(headers_with_token.keys()))
+    
+    # Log request details
+    logger.info("[%s] /ml/search url=%s params=%s token=%s", 
+               rid, url, params, _mask_token(token))
+
+    # ================================================
+    # Try WITH token
+    # ================================================
     r = requests.get(url, params=params, headers=headers_with_token, timeout=30)
     _log_response(rid, "ML search WITH token", r)
 
+    # ================================================
     # Diagnostic: if ML forbids when you include token, retry WITHOUT token
     # (This endpoint is often public; sometimes token triggers stricter rules)
+    # ================================================
     if r.status_code == 403:
-        logger.info("[%s] 403 WITH token -> retry WITHOUT token", rid)
+        logger.warning("[%s] 403 WITH token -> retry WITHOUT token", rid)
+        logger.info("[%s] Token was present: %s, Authorization header: %s", 
+                   rid, bool(token), "Authorization" in headers_with_token)
+        
         r2 = requests.get(url, params=params, headers=BROWSER_HEADERS, timeout=30)
         _log_response(rid, "ML search WITHOUT token", r2)
         r = r2
@@ -107,10 +132,25 @@ def ml_item_proxy(item_id: str):
 
     url = f"https://api.mercadolibre.com/items/{item_id}"
 
-    token = get_valid_access_token()
+    # ================================================
+    # DEBUGGING: Check token presence and headers
+    # ================================================
+    try:
+        token = get_valid_access_token()
+        logger.info("[%s] TOKEN present: %s, len: %s", 
+                   rid, bool(token), len(token) if token else 0)
+    except Exception as token_err:
+        logger.error("[%s] Failed to get access token: %s", rid, str(token_err))
+        raise HTTPException(status_code=500, detail=f"Token retrieval failed: {str(token_err)}")
+
     logger.info("[%s] /ml/items/%s url=%s token=%s", rid, item_id, url, _mask_token(token))
 
     headers = {**BROWSER_HEADERS, "Authorization": f"Bearer {token}"}
+    
+    # DEBUGGING: Log header details
+    logger.info("[%s] Has Authorization: %s", rid, "Authorization" in headers)
+    logger.info("[%s] UA: %s", rid, headers.get("User-Agent"))
+
     r = requests.get(url, headers=headers, timeout=30)
     _log_response(rid, "ML item WITH token", r)
 
@@ -124,18 +164,34 @@ def ml_item_proxy(item_id: str):
 def ml_whoami():
     """
     Debug endpoint to confirm token validity.
-    If this returns 200 but /search returns 403, it’s endpoint-specific behavior/WAF.
+    If this returns 200 but /search returns 403, it's endpoint-specific behavior/WAF.
     """
     rid = _req_id()
 
-    token = get_valid_access_token()
+    # ================================================
+    # DEBUGGING: Check token presence and headers
+    # ================================================
+    try:
+        token = get_valid_access_token()
+        logger.info("[%s] TOKEN present: %s, len: %s", 
+                   rid, bool(token), len(token) if token else 0)
+    except Exception as token_err:
+        logger.error("[%s] Failed to get access token: %s", rid, str(token_err))
+        raise HTTPException(status_code=500, detail=f"Token retrieval failed: {str(token_err)}")
+
     url = "https://api.mercadolibre.com/users/me"
     logger.info("[%s] /ml/whoami url=%s token=%s", rid, url, _mask_token(token))
 
-    r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    # DEBUGGING: Log header details
+    logger.info("[%s] Has Authorization: %s", rid, "Authorization" in headers)
+    
+    r = requests.get(url, headers=headers, timeout=30)
     _log_response(rid, "ML users/me", r)
 
     if r.status_code >= 400:
         raise HTTPException(status_code=r.status_code, detail=r.text)
 
     return r.json()
+

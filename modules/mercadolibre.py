@@ -44,7 +44,11 @@ def _get_conn():
     Always returns a fresh DB connection.
     Avoids stale connections in Azure / FastAPI.
     """
-    return connection()
+    conn = connection()
+    # DEBUGGING: Log connection details (without sensitive info)
+    logger.info("[DB] Connection created - server: %s, database: %s", 
+               conn.server, conn.database)
+    return conn
 
 
 def _b64url(data: bytes) -> str:
@@ -76,6 +80,8 @@ def save_oauth_state(state: str, code_verifier: str) -> None:
             """,
             (state, code_verifier),
         )
+        logger.info("[DB] OAuth state saved - state: %s..., server: %s, database: %s",
+                   state[:8], conn.server, conn.database)
 
 
 def pop_code_verifier(state: str) -> Optional[str]:
@@ -93,6 +99,7 @@ def pop_code_verifier(state: str) -> Optional[str]:
         row = cur.fetchone()
 
         if not row:
+            logger.warning("[DB] No code_verifier found for state: %s", state[:8])
             return None
 
         verifier = row[0]
@@ -105,7 +112,8 @@ def pop_code_verifier(state: str) -> Optional[str]:
             """,
             (state,),
         )
-
+        
+        logger.info("[DB] Code verifier retrieved and marked used - state: %s...", state[:8])
         return verifier
 
 
@@ -125,6 +133,7 @@ def upsert_tokens(token_json: Dict[str, Any]) -> None:
         row = cur.fetchone()
 
         if row:
+            token_id = row[0]
             cur.execute(
                 """
                 UPDATE dbo.ml_tokens
@@ -134,8 +143,10 @@ def upsert_tokens(token_json: Dict[str, Any]) -> None:
                     updated_at = SYSUTCDATETIME()
                 WHERE id = %s
                 """,
-                (access_token, refresh_token, expires_at, row[0]),
+                (access_token, refresh_token, expires_at, token_id),
             )
+            logger.info("[DB] Tokens updated - token_id: %s, server: %s, database: %s",
+                       token_id, conn.server, conn.database)
         else:
             cur.execute(
                 """
@@ -144,6 +155,12 @@ def upsert_tokens(token_json: Dict[str, Any]) -> None:
                 """,
                 (access_token, refresh_token, expires_at),
             )
+            # Get the newly inserted ID
+            cur.execute("SELECT TOP 1 id FROM dbo.ml_tokens ORDER BY id DESC")
+            new_row = cur.fetchone()
+            if new_row:
+                logger.info("[DB] Tokens inserted - token_id: %s, server: %s, database: %s",
+                           new_row[0], conn.server, conn.database)
 
 
 def get_latest_tokens() -> Optional[Dict[str, Any]]:
@@ -159,7 +176,14 @@ def get_latest_tokens() -> Optional[Dict[str, Any]]:
         row = cur.fetchone()
 
         if not row:
+            logger.warning("[DB] No tokens found in database - server: %s, database: %s",
+                          conn.server, conn.database)
             return None
+
+        # DEBUGGING: Log token retrieval (masked)
+        token_len = len(row[0]) if row[0] else 0
+        logger.info("[DB] Tokens retrieved - has_access: %s, access_len: %s, server: %s, database: %s",
+                   bool(row[0]), token_len, conn.server, conn.database)
 
         return {
             "access_token": row[0],
@@ -209,6 +233,8 @@ def exchange_code_for_token(code: str, code_verifier: str) -> Dict[str, Any]:
         "code_verifier": code_verifier,
     }
 
+    logger.info("[OAuth] Exchanging code for token - code_len: %s", len(code))
+    
     r = requests.post(TOKEN_URL, data=payload, timeout=30)
 
     if r.status_code >= 400:
@@ -216,6 +242,7 @@ def exchange_code_for_token(code: str, code_verifier: str) -> Dict[str, Any]:
             f"Token exchange failed ({r.status_code}): {r.text}"
         )
 
+    logger.info("[OAuth] Token exchange successful")
     return r.json()
 
 
@@ -227,6 +254,8 @@ def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
         "refresh_token": refresh_token,
     }
 
+    logger.info("[OAuth] Refreshing token - refresh_len: %s", len(refresh_token))
+    
     r = requests.post(TOKEN_URL, data=payload, timeout=30)
 
     if r.status_code >= 400:
@@ -234,6 +263,7 @@ def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
             f"Token refresh failed ({r.status_code}): {r.text}"
         )
 
+    logger.info("[OAuth] Token refresh successful")
     return r.json()
 
 
@@ -253,11 +283,22 @@ def get_valid_access_token() -> str:
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
 
+    # DEBUGGING: Log token status
+    token_len = len(tokens["access_token"]) if tokens["access_token"] else 0
+    logger.info("[Token] Current token status - has_token: %s, token_len: %s, expires_at: %s, now: %s",
+               bool(tokens["access_token"]), token_len, expires_at, now)
+    
     if now < expires_at:
+        logger.info("[Token] Using cached token - still valid")
         return tokens["access_token"]
 
     # refresh expired token
+    logger.info("[Token] Token expired, refreshing...")
     new_tokens = refresh_access_token(tokens["refresh_token"])
     upsert_tokens(new_tokens)
 
+    new_token_len = len(new_tokens["access_token"]) if new_tokens["access_token"] else 0
+    logger.info("[Token] Token refreshed successfully - new_token_len: %s", new_token_len)
+    
     return new_tokens["access_token"]
+
