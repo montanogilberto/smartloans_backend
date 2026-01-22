@@ -51,6 +51,9 @@ origins = [
 
     # Custom domain
     "https://www.rpmtoolsmx.com",
+
+    # Azure Functions / Backend API
+    "https://smartloansbackend.azurewebsites.net",
 ]
 
 app.add_middleware(
