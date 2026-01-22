@@ -2,10 +2,57 @@ import os
 import pymssql
 import os
 
-    #server = "sql.bsite.net\MSSQL2016"
-    #database = "montanogilberto_smartloans"
-    #username = "montanogilberto_smartloans"
-    #password = "Admin#1914"
+
+class DatabaseConnection:
+    """
+    Wrapper class for pymssql.Connection that adds server and database properties.
+    This is needed because pymssql connections don't expose these attributes directly.
+    """
+    
+    def __init__(self, conn: pymssql.Connection, server: str, database: str):
+        self._conn = conn
+        self._server = server
+        self._database = database
+    
+    @property
+    def server(self) -> str:
+        """Server address."""
+        return self._server
+    
+    @property
+    def database(self) -> str:
+        """Database name."""
+        return self._database
+    
+    def cursor(self):
+        """Return a cursor object."""
+        return self._conn.cursor()
+    
+    def close(self):
+        """Close the connection."""
+        return self._conn.close()
+    
+    def commit(self):
+        """Commit the current transaction."""
+        return self._conn.commit()
+    
+    def rollback(self):
+        """Rollback the current transaction."""
+        return self._conn.rollback()
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+        return False
+    
+    def __getattr__(self, name):
+        """Forward any other attribute access to the underlying connection."""
+        return getattr(self._conn, name)
+
 
 def connection():
 
@@ -32,4 +79,5 @@ def connection():
         "autocommit": True,
     }
 
-    return pymssql.connect(**connection_string)
+    raw_conn = pymssql.connect(**connection_string)
+    return DatabaseConnection(raw_conn, server, database)
