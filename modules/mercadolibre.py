@@ -21,9 +21,6 @@ from databases import connection
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------
-# ENV
-# ---------------------------------------------------------
 ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "").strip()
 ML_CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "").strip()
 ML_REDIRECT_URI = os.getenv("ML_REDIRECT_URI", "").strip()
@@ -36,42 +33,28 @@ logger.info("ML_REDIRECT_URI loaded? %s", bool(ML_REDIRECT_URI))
 logger.info("ML_CLIENT_SECRET loaded? %s", bool(ML_CLIENT_SECRET))
 
 
-# ---------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------
 def _get_conn():
     """
     Always returns a fresh DB connection.
     Avoids stale connections in Azure / FastAPI.
     """
-    conn = connection()
-    # DEBUGGING: Log connection details (without sensitive info)
-    logger.info("[DB] Connection created - server: %s, database: %s", 
-               conn.server, conn.database)
-    return conn
+    return connection()
 
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("utf-8")
 
 
-# ---------------------------------------------------------
-# PKCE
-# ---------------------------------------------------------
 def generate_pkce_pair() -> Tuple[str, str]:
-    """
-    Returns (code_verifier, code_challenge)
-    """
+    """Returns (code_verifier, code_challenge)."""
     verifier = _b64url(secrets.token_bytes(32))
     challenge = _b64url(hashlib.sha256(verifier.encode("utf-8")).digest())
     return verifier, challenge
 
 
-# ---------------------------------------------------------
-# DB: OAuth state
-# ---------------------------------------------------------
 def save_oauth_state(state: str, code_verifier: str) -> None:
-    with _get_conn() as conn:
+    conn = _get_conn()
+    try:
         cur = conn.cursor()
         cur.execute(
             """
@@ -80,14 +63,20 @@ def save_oauth_state(state: str, code_verifier: str) -> None:
             """,
             (state, code_verifier),
         )
-        logger.info("[DB] OAuth state saved - state: %s..., server: %s, database: %s",
-                   state[:8], conn.server, conn.database)
+        conn.commit()
+        logger.info("[DB] OAuth state saved - state: %s...", state[:8])
+    finally:
+        conn.close()
 
 
 def pop_code_verifier(state: str) -> Optional[str]:
-    with _get_conn() as conn:
+    """
+    Reads verifier and marks state as used.
+    Minimal approach; if you want perfect atomicity, we can do an UPDATE...OUTPUT pattern.
+    """
+    conn = _get_conn()
+    try:
         cur = conn.cursor()
-
         cur.execute(
             """
             SELECT code_verifier
@@ -97,7 +86,6 @@ def pop_code_verifier(state: str) -> Optional[str]:
             (state,),
         )
         row = cur.fetchone()
-
         if not row:
             logger.warning("[DB] No code_verifier found for state: %s", state[:8])
             return None
@@ -108,27 +96,27 @@ def pop_code_verifier(state: str) -> Optional[str]:
             """
             UPDATE dbo.ml_oauth_states
             SET used_at = SYSUTCDATETIME()
-            WHERE state = %s
+            WHERE state = %s AND used_at IS NULL
             """,
             (state,),
         )
-        
+        conn.commit()
+
         logger.info("[DB] Code verifier retrieved and marked used - state: %s...", state[:8])
         return verifier
+    finally:
+        conn.close()
 
 
-# ---------------------------------------------------------
-# DB: Tokens
-# ---------------------------------------------------------
 def upsert_tokens(token_json: Dict[str, Any]) -> None:
     access_token = token_json["access_token"]
     refresh_token = token_json["refresh_token"]
     expires_in = int(token_json.get("expires_in", 21600))
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in - 60)
 
-    with _get_conn() as conn:
+    conn = _get_conn()
+    try:
         cur = conn.cursor()
-
         cur.execute("SELECT TOP 1 id FROM dbo.ml_tokens ORDER BY id DESC")
         row = cur.fetchone()
 
@@ -145,8 +133,8 @@ def upsert_tokens(token_json: Dict[str, Any]) -> None:
                 """,
                 (access_token, refresh_token, expires_at, token_id),
             )
-            logger.info("[DB] Tokens updated - token_id: %s, server: %s, database: %s",
-                       token_id, conn.server, conn.database)
+            conn.commit()
+            logger.info("[DB] Tokens updated - token_id: %s", token_id)
         else:
             cur.execute(
                 """
@@ -155,16 +143,15 @@ def upsert_tokens(token_json: Dict[str, Any]) -> None:
                 """,
                 (access_token, refresh_token, expires_at),
             )
-            # Get the newly inserted ID
-            cur.execute("SELECT TOP 1 id FROM dbo.ml_tokens ORDER BY id DESC")
-            new_row = cur.fetchone()
-            if new_row:
-                logger.info("[DB] Tokens inserted - token_id: %s, server: %s, database: %s",
-                           new_row[0], conn.server, conn.database)
+            conn.commit()
+            logger.info("[DB] Tokens inserted")
+    finally:
+        conn.close()
 
 
 def get_latest_tokens() -> Optional[Dict[str, Any]]:
-    with _get_conn() as conn:
+    conn = _get_conn()
+    try:
         cur = conn.cursor()
         cur.execute(
             """
@@ -174,34 +161,21 @@ def get_latest_tokens() -> Optional[Dict[str, Any]]:
             """
         )
         row = cur.fetchone()
-
         if not row:
-            logger.warning("[DB] No tokens found in database - server: %s, database: %s",
-                          conn.server, conn.database)
+            logger.warning("[DB] No tokens found in database")
             return None
 
-        # DEBUGGING: Log token retrieval (masked)
-        token_len = len(row[0]) if row[0] else 0
-        logger.info("[DB] Tokens retrieved - has_access: %s, access_len: %s, server: %s, database: %s",
-                   bool(row[0]), token_len, conn.server, conn.database)
-
-        return {
-            "access_token": row[0],
-            "refresh_token": row[1],
-            "expires_at": row[2],
-        }
+        return {"access_token": row[0], "refresh_token": row[1], "expires_at": row[2]}
+    finally:
+        conn.close()
 
 
-# ---------------------------------------------------------
-# OAuth
-# ---------------------------------------------------------
 def build_authorize_url() -> Dict[str, Any]:
     if not ML_CLIENT_ID or not ML_REDIRECT_URI:
         raise ValueError("Missing ML_CLIENT_ID or ML_REDIRECT_URI")
 
     state = _b64url(secrets.token_bytes(16))
     verifier, challenge = generate_pkce_pair()
-
     save_oauth_state(state, verifier)
 
     authorize_url = (
@@ -213,11 +187,7 @@ def build_authorize_url() -> Dict[str, Any]:
         f"&code_challenge_method=S256"
         f"&state={state}"
     )
-
-    return {
-        "authorize_url": authorize_url,
-        "state": state,
-    }
+    return {"authorize_url": authorize_url, "state": state}
 
 
 def exchange_code_for_token(code: str, code_verifier: str) -> Dict[str, Any]:
@@ -233,16 +203,9 @@ def exchange_code_for_token(code: str, code_verifier: str) -> Dict[str, Any]:
         "code_verifier": code_verifier,
     }
 
-    logger.info("[OAuth] Exchanging code for token - code_len: %s", len(code))
-    
     r = requests.post(TOKEN_URL, data=payload, timeout=30)
-
     if r.status_code >= 400:
-        raise RuntimeError(
-            f"Token exchange failed ({r.status_code}): {r.text}"
-        )
-
-    logger.info("[OAuth] Token exchange successful")
+        raise RuntimeError(f"Token exchange failed ({r.status_code}): {r.text}")
     return r.json()
 
 
@@ -254,26 +217,18 @@ def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
         "refresh_token": refresh_token,
     }
 
-    logger.info("[OAuth] Refreshing token - refresh_len: %s", len(refresh_token))
-    
     r = requests.post(TOKEN_URL, data=payload, timeout=30)
-
     if r.status_code >= 400:
-        raise RuntimeError(
-            f"Token refresh failed ({r.status_code}): {r.text}"
-        )
-
-    logger.info("[OAuth] Token refresh successful")
+        raise RuntimeError(f"Token refresh failed ({r.status_code}): {r.text}")
     return r.json()
 
 
 def get_valid_access_token() -> str:
     """
-    This is the method your workers should call.
-    Always returns a valid access_token.
+    Workers/backend call this.
+    Returns a valid access_token.
     """
     tokens = get_latest_tokens()
-
     if not tokens:
         raise RuntimeError("No Mercado Libre tokens found. Run OAuth flow first.")
 
@@ -283,22 +238,9 @@ def get_valid_access_token() -> str:
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
 
-    # DEBUGGING: Log token status
-    token_len = len(tokens["access_token"]) if tokens["access_token"] else 0
-    logger.info("[Token] Current token status - has_token: %s, token_len: %s, expires_at: %s, now: %s",
-               bool(tokens["access_token"]), token_len, expires_at, now)
-    
     if now < expires_at:
-        logger.info("[Token] Using cached token - still valid")
         return tokens["access_token"]
 
-    # refresh expired token
-    logger.info("[Token] Token expired, refreshing...")
     new_tokens = refresh_access_token(tokens["refresh_token"])
     upsert_tokens(new_tokens)
-
-    new_token_len = len(new_tokens["access_token"]) if new_tokens["access_token"] else 0
-    logger.info("[Token] Token refreshed successfully - new_token_len: %s", new_token_len)
-    
     return new_tokens["access_token"]
-
