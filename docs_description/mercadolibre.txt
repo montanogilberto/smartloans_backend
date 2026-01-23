@@ -1,0 +1,1462 @@
+# MercadoLibre API Endpoints Documentation
+
+## Overview
+This document describes the MercadoLibre integration endpoints for OAuth authentication, token management, webhooks, and API proxy services.
+
+## Environment Configuration
+Required environment variables:
+```bash
+ML_CLIENT_ID=your_client_id
+ML_CLIENT_SECRET=your_client_secret
+ML_REDIRECT_URI=https://your-domain.com/mercadolibre/oauth/callback
+```
+
+## Database Tables
+The integration uses two database tables:
+- `dbo.ml_oauth_states` - Stores OAuth state and code verifiers for PKCE flow
+- `dbo.ml_tokens` - Stores access and refresh tokens with expiration
+
+---
+
+## MercadoLibre Endpoints
+
+### GET /mercadolibre/ping
+**Purpose:** Health check endpoint for MercadoLibre service
+
+**Request:** No parameters required
+
+**Response:**
+```json
+{
+    "status": "ok",
+    "service": "mercadolibre"
+}
+```
+
+**Usage:** Use this endpoint to verify the MercadoLibre service is running.
+
+---
+
+### GET /mercadolibre/oauth/authorize
+**Purpose:** Initiates OAuth 2.0 PKCE flow and redirects to MercadoLibre authorization page
+
+**Request:** No parameters required
+
+**Behavior:**
+1. Generates a unique state parameter (16 bytes, base64url encoded)
+2. Generates PKCE code verifier (32 bytes) and code challenge (SHA256 + base64url)
+3. Stores state → code_verifier mapping in database
+4. Redirects user to MercadoLibre authorization URL
+
+**Response:** HTTP 302 Redirect to MercadoLibre authorization page
+
+**Authorization URL Format:**
+```
+https://auth.mercadolibre.com.mx/authorization?
+    response_type=code&
+    client_id={ML_CLIENT_ID}&
+    redirect_uri={ML_REDIRECT_URI}&
+    code_challenge={code_challenge}&
+    code_challenge_method=S256&
+    state={state}
+```
+
+**Database Operations:**
+- Inserts state and code_verifier into `dbo.ml_oauth_states` table
+
+---
+
+### GET /mercadolibre/oauth/callback
+**Purpose:** Handles OAuth callback from MercadoLibre with PKCE verification
+
+**Query Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| code | string | Yes | Authorization code from ML |
+| state | string | Yes | State parameter for verification |
+
+**Request Example:**
+```
+/mercadolibre/oauth/callback?code=AQAA...&state=XyZ123...
+```
+
+**Behavior:**
+1. Validates presence of both code and state parameters
+2. Retrieves stored code_verifier for the given state
+3. Marks state as used to prevent replay attacks
+4. Exchanges authorization code + code_verifier for tokens
+5. Stores tokens in database
+
+**Response (Success):**
+```json
+{
+    "ok": true,
+    "saved": true,
+    "user_id": "123456789"
+}
+```
+
+**Response (Error - Missing code/state):**
+```json
+{
+    "ok": false,
+    "error": "Missing code/state"
+}
+```
+Status Code: 400
+
+**Response (Error - Invalid/expired state):**
+```json
+{
+    "ok": false,
+    "error": "Invalid/expired state"
+}
+```
+Status Code: 400
+
+**Database Operations:**
+- Selects code_verifier from `dbo.ml_oauth_states` where state matches AND used_at IS NULL
+- Updates used_at timestamp in `dbo.ml_oauth_states`
+- Inserts or updates tokens in `dbo.ml_tokens`
+
+**Token Details Returned:**
+- access_token: MercadoLibre API access token
+- refresh_token: Token for refreshing expired access tokens
+- expires_in: Token validity duration in seconds (typically 21600 = 6 hours)
+- user_id: MercadoLibre user ID
+
+---
+
+### POST /mercadolibre/webhook
+**Purpose:** Receives webhook notifications from MercadoLibre
+
+**Request Body:** JSON payload from MercadoLibre (varies by event type)
+
+**Request Headers:**
+```
+Content-Type: application/json
+```
+
+**Example Request Body:**
+```json
+{
+    "topic": "orders_v2",
+    "resource": "orders/1234567890",
+    "user_id": "123456789",
+    "application_id": "1234567890123"
+}
+```
+
+**Behavior:**
+- Receives and processes webhook payloads
+- Returns 200 OK immediately for acknowledgment
+
+**Response:**
+```json
+{
+    "ok": true
+}
+```
+
+**Common Webhook Topics:**
+- `orders_v2` - Order updates
+- `questions` - New questions from buyers
+- `payments` - Payment updates
+- `shipments` - Shipment tracking updates
+
+---
+
+## MercadoLibreProxy Endpoints
+
+### GET /ml/search
+**Purpose:** Proxy endpoint for MercadoLibre site search API
+
+**Query Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| q | string | Yes | - | Search query string |
+| offset | integer | No | 0 | Pagination offset |
+| limit | integer | No | 50 | Results per page (max 1000) |
+| category | string | No | - | Category ID filter |
+| seller_id | string | No | - | Seller ID filter |
+
+**Request Example:**
+```
+/ml/search?q=iphone&offset=0&limit=10&category=MLM1051
+```
+
+**Response:** MercadoLibre search results JSON
+
+**Example Response:**
+```json
+{
+    "site_id": "MLM",
+    "query": "iphone",
+    "paging": {
+        "total": 1500,
+        "offset": 0,
+        "limit": 10,
+        "primary_results": 1000
+    },
+    "results": [
+        {
+            "id": "MLM1234567890",
+            "site_id": "MLM",
+            "title": "iPhone 15 Pro Max 256GB",
+            "price": 25999,
+            "currency_id": "MXN",
+            "thumbnail": "http://http2.mlstatic.com/D_1234567890-I.jpg",
+            "permalink": "https://articulo.mercadolibre.com.mx/MLM-1234567890",
+            "seller": {
+                "id": 123456789,
+                "nickname": "SELLER_NICK"
+            }
+        }
+    ]
+}
+```
+
+**Headers Sent:**
+```python
+{
+    "Accept": "application/json",
+    "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Authorization": "Bearer {access_token}"
+}
+```
+
+**Error Handling:**
+- 400: Bad request (missing required parameters)
+- 403: Forbidden (token or access issue)
+- 500: Internal server error (token retrieval failure)
+
+**Token Usage:**
+- Attempts to use OAuth access token
+- If 403 received with token, retries without token (endpoint may be public)
+
+---
+
+### GET /ml/items/{item_id}
+**Purpose:** Proxy endpoint for MercadoLibre item details API
+
+**Path Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| item_id | string | Yes | MercadoLibre item ID |
+
+**Request Example:**
+```
+/ml/items/MLM1234567890
+```
+
+**Response:** MercadoLibre item details JSON
+
+**Example Response:**
+```json
+{
+    "id": "MLM1234567890",
+    "site_id": "MLM",
+    "title": "iPhone 15 Pro Max 256GB",
+    "subtitle": "Producto nuevo sellado",
+    "seller_id": 123456789,
+    "category_id": "MLM1051",
+    "price": 25999,
+    "base_price": 25999,
+    "currency_id": "MXN",
+    "initial_quantity": 10,
+    "available_quantity": 5,
+    "sold_quantity": 5,
+    "condition": "new",
+    "listing_type_id": "gold_special",
+    "thumbnail": "http://http2.mlstatic.com/D_1234567890-I.jpg",
+    "pictures": [
+        {
+            "id": "1234567",
+            "url": "http://http2.mlstatic.com/D_1234567890-I.jpg"
+        }
+    ],
+    "attributes": [
+        {
+            "id": "BRAND",
+            "name": "Marca",
+            "value_id": "9344",
+            "value_name": "Apple"
+        }
+    ],
+    "seller_address": {
+        "city": {"id": "MX-MOR", "name": "Morelos"},
+        "state": {"id": "MX-MOR", "name": "Morelos"},
+        "country": {"id": "MX", "name": "México"}
+    }
+}
+```
+
+**Headers Sent:**
+```python
+{
+    "Accept": "application/json",
+    "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Authorization": "Bearer {access_token}"
+}
+```
+
+**Error Handling:**
+- 400: Bad request (invalid item ID)
+- 403: Forbidden (token or access issue)
+- 404: Item not found
+- 500: Internal server error (token retrieval failure)
+
+---
+
+### GET /ml/whoami
+**Purpose:** Debug endpoint to verify OAuth token validity and get current user info
+
+**Request:** No parameters required
+
+**Behavior:**
+- Validates the stored OAuth access token
+- Calls MercadoLibre /users/me endpoint to confirm token is valid
+- Returns user information if token is valid
+
+**Response:** MercadoLibre user info JSON
+
+**Example Response:**
+```json
+{
+    "id": 123456789,
+    "nickname": "SELLER_NICK",
+    "registration_date": "2020-01-15T10:30:00.000-06:00",
+    "first_name": "Juan",
+    "last_name": "Pérez",
+    "country_id": "MX",
+    "email": "user@example.com",
+    "identifications": [
+        {
+            "type": "RFC",
+            "number": "ABCD123456XYZ"
+        }
+    ],
+    "phones": [
+        {
+            "area_code": "55",
+            "number": "12345678",
+            "extension": "",
+            "verified": true
+        }
+    ],
+    "points": 100,
+    "seller_experience": "advanced",
+    "seller_reputation": {
+        "level_id": "5_green",
+        "power_seller_status": "platinum",
+        "transactions": {
+            "total": 500,
+            "completed": 490,
+            "canceled": 10,
+            "ratings": 4.8
+        }
+    }
+}
+```
+
+**Error Handling:**
+- 400: Bad request
+- 401: Unauthorized (invalid/expired token)
+- 500: Internal server error (token retrieval failure)
+
+**Usage:** Use this endpoint to:
+- Debug token issues
+- Verify OAuth flow completed successfully
+- Get current user ID for API operations
+
+---
+
+## Token Management
+
+### Token Expiration
+- Access tokens expire after 6 hours (21600 seconds)
+- Refresh tokens have longer validity
+- Token refresh is handled automatically by the system
+
+### Automatic Token Refresh
+When `get_valid_access_token()` is called:
+1. Checks stored tokens in `dbo.ml_tokens`
+2. Compares expiration time with current time
+3. If expired, automatically refreshes using stored refresh_token
+4. Updates database with new tokens
+
+### Manual Token Refresh
+If tokens expire, the OAuth flow must be completed again:
+1. Call `/mercadolibre/oauth/authorize` to get new authorization URL
+2. User authenticates on MercadoLibre
+3. Callback receives new authorization code
+4. Code is exchanged for new tokens
+5. New tokens are stored in database
+
+---
+
+## Error Handling
+
+### Common Error Codes
+
+| Code | Description | Solution |
+|------|-------------|----------|
+| 400 | Bad request | Check parameter format |
+| 401 | Unauthorized | Re-run OAuth flow |
+| 403 | Forbidden | Check token permissions |
+| 404 | Not found | Verify resource exists |
+| 500 | Server error | Check server logs |
+
+### Token Errors
+
+**"No MercadoLibre tokens found. Run OAuth flow first."**
+- OAuth flow has not been completed
+- Database tokens table is empty
+- Solution: Complete OAuth authorization
+
+**"Token refresh failed"**
+- Refresh token has expired
+- Solution: Re-run OAuth flow
+
+---
+
+## Rate Limiting
+
+MercadoLibre API enforces rate limits:
+- Search API: 3000 requests/hour
+- Item API: 10000 requests/hour
+- User API: 3000 requests/hour
+
+---
+
+## Security Considerations
+
+1. **PKCE Flow:** Uses code verifier/challenge to prevent authorization code interception
+2. **State Parameter:** Random state prevents CSRF attacks
+3. **Token Storage:** Tokens stored securely in database
+4. **Logging:** Token values are masked in logs (only first 6 and last 3 characters shown)
+
+---
+
+## Debugging
+
+### Enable Debug Logging
+Logs include:
+- Request/response IDs (6 hex characters)
+- Token presence checks
+- HTTP status codes
+- Response previews (first 1200 characters)
+- Header information (without sensitive data)
+
+### Request Tracing
+Each request gets a unique request ID for tracing:
+```python
+def _req_id() -> str:
+    return secrets.token_hex(6)  # e.g., "a1b2c3d4e5f6"
+```
+
+---
+
+## Database Schema
+
+### ml_oauth_states
+```sql
+CREATE TABLE dbo.ml_oauth_states (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    state NVARCHAR(255) NOT NULL,
+    code_verifier NVARCHAR(255) NOT NULL,
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    used_at DATETIME2 NULL
+);
+```
+
+### ml_tokens
+```sql
+CREATE TABLE dbo.ml_tokens (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    access_token NVARCHAR(500) NOT NULL,
+    refresh_token NVARCHAR(500) NOT NULL,
+    expires_at DATETIME2 NOT NULL,
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NULL
+);
+```
+
+---
+
+## Marketplace Management Modules
+
+The following modules provide comprehensive marketplace integration for Amazon and MercadoLibre, including product catalog management, listing automation, order processing, and profitability analysis.
+
+---
+
+### POST /unifiedProducts
+**Purpose:** Manage unified product catalog - the single source of truth for all products across marketplaces
+
+**Stored Procedure:** `sp_unifiedProducts`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create new unified product |
+| UPDATE | 2 | Update existing product |
+| DELETE | 3 | Delete product |
+
+**Request Body:**
+```json
+{
+  "unifiedProducts": [
+    {
+      "unifiedProductId": 1,
+      "brand": "Apple",
+      "model": "A2890",
+      "title": "iPhone 15",
+      "ean_upc": "1234567890123",
+      "attributesJson": "{\"color\":\"black\"}",
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| unifiedProductId | int | No* | Product ID for UPDATE/DELETE actions |
+| brand | string | Yes | Product brand manufacturer |
+| model | string | Yes | Model number/SKU |
+| title | string | Yes | Product display name |
+| ean_upc | string | Yes | Barcode identifier |
+| attributesJson | string | No | JSON object with product attributes (color, size, etc.) |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+**Response Field Descriptions:**
+| Field | Description |
+|-------|-------------|
+| value | Identifier of affected row |
+| msg | Status message |
+| error | Error message if operation failed |
+
+---
+
+### POST /buyOffers
+**Purpose:** Manage purchase source configurations - suppliers and purchase options for products
+
+**Stored Procedure:** `sp_buyOffers`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Add new buy offer source |
+| UPDATE | 2 | Update existing buy offer |
+| DELETE | 3 | Delete buy offer |
+
+**Request Body:**
+```json
+{
+  "buyOffers": [
+    {
+      "buyOfferId": 1,
+      "supplierName": "Walmart",
+      "productUrl": "https://www.walmart.com/ip/product/123",
+      "buyCostUsd": 650.00,
+      "stockLevel": 100,
+      "leadTimeDays": 3,
+      "minQuantity": 1,
+      "maxQuantity": 50,
+      "currency": "USD",
+      "isActive": true,
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| buyOfferId | int | No* | Buy offer ID for UPDATE/DELETE |
+| supplierName | string | Yes | Supplier/retailer name |
+| productUrl | string | Yes | URL to purchase product |
+| buyCostUsd | decimal | Yes | Cost in USD |
+| stockLevel | int | No | Available stock quantity |
+| leadTimeDays | int | No | Delivery time in days |
+| minQuantity | int | No | Minimum purchase quantity |
+| maxQuantity | int | No | Maximum purchase quantity |
+| currency | string | No | Currency code (default: USD) |
+| isActive | bool | No | Whether offer is active |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+### POST /sellListings
+**Purpose:** Manage marketplace listings on Amazon and MercadoLibre
+
+**Stored Procedure:** `sp_sellListings`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create new listing |
+| UPDATE | 2 | Update existing listing |
+| DELETE | 3 | Delete listing |
+
+**Request Body:**
+```json
+{
+  "sellListings": [
+    {
+      "sellListingId": 1,
+      "channel": "amazon",
+      "market": "US",
+      "channelItemId": "B0XXXXXXX",
+      "title": "Product X",
+      "sellPriceOriginal": 150.00,
+      "currencyOriginal": "USD",
+      "sellPriceUsd": 150.00,
+      "fxRateToUsd": 1.0,
+      "fxAsOfDate": "2026-01-15",
+      "fulfillmentType": "FBM",
+      "shippingTimeDays": 3,
+      "rating": 4.6,
+      "reviewsCount": 120,
+      "listingTimestamp": "2026-01-15T18:10:00",
+      "unifiedProductId": 1,
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| sellListingId | int | No* | Listing ID for UPDATE/DELETE |
+| channel | string | Yes | Marketplace: "amazon" or "mercadolibre" |
+| market | string | Yes | Country code: "US", "MX", etc. |
+| channelItemId | string | Yes | Original marketplace item ID |
+| title | string | Yes | Listing title |
+| sellPriceOriginal | decimal | Yes | Price in local currency |
+| currencyOriginal | string | Yes | Currency code |
+| sellPriceUsd | decimal | Yes | Price converted to USD |
+| fxRateToUsd | decimal | Yes | Exchange rate to USD |
+| fxAsOfDate | date | Yes | Exchange rate date |
+| fulfillmentType | string | No | "FBM" or "FBA" |
+| shippingTimeDays | int | No | Estimated shipping days |
+| rating | decimal | No | Seller/product rating |
+| reviewsCount | int | No | Number of reviews |
+| listingTimestamp | datetime | Yes | When listing was created |
+| unifiedProductId | int | Yes | Linked unified product |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+### POST /productMatches
+**Purpose:** Create auditable matching records between unified products and marketplace entities
+
+**Stored Procedure:** `sp_productMatches`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create new product match |
+| UPDATE | 2 | Update existing match |
+| DELETE | 3 | Delete match |
+
+**Request Body:**
+```json
+{
+  "productMatches": [
+    {
+      "unifiedProductId": 1,
+      "entityType": "buy",
+      "entityId": 10,
+      "confidence": 0.9450,
+      "matchMethod": "embedding",
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| unifiedProductId | int | Yes | ID from unifiedProducts table |
+| entityType | string | Yes | "buy" (buy offer) or "sell" (listing) |
+| entityId | int | Yes | ID of the matched entity |
+| confidence | decimal | Yes | Match confidence score (0-1) |
+| matchMethod | string | Yes | Method used: "embedding", "manual", "barcode", etc. |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Match Confidence Guidelines:**
+| Score Range | Interpretation |
+|-------------|----------------|
+| 0.95 - 1.00 | High confidence match |
+| 0.80 - 0.94 | Good confidence match |
+| 0.60 - 0.79 | Moderate confidence - verify manually |
+| 0.00 - 0.59 | Low confidence - requires review |
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+### POST /costRules
+**Purpose:** Define cost rules for profitability calculations - commissions, advertising, and returns
+
+**Stored Procedure:** `sp_costRules`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create new cost rule |
+| UPDATE | 2 | Update existing rule |
+| DELETE | 3 | Delete rule |
+
+**Request Body:**
+```json
+{
+  "costRules": [
+    {
+      "channel": "amazon",
+      "market": "US",
+      "category": "Electronics",
+      "feePercent": 0.150000,
+      "fixedFeeUsd": 0.300000,
+      "adsPercent": 0.050000,
+      "returnsRate": 0.020000,
+      "avgReturnCostUsd": 8.000000,
+      "packagingCostUsd": 0.500000,
+      "otherCostUsd": 0.250000,
+      "effectiveFrom": "2026-01-17",
+      "effectiveTo": null,
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| channel | string | Yes | Marketplace: "amazon", "mercadolibre" |
+| market | string | Yes | Country code: "US", "MX", etc. |
+| category | string | Yes | Product category |
+| feePercent | decimal | Yes | Variable fee percentage (e.g., 0.15 = 15%) |
+| fixedFeeUsd | decimal | Yes | Fixed fee per transaction in USD |
+| adsPercent | decimal | Yes | Advertising cost percentage |
+| returnsRate | decimal | Yes | Expected returns rate (0.02 = 2%) |
+| avgReturnCostUsd | decimal | Yes | Average return processing cost |
+| packagingCostUsd | decimal | Yes | Packaging cost per unit |
+| otherCostUsd | decimal | Yes | Other miscellaneous costs |
+| effectiveFrom | date | Yes | Rule start date |
+| effectiveTo | date | No | Rule end date (null = indefinite) |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Cost Calculation Formula:**
+```
+Total Cost = (sellPrice * feePercent) + fixedFeeUsd 
+           + (sellPrice * adsPercent)
+           + (sellPrice * returnsRate * avgReturnCostUsd / sellPrice)
+           + packagingCostUsd + otherCostUsd
+```
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+### POST /opportunities
+**Purpose:** Calculate ROI and profit margins for products across marketplaces
+
+**Stored Procedure:** `sp_opportunities`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create opportunity record |
+| UPDATE | 2 | Update opportunity |
+| DELETE | 3 | Delete opportunity |
+
+**Request Body:**
+```json
+{
+  "opportunities": [
+    {
+      "unifiedProductId": 1,
+      "channel": "amazon",
+      "market": "US",
+      "buyCostUsd": 650.00,
+      "sellPriceUsd": 799.99,
+      "estimatedProfitUsd": 99.99,
+      "roiPercent": 15.38,
+      "marginPercent": 12.50,
+      "daysToSell": 10,
+      "competitorCount": 5,
+      "avgCompetitorPriceUsd": 820.00,
+      "priceStrategy": "competitive",
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| unifiedProductId | int | Yes | Product identifier |
+| channel | string | Yes | Marketplace channel |
+| market | string | Yes | Country code |
+| buyCostUsd | decimal | Yes | Total purchase cost in USD |
+| sellPriceUsd | decimal | Yes | Selling price in USD |
+| estimatedProfitUsd | decimal | Yes | Expected profit (sellPrice - buyCost - costs) |
+| roiPercent | decimal | Yes | Return on Investment percentage |
+| marginPercent | decimal | Yes | Profit margin percentage |
+| daysToSell | int | No | Estimated days to sell inventory |
+| competitorCount | int | No | Number of competitors |
+| avgCompetitorPriceUsd | decimal | No | Average competitor price |
+| priceStrategy | string | No | "competitive", "premium", "volume" |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Calculated Fields:**
+| Field | Formula |
+|-------|---------|
+| estimatedProfitUsd | sellPriceUsd - buyCostUsd - totalFees |
+| roiPercent | (estimatedProfitUsd / buyCostUsd) * 100 |
+| marginPercent | (estimatedProfitUsd / sellPriceUsd) * 100 |
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+### POST /listingDrafts
+**Purpose:** Manage product listing drafts before publishing to marketplaces
+
+**Stored Procedure:** `sp_listingDrafts`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create new draft |
+| UPDATE | 2 | Update existing draft |
+| DELETE | 3 | Delete draft |
+
+**Request Body:**
+```json
+{
+  "listingDrafts": [
+    {
+      "unifiedProductId": 1,
+      "channel": "amazon",
+      "market": "US",
+      "payloadJson": {
+        "title": "Apple iPhone 15 128GB",
+        "condition": "new",
+        "quantity": 1,
+        "brand": "Apple",
+        "model": "A2890",
+        "images": ["https://example.com/img1.jpg"]
+      },
+      "suggestedPriceUsd": 799.99,
+      "minPriceUsd": 749.99,
+      "maxPriceUsd": 849.99,
+      "status": "draft",
+      "approvedBy": null,
+      "approvedAt": null,
+      "errorMessage": null,
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| unifiedProductId | int | Yes | Linked unified product |
+| channel | string | Yes | Marketplace: "amazon", "mercadolibre" |
+| market | string | Yes | Country code |
+| payloadJson | json | Yes | Marketplace-specific listing payload |
+| suggestedPriceUsd | decimal | Yes | Recommended selling price |
+| minPriceUsd | decimal | Yes | Minimum acceptable price |
+| maxPriceUsd | decimal | Yes | Maximum price limit |
+| status | string | Yes | "draft", "approved", "rejected", "published" |
+| approvedBy | string | No | User who approved |
+| approvedAt | datetime | No | Approval timestamp |
+| errorMessage | string | No | Error if publishing failed |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**PayloadJson Example (Amazon):**
+```json
+{
+  "title": "Apple iPhone 15 128GB Black",
+  "description": "Latest iPhone model",
+  "condition": "new",
+  "quantity": 10,
+  "brand": "Apple",
+  "model": "A2890",
+  "bullet_point1": "6.1-inch Super Retina XDR display",
+  "bullet_point2": "A16 Bionic chip",
+  "bullet_point3": "48MP camera system",
+  "images": [
+    "https://example.com/img1.jpg",
+    "https://example.com/img2.jpg"
+  ],
+  "keywords": ["iPhone", "Apple", "smartphone"]
+}
+```
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+### POST /publishJobs
+**Purpose:** Queue and manage listing publication jobs
+
+**Stored Procedure:** `sp_publishJobs`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create new publish job |
+| UPDATE | 2 | Update job status |
+| DELETE | 3 | Delete/cancel job |
+
+**Request Body:**
+```json
+{
+  "publishJobs": [
+    {
+      "draftId": 1,
+      "status": "queued",
+      "attempts": 0,
+      "nextRetryAt": null,
+      "lastError": null,
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| draftId | int | Yes | Linked listing draft ID |
+| status | string | Yes | "queued", "processing", "completed", "failed", "retrying" |
+| attempts | int | No | Number of publish attempts |
+| nextRetryAt | datetime | No | Next retry timestamp |
+| lastError | string | No | Last error message |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Status Workflow:**
+```
+queued → processing → completed
+              ↓
+          failed → retrying → processing
+                              ↓
+                          completed
+```
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+### POST /marketplaceOrders
+**Purpose:** Manage marketplace orders from Amazon and MercadoLibre
+
+**Stored Procedure:** `sp_marketplaceOrders`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Import new order |
+| UPDATE | 2 | Update order status |
+| DELETE | 3 | Delete order |
+
+**Request Body:**
+```json
+{
+  "marketplaceOrders": [
+    {
+      "channel": "amazon",
+      "market": "US",
+      "channelOrderId": "AMZ-ORDER-000001",
+      "unifiedProductId": 1,
+      "quantity": 1,
+      "soldPriceUsd": 799.99,
+      "buyerAddressJson": {
+        "name": "John Doe",
+        "email": "john@example.com",
+        "phone": "+1-555-0100",
+        "address1": "123 Main St",
+        "address2": "Apt 5",
+        "city": "Phoenix",
+        "state": "AZ",
+        "postalCode": "85001",
+        "country": "US"
+      },
+      "status": "ORDER_NEW",
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| channel | string | Yes | Marketplace: "amazon", "mercadolibre" |
+| market | string | Yes | Country code |
+| channelOrderId | string | Yes | Original marketplace order ID |
+| unifiedProductId | int | Yes | Ordered product ID |
+| quantity | int | Yes | Items ordered |
+| soldPriceUsd | decimal | Yes | Sale price in USD |
+| buyerAddressJson | json | Yes | Buyer shipping information |
+| status | string | Yes | Order status |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Order Status Values:**
+| Status | Description |
+|--------|-------------|
+| ORDER_NEW | New order received |
+| ORDER_CONFIRMED | Order confirmed |
+| ORDER_PROCESSING | Being prepared |
+| ORDER_SHIPPED | Shipped to customer |
+| ORDER_DELIVERED | Delivered |
+| ORDER_CANCELLED | Cancelled |
+| ORDER_RETURNED | Return requested |
+| ORDER_REFUNDED | Refunded |
+
+**BuyerAddressJson Schema:**
+```json
+{
+  "name": "Full Name",
+  "email": "email@example.com",
+  "phone": "+1-555-0100",
+  "address1": "Street address",
+  "address2": "Apt, suite, etc.",
+  "city": "City",
+  "state": "State/Province",
+  "postalCode": "Postal code",
+  "country": "Country code"
+}
+```
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+### POST /shipments
+**Purpose:** Track shipment and delivery information for orders
+
+**Stored Procedure:** `sp_shipments`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create shipment record |
+| UPDATE | 2 | Update tracking info |
+| DELETE | 3 | Delete shipment |
+
+**Request Body:**
+```json
+{
+  "shipments": [
+    {
+      "marketplaceOrderId": 1,
+      "carrier": "UPS",
+      "serviceLevel": "Ground",
+      "labelRef": "LBL-UPS-000001",
+      "trackingNumber": "1Z999AA10123456784",
+      "status": "LABEL_CREATED",
+      "shippedAt": null,
+      "deliveredAt": null,
+      "lastError": null,
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| marketplaceOrderId | int | Yes | Linked order ID |
+| carrier | string | Yes | Shipping carrier: "UPS", "FedEx", "DHL", etc. |
+| serviceLevel | string | Yes | Service type: "Ground", "Express", "2-Day" |
+| labelRef | string | Yes | Shipping label reference |
+| trackingNumber | string | Yes | Carrier tracking number |
+| status | string | Yes | Shipment status |
+| shippedAt | datetime | No | Actual ship timestamp |
+| deliveredAt | datetime | No | Delivery timestamp |
+| lastError | string | No | Last error message |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Shipment Status Values:**
+| Status | Description |
+|--------|-------------|
+| LABEL_CREATED | Shipping label generated |
+| PICKED_UP | Carrier picked up package |
+| IN_TRANSIT | Package in transit |
+| OUT_FOR_DELIVERY | Out for delivery |
+| DELIVERED | Successfully delivered |
+| DELIVERY_FAILED | Delivery attempt failed |
+| RETURNED_TO_SENDER | Package returned |
+| EXCEPTION | Delivery exception |
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+### POST /messageTickets
+**Purpose:** Manage customer service messages and tickets from marketplaces
+
+**Stored Procedure:** `sp_messageTickets`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create new ticket |
+| UPDATE | 2 | Update ticket status/reply |
+| DELETE | 3 | Delete ticket |
+
+**Request Body:**
+```json
+{
+  "messageTickets": [
+    {
+      "channel": "amazon",
+      "market": "US",
+      "threadId": "THREAD-001",
+      "marketplaceOrderId": 1,
+      "customerMessage": "Hi, when will my order ship?",
+      "suggestedReply": "Hello! Your order is being processed and will ship soon. We will share the tracking once available.",
+      "finalReply": null,
+      "status": "pending",
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| channel | string | Yes | Marketplace: "amazon", "mercadolibre" |
+| market | string | Yes | Country code |
+| threadId | string | Yes | Marketplace thread/conversation ID |
+| marketplaceOrderId | int | Yes | Linked order ID |
+| customerMessage | string | Yes | Original customer message |
+| suggestedReply | string | No | AI-generated reply suggestion |
+| finalReply | string | No | Final sent reply |
+| status | string | Yes | Ticket status |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Ticket Status Values:**
+| Status | Description |
+|--------|-------------|
+| pending | Awaiting response |
+| responded | Customer responded |
+| resolved | Issue resolved |
+| escalated | Escalated to manager |
+| closed | Ticket closed |
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+### POST /procurementJobs
+**Purpose:** Manage purchase order jobs for fulfilling marketplace orders
+
+**Stored Procedure:** `sp_procurementJobs`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create procurement job |
+| UPDATE | 2 | Update job decision |
+| DELETE | 3 | Delete job |
+
+**Request Body:**
+```json
+{
+  "procurementJobs": [
+    {
+      "marketplaceOrderId": 1,
+      "supplierCandidate": "Walmart",
+      "maxBuyCostUsd": 650.00,
+      "decision": "",
+      "reason": "Best price found within SLA",
+      "action": "1"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| marketplaceOrderId | int | Yes | Linked order ID |
+| supplierCandidate | string | Yes | Supplier/retailer name |
+| maxBuyCostUsd | decimal | Yes | Maximum purchase cost budget |
+| decision | string | Yes | "approved", "rejected", "pending" |
+| reason | string | Yes | Decision rationale |
+| action | string | Yes | 1=INSERT, 2=UPDATE, 3=DELETE |
+
+**Procurement Decision Values:**
+| Decision | Description |
+|----------|-------------|
+| pending | Awaiting decision |
+| approved | Purchase approved |
+| rejected | Purchase rejected |
+| ordered | Order placed with supplier |
+| received | Stock received |
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "value": "1",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+---
+
+## Integration Flow Diagram
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  unifiedProducts│────▶│   productMatches│◀───▶│    buyOffers    │
+│   (Catalog)     │     │   (Matching)    │     │   (Sources)     │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+         │                       │                       │
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  listingDrafts  │────▶│   publishJobs   │────▶│ sellListings    │
+│   (Drafts)      │     │   (Publishing)  │     │   (Live)        │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                        │
+                                                        │
+┌─────────────────┐     ┌─────────────────┐             │
+│   shipments     │◀───▶│marketplaceOrders│─────────────┘
+│   (Tracking)    │     │   (Orders)      │
+└─────────────────┘     └─────────────────┘
+         │
+         ▼
+┌─────────────────┐     ┌─────────────────┐
+│messageTickets   │     │ procurementJobs │
+│ (Customer Svc)  │     │   (Purchasing)  │
+└─────────────────┘     └─────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│   opportunities │
+│  (ROI Analysis) │
+└─────────────────┘
+```
+
+---
+
+## Unified API Response Format
+
+All POST endpoints follow the same response format:
+
+**Success Response:**
+```json
+{
+  "result": [
+    {
+      "value": "12345",
+      "msg": "success",
+      "error": ""
+    }
+  ]
+}
+```
+
+**Error Response:**
+```json
+{
+  "result": [
+    {
+      "value": "",
+      "msg": "error",
+      "error": "Detailed error message here"
+    }
+  ]
+}
+```
+
+**Response Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| result | array | Always contains one object |
+| value | string | Operation result (ID for INSERT/UPDATE, empty for DELETE) |
+| msg | string | "success" or "error" |
+| error | string | Error details if operation failed |
+
+---
+
+## Error Handling
+
+### Common HTTP Status Codes
+
+| Code | Meaning | Common Causes |
+|------|---------|---------------|
+| 200 | OK | Successful operation |
+| 400 | Bad Request | Invalid JSON, missing required fields |
+| 500 | Internal Server Error | Database error, stored procedure failure |
+
+### Database Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| Constraint violation | Duplicate key | Check unique constraints |
+| Foreign key violation | Invalid reference | Verify linked IDs exist |
+| Timeout | Large dataset | Reduce batch size |
+
+---
+
+## Best Practices
+
+1. **Always use transactions** for batch operations
+2. **Validate product matches** with confidence > 0.8 before automatic linking
+3. **Set appropriate cost rules** before calculating opportunities
+4. **Use status workflows** to track order lifecycle
+5. **Monitor publish job failures** and implement retry logic
+6. **Keep cost rules updated** as marketplace fees change
+
