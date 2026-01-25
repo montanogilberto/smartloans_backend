@@ -11,7 +11,8 @@ from routes_ import (
     vending_v2, contact_email, laundry, income, IOT, tickets, clients,
     expenses, exchangeRates, buyOffers, unifiedProducts, costRules,
     listingDrafts, messageTickets, procurementJobs, productMatches,
-    publishJobs, sellListings, shipments, opportunities, marketplaceOrders, mercadolibre, ml_proxy
+    publishJobs, sellListings, shipments, opportunities, marketplaceOrders, mercadolibre, ml_proxy,
+    mlSearchRuns, mlJobs
 )
 
 app = FastAPI(
@@ -114,6 +115,8 @@ app.include_router(marketplaceOrders.router)
 
 app.include_router(mercadolibre.router)
 app.include_router(ml_proxy.router)
+app.include_router(mlSearchRuns.router)
+app.include_router(mlJobs.router)
 
 # --------------------------------------------------
 # Local development only

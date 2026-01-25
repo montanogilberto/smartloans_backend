@@ -1,0 +1,10 @@
+Actions:
+1 = Create run + (optional) domain_cache insert + (optional) results insert
+2 = Update/finish run (status/http_status/error/finished_at)
+
+Payload root:
+{
+  "searchRuns": [
+    { "action": 1|2, ... }
+  ]
+}
