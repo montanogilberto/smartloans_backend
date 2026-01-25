@@ -1,0 +1,12 @@
+Actions:
+1 = Enqueue job
+2 = Update status / last_error
+4 = Dequeue + lock (worker)
+5 = Heartbeat / extend lock
+
+Payload root:
+{
+  "jobs": [
+    { "action": 1|2|4|5, ... }
+  ]
+}
