@@ -1,12 +1,11 @@
-from fastapi import APIRouter
-from modules.mlSearchRuns import mlSearchRuns_sp
+import uuid
+from fastapi import APIRouter, Request
+from modules.mlSearchRuns import ml_search_runs_sp
 
-router = APIRouter()
+router = APIRouter(prefix="", tags=["MercadoLibreSearchRuns"])
 
-# Read docstring from file (optional)
-with open("./docs_description/mlSearchRuns.txt", "r") as file:
-    mlSearchRuns_docstring = file.read()
-
-@router.post("/mlSearchRuns", summary="ML Search Runs CRUD", description=mlSearchRuns_docstring)
-def mlSearchRuns(json: dict):
-    return mlSearchRuns_sp(json)
+@router.post("/mlSearchRuns")
+async def ml_search_runs(request: Request):
+    body = await request.json()
+    req_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    return ml_search_runs_sp(body, request_id=req_id)

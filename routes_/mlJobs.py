@@ -1,11 +1,11 @@
-from fastapi import APIRouter
-from modules.mlJobs import mlJobs_sp
+import uuid
+from fastapi import APIRouter, Request
+from modules.mlJobs import ml_jobs_sp
 
-router = APIRouter()
+router = APIRouter(prefix="", tags=["MercadoLibreJobs"])
 
-with open("./docs_description/mlJobs.txt", "r") as file:
-    mlJobs_docstring = file.read()
-
-@router.post("/mlJobs", summary="ML Jobs Queue CRUD", description=mlJobs_docstring)
-def mlJobs(json: dict):
-    return mlJobs_sp(json)
+@router.post("/mlJobs")
+async def ml_jobs(request: Request):
+    body = await request.json()
+    req_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    return ml_jobs_sp(body, request_id=req_id)
