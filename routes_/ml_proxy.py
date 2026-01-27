@@ -1,10 +1,16 @@
 """
-routes_/ml_proxy.py
+MercadoLibre Proxy Routes
 
-MercadoLibre proxy endpoints:
+Backend routes for proxying ML API requests.
+Workers call these routes, and the backend forwards to ML with proper auth/headers.
+
+Routes:
 - /ml/search  -> calls ML sites search
 - /ml/items/* -> calls ML item detail
-Uses your DB-stored OAuth token via get_valid_access_token()
+- /ml/whoami  -> debug endpoint to verify token
+- /ml/public_ping -> test public ML API connectivity
+
+Uses DB-stored OAuth token via get_valid_access_token()
 Adds safe logging (no secrets) + request-id tracing
 
 MINIMAL CHANGE:
@@ -45,10 +51,10 @@ def _mask_token(token: str, keep: int = 6) -> str:
     return token[:keep] + "..." + token[-3:]
 
 def _log_response(rid: str, label: str, resp: requests.Response) -> None:
-    body_preview = (resp.text or "")[:1200]  # KEEP your original
+    body_preview = (resp.text or "")[:1200]
     logger.info("[%s] %s status=%s", rid, label, resp.status_code)
     logger.info("[%s] %s body_preview=%s", rid, label, body_preview)
-    logger.info("[%s] %s resp_headers=%s", rid, label, dict(resp.headers))  # KEEP your original
+    logger.info("[%s] %s resp_headers=%s", rid, label, dict(resp.headers))
 
 def _is_invalid_token(resp: requests.Response) -> bool:
     """
@@ -99,6 +105,7 @@ BROWSER_HEADERS: Dict[str, str] = {
     "Referer": "https://www.mercadolibre.com.mx/",
     "Origin": "https://www.mercadolibre.com.mx",
 }
+
 
 # --------------------------
 # Endpoints
@@ -257,6 +264,9 @@ def ml_whoami():
 
 @router.get("/public_ping")
 def public_ping():
+    """
+    Debug endpoint to test public MercadoLibre API connectivity without authentication.
+    """
     r = requests.get("https://api.mercadolibre.com/currencies", timeout=15)
     return {
         "status": r.status_code,
@@ -269,3 +279,4 @@ def public_ping():
         },
         "body_preview": r.text[:200],
     }
+

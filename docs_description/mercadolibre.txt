@@ -1355,6 +1355,169 @@ queued → processing → completed
 
 ---
 
+### GET /ml/public_ping
+**Purpose:** Debug endpoint to test public MercadoLibre API connectivity without authentication
+
+**Request:** No parameters required
+
+**Behavior:**
+- Makes a public API call to `https://api.mercadolibre.com/currencies`
+- Returns response status, headers, and body preview
+- Useful for debugging API blocking, rate limiting, or connectivity issues
+
+**Response:**
+```json
+{
+    "status": 200,
+    "headers": {
+        "x-policy-agent-block-code": "",
+        "x-policy-agent-block-reason": "",
+        "via": "1.1 vegur",
+        "x-cache": "MISS",
+        "x-amz-cf-pop": "LAX3-C3"
+    },
+    "body_preview": "[{\"id\":\"ARS\",\"description\":\"Peso argentino\"..."
+}
+```
+
+**Response Field Descriptions:**
+| Field | Type | Description |
+|-------|------|-------------|
+| status | int | HTTP status code from MercadoLibre API |
+| headers | object | Response headers (includes blocking policy info) |
+| x-policy-agent-block-code | string | WAF/blocking code if blocked |
+| x-policy-agent-block-reason | string | Reason for blocking |
+| via | string | Proxy/handler information |
+| x-cache | string | Cache status |
+| x-amz-cf-pop | string | CloudFront edge location |
+| body_preview | string | First 200 chars of response body |
+
+**Use Cases:**
+- Debug API connectivity issues
+- Check if MercadoLibre API is blocking your requests
+- Verify network/proxy configuration
+- Test public endpoint availability
+
+---
+
+## Token Management Helper Functions
+
+The following helper functions in `modules/mercadolibre.py` are used internally and by workers:
+
+### get_valid_access_token()
+**Purpose:** Returns a valid access token, automatically refreshing if expired
+
+**Returns:** `str` - Valid MercadoLibre access token
+
+**Behavior:**
+1. Retrieves stored tokens from `dbo.ml_tokens`
+2. Checks if token is expired
+3. If expired, calls `refresh_access_token()` to get new tokens
+4. Updates database with new tokens
+5. Returns valid access token
+
+**Raises:**
+- `RuntimeError` - If no tokens found in database
+
+**Usage Example:**
+```python
+from modules.mercadolibre import get_valid_access_token
+
+token = get_valid_access_token()
+# Use token for API calls
+```
+
+---
+
+### refresh_access_token(refresh_token: str)
+**Purpose:** Refreshes an expired access token using a refresh token
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| refresh_token | string | Yes | Valid refresh token from database |
+
+**Returns:** `Dict[str, Any]` - New token response from MercadoLibre
+
+**Response Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| access_token | string | New access token |
+| refresh_token | string | New refresh token |
+| expires_in | int | Token validity in seconds |
+| token_type | string | Token type (usually "Bearer") |
+| user_id | string | MercadoLibre user ID |
+
+**Raises:**
+- `RuntimeError` - If refresh fails (invalid/expired refresh token)
+
+**Usage Example:**
+```python
+from modules.mercadolibre import refresh_access_token, upsert_tokens
+
+new_tokens = refresh_access_token(old_refresh_token)
+upsert_tokens(new_tokens)  # Save to database
+```
+
+---
+
+### get_latest_tokens()
+**Purpose:** Retrieves the most recent tokens from the database
+
+**Returns:** `Optional[Dict[str, Any]]` - Token object or None
+
+**Response Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| access_token | string | Stored access token |
+| refresh_token | string | Stored refresh token |
+| expires_at | datetime | Token expiration timestamp |
+
+**Usage Example:**
+```python
+from modules.mercadolibre import get_latest_tokens
+
+tokens = get_latest_tokens()
+if tokens:
+    print(f"Token expires at: {tokens['expires_at']}")
+```
+
+---
+
+### upsert_tokens(token_json: Dict[str, Any])
+**Purpose:** Inserts new tokens or updates existing tokens in the database
+
+**Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| token_json | dict | Yes | Token response from MercadoLibre API |
+
+**Expected token_json format:**
+```json
+{
+    "access_token": "new_access_token",
+    "refresh_token": "new_refresh_token",
+    "expires_in": 21600
+}
+```
+
+**Behavior:**
+- If tokens exist in `dbo.ml_tokens`, updates them
+- If no tokens exist, inserts new record
+- Calculates `expires_at` as current time + expires_in - 60 seconds
+
+**Usage Example:**
+```python
+from modules.mercadolibre import exchange_code_for_token, upsert_tokens
+
+token_json = exchange_code_for_token(code, verifier)
+upsert_tokens(token_json)
+```
+
+---
+
+---
+
 ## Integration Flow Diagram
 
 ```
