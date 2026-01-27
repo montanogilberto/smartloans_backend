@@ -33,6 +33,8 @@ from modules.mercadolibre import (
 )
 
 router = APIRouter(prefix="/ml", tags=["MercadoLibreProxy"])
+logger = logging.getLogger("ml_proxy")
+logger.setLevel(logging.INFO)
 
 ML_SITE_ID = "MLM"
 
@@ -284,3 +286,31 @@ def public_ping(request: Request):
         "body_preview": (r.text or "")[:200],
     }
     return _json_with_rid(rid, payload, status_code=200)
+
+@router.get("/seller_items")
+def ml_seller_items_proxy(
+    seller_id: str = Query(...),
+    offset: int = 0,
+    limit: int = 50,
+    order: Optional[str] = None,
+):
+    rid = _req_id()
+
+    token = get_valid_access_token()
+    url = f"https://api.mercadolibre.com/users/{seller_id}/items/search"
+
+    params: Dict[str, Any] = {"offset": offset, "limit": limit}
+    if order:
+        params["order"] = order
+
+    headers = {**BROWSER_HEADERS, "Authorization": f"Bearer {token}"}
+
+    logger.info("[%s] /ml/seller_items seller_id=%s params=%s", rid, seller_id, params)
+
+    r = requests.get(url, params=params, headers=headers, timeout=30)
+    logger.info("[%s] ML seller_items status=%s", rid, r.status_code)
+
+    if r.status_code >= 400:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
+
+    return r.json()
