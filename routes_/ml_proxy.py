@@ -22,7 +22,9 @@ import secrets
 from typing import Optional, Dict, Any
 
 import requests
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+
 from modules.mercadolibre import (
     get_valid_access_token,
     get_latest_tokens,
@@ -40,8 +42,10 @@ ML_SITE_ID = "MLM"
 logger = logging.getLogger("ml_proxy")
 logger.setLevel(logging.INFO)
 
+
 def _req_id() -> str:
     return secrets.token_hex(6)
+
 
 def _mask_token(token: str, keep: int = 6) -> str:
     if not token:
@@ -50,11 +54,13 @@ def _mask_token(token: str, keep: int = 6) -> str:
         return "***"
     return token[:keep] + "..." + token[-3:]
 
+
 def _log_response(rid: str, label: str, resp: requests.Response) -> None:
     body_preview = (resp.text or "")[:1200]
     logger.info("[%s] %s status=%s", rid, label, resp.status_code)
     logger.info("[%s] %s body_preview=%s", rid, label, body_preview)
     logger.info("[%s] %s resp_headers=%s", rid, label, dict(resp.headers))
+
 
 def _is_invalid_token(resp: requests.Response) -> bool:
     """
@@ -72,6 +78,7 @@ def _is_invalid_token(resp: requests.Response) -> bool:
     err = (j.get("error") or "").lower()
     return ("invalid" in msg and "token" in msg) or (err == "invalid_token") or ("invalid_access_token" in msg)
 
+
 def _refresh_and_get_new_access_token(rid: str) -> Optional[str]:
     """
     Refresh using latest DB refresh_token. Returns new access token or None.
@@ -82,13 +89,26 @@ def _refresh_and_get_new_access_token(rid: str) -> Optional[str]:
         return None
 
     try:
-        logger.warning("[%s] Refreshing token from DB refresh_token (len=%s)", rid, len(tokens["refresh_token"] or ""))
+        logger.warning(
+            "[%s] Refreshing token from DB refresh_token (len=%s)",
+            rid,
+            len(tokens.get("refresh_token") or ""),
+        )
         new_tokens = refresh_access_token(tokens["refresh_token"])
         upsert_tokens(new_tokens)
         return new_tokens.get("access_token")
     except Exception as e:
         logger.error("[%s] Token refresh failed: %s", rid, str(e))
         return None
+
+
+def _json_with_rid(rid: str, payload: Any, status_code: int = 200) -> JSONResponse:
+    """
+    Return JSON with x-request-id header for end-to-end tracing.
+    """
+    resp = JSONResponse(content=payload, status_code=status_code)
+    resp.headers["x-request-id"] = rid
+    return resp
 
 
 # --------------------------
@@ -112,13 +132,14 @@ BROWSER_HEADERS: Dict[str, str] = {
 # --------------------------
 @router.get("/search")
 def ml_search_proxy(
+    request: Request,
     q: str = Query(...),
     offset: int = 0,
     limit: int = 50,
     category: Optional[str] = None,
     seller_id: Optional[str] = None,
 ):
-    rid = _req_id()
+    rid = request.headers.get("x-request-id") or _req_id()
 
     url = f"https://api.mercadolibre.com/sites/{ML_SITE_ID}/search"
     params: Dict[str, Any] = {"q": q, "offset": offset, "limit": limit}
@@ -128,27 +149,18 @@ def ml_search_proxy(
         params["seller_id"] = seller_id
 
     # ================================================
-    # DEBUGGING: Check token presence and headers
+    # Check token presence
     # ================================================
     try:
         token = get_valid_access_token()
-        logger.info("[%s] TOKEN present: %s, len: %s",
-                    rid, bool(token), len(token) if token else 0)
+        logger.info("[%s] TOKEN present: %s, len: %s", rid, bool(token), len(token) if token else 0)
     except Exception as token_err:
         logger.error("[%s] Failed to get access token: %s", rid, str(token_err))
         raise HTTPException(status_code=500, detail=f"Token retrieval failed: {str(token_err)}")
 
-    # Prepare headers
     headers_with_token = {**BROWSER_HEADERS, "Authorization": f"Bearer {token}"}
 
-    # DEBUGGING: Log header details (safe, no secrets)
-    logger.info("[%s] Has Authorization: %s", rid, "Authorization" in headers_with_token)
-    logger.info("[%s] UA: %s", rid, headers_with_token.get("User-Agent"))
-    logger.info("[%s] All headers keys: %s", rid, list(headers_with_token.keys()))
-
-    # Log request details
-    logger.info("[%s] /ml/search url=%s params=%s token=%s",
-                rid, url, params, _mask_token(token))
+    logger.info("[%s] /ml/search url=%s params=%s token=%s", rid, url, params, _mask_token(token))
 
     # ================================================
     # Try WITH token
@@ -156,7 +168,7 @@ def ml_search_proxy(
     r = requests.get(url, params=params, headers=headers_with_token, timeout=30)
     _log_response(rid, "ML search WITH token", r)
 
-    # ✅ NEW: If invalid token -> refresh and retry once
+    # If invalid token -> refresh and retry once
     if _is_invalid_token(r):
         logger.warning("[%s] 401 invalid_token on /search -> refresh and retry once", rid)
         new_access = _refresh_and_get_new_access_token(rid)
@@ -165,34 +177,29 @@ def ml_search_proxy(
             r = requests.get(url, params=params, headers=headers_with_token, timeout=30)
             _log_response(rid, "ML search RETRY after refresh", r)
 
-    # ================================================
-    # KEEP your diagnostic: if 403 WITH token, retry WITHOUT token
-    # ================================================
+    # If 403 WITH token, retry WITHOUT token
     if r.status_code == 403:
         logger.warning("[%s] 403 WITH token -> retry WITHOUT token", rid)
-        logger.info("[%s] Token was present: %s, Authorization header: %s",
-                    rid, bool(token), "Authorization" in headers_with_token)
-
         r2 = requests.get(url, params=params, headers=BROWSER_HEADERS, timeout=30)
         _log_response(rid, "ML search WITHOUT token", r2)
         r = r2
 
     if r.status_code >= 400:
-        raise HTTPException(status_code=r.status_code, detail=r.text)
+        # include rid in response header for debugging
+        return _json_with_rid(rid, {"detail": r.text}, status_code=r.status_code)
 
-    return r.json()
+    return _json_with_rid(rid, r.json(), status_code=200)
 
 
 @router.get("/items/{item_id}")
-def ml_item_proxy(item_id: str):
-    rid = _req_id()
+def ml_item_proxy(request: Request, item_id: str):
+    rid = request.headers.get("x-request-id") or _req_id()
 
     url = f"https://api.mercadolibre.com/items/{item_id}"
 
     try:
         token = get_valid_access_token()
-        logger.info("[%s] TOKEN present: %s, len: %s",
-                    rid, bool(token), len(token) if token else 0)
+        logger.info("[%s] TOKEN present: %s, len: %s", rid, bool(token), len(token) if token else 0)
     except Exception as token_err:
         logger.error("[%s] Failed to get access token: %s", rid, str(token_err))
         raise HTTPException(status_code=500, detail=f"Token retrieval failed: {str(token_err)}")
@@ -201,13 +208,10 @@ def ml_item_proxy(item_id: str):
 
     headers = {**BROWSER_HEADERS, "Authorization": f"Bearer {token}"}
 
-    logger.info("[%s] Has Authorization: %s", rid, "Authorization" in headers)
-    logger.info("[%s] UA: %s", rid, headers.get("User-Agent"))
-
     r = requests.get(url, headers=headers, timeout=30)
     _log_response(rid, "ML item WITH token", r)
 
-    # ✅ NEW: If invalid token -> refresh and retry once
+    # If invalid token -> refresh and retry once
     if _is_invalid_token(r):
         logger.warning("[%s] 401 invalid_token on /items -> refresh and retry once", rid)
         new_access = _refresh_and_get_new_access_token(rid)
@@ -217,23 +221,22 @@ def ml_item_proxy(item_id: str):
             _log_response(rid, "ML item RETRY after refresh", r)
 
     if r.status_code >= 400:
-        raise HTTPException(status_code=r.status_code, detail=r.text)
+        return _json_with_rid(rid, {"detail": r.text}, status_code=r.status_code)
 
-    return r.json()
+    return _json_with_rid(rid, r.json(), status_code=200)
 
 
 @router.get("/whoami")
-def ml_whoami():
+def ml_whoami(request: Request):
     """
     Debug endpoint to confirm token validity.
     If this returns 200 but /search returns 403, it's endpoint-specific behavior/WAF.
     """
-    rid = _req_id()
+    rid = request.headers.get("x-request-id") or _req_id()
 
     try:
         token = get_valid_access_token()
-        logger.info("[%s] TOKEN present: %s, len: %s",
-                    rid, bool(token), len(token) if token else 0)
+        logger.info("[%s] TOKEN present: %s, len: %s", rid, bool(token), len(token) if token else 0)
     except Exception as token_err:
         logger.error("[%s] Failed to get access token: %s", rid, str(token_err))
         raise HTTPException(status_code=500, detail=f"Token retrieval failed: {str(token_err)}")
@@ -242,12 +245,11 @@ def ml_whoami():
     logger.info("[%s] /ml/whoami url=%s token=%s", rid, url, _mask_token(token))
 
     headers = {"Authorization": f"Bearer {token}"}
-    logger.info("[%s] Has Authorization: %s", rid, "Authorization" in headers)
 
     r = requests.get(url, headers=headers, timeout=30)
     _log_response(rid, "ML users/me", r)
 
-    # ✅ NEW: If invalid token -> refresh and retry once
+    # If invalid token -> refresh and retry once
     if _is_invalid_token(r):
         logger.warning("[%s] 401 invalid_token on /whoami -> refresh and retry once", rid)
         new_access = _refresh_and_get_new_access_token(rid)
@@ -257,18 +259,20 @@ def ml_whoami():
             _log_response(rid, "ML users/me RETRY after refresh", r)
 
     if r.status_code >= 400:
-        raise HTTPException(status_code=r.status_code, detail=r.text)
+        return _json_with_rid(rid, {"detail": r.text}, status_code=r.status_code)
 
-    return r.json()
+    return _json_with_rid(rid, r.json(), status_code=200)
 
 
 @router.get("/public_ping")
-def public_ping():
+def public_ping(request: Request):
     """
     Debug endpoint to test public MercadoLibre API connectivity without authentication.
     """
+    rid = request.headers.get("x-request-id") or _req_id()
+
     r = requests.get("https://api.mercadolibre.com/currencies", timeout=15)
-    return {
+    payload = {
         "status": r.status_code,
         "headers": {
             "x-policy-agent-block-code": r.headers.get("x-policy-agent-block-code"),
@@ -277,6 +281,6 @@ def public_ping():
             "x-cache": r.headers.get("x-cache"),
             "x-amz-cf-pop": r.headers.get("x-amz-cf-pop"),
         },
-        "body_preview": r.text[:200],
+        "body_preview": (r.text or "")[:200],
     }
-
+    return _json_with_rid(rid, payload, status_code=200)
