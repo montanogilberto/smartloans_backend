@@ -1,21 +1,4 @@
-"""
-MercadoLibre Proxy Routes
 
-Backend routes for proxying ML API requests.
-Workers call these routes, and the backend forwards to ML with proper auth/headers.
-
-Routes:
-- /ml/search  -> calls ML sites search
-- /ml/items/* -> calls ML item detail
-- /ml/whoami  -> debug endpoint to verify token
-- /ml/public_ping -> test public ML API connectivity
-
-Uses DB-stored OAuth token via get_valid_access_token()
-Adds safe logging (no secrets) + request-id tracing
-
-MINIMAL CHANGE:
-- If ML returns 401 invalid_token, refresh token and retry ONCE.
-"""
 
 import logging
 import secrets
@@ -24,6 +7,8 @@ from typing import Optional, Dict, Any
 import requests
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from fastapi import Depends
+from security.worker_key import require_worker_key
 
 from modules.mercadolibre import (
     get_valid_access_token,
@@ -132,6 +117,48 @@ BROWSER_HEADERS: Dict[str, str] = {
 # --------------------------
 # Endpoints
 # --------------------------
+
+@router.get("/products/{product_id}/items")
+def ml_product_items_proxy(
+    request: Request,
+    product_id: str,
+    limit: int = Query(50, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    worker_ok=Depends(require_worker_key),
+):
+    rid = request.headers.get("x-request-id") or _req_id()
+
+    url = f"https://api.mercadolibre.com/products/{product_id}/items"
+    params: Dict[str, Any] = {"limit": limit, "offset": offset}
+
+    try:
+        token = get_valid_access_token()
+        logger.info("[%s] TOKEN present: %s, len: %s", rid, bool(token), len(token) if token else 0)
+    except Exception as token_err:
+        logger.error("[%s] Failed to get access token: %s", rid, str(token_err))
+        raise HTTPException(status_code=500, detail=f"Token retrieval failed: {str(token_err)}")
+
+    headers = {**BROWSER_HEADERS, "Authorization": f"Bearer {token}"}
+
+    logger.info("[%s] /ml/products/%s/items url=%s params=%s token=%s", rid, product_id, url, params, _mask_token(token))
+
+    r = requests.get(url, params=params, headers=headers, timeout=30)
+    _log_response(rid, "ML product items WITH token", r)
+
+    # If invalid token -> refresh and retry once
+    if _is_invalid_token(r):
+        logger.warning("[%s] 401 invalid_token on /products/{id}/items -> refresh and retry once", rid)
+        new_access = _refresh_and_get_new_access_token(rid)
+        if new_access:
+            headers["Authorization"] = f"Bearer {new_access}"
+            r = requests.get(url, params=params, headers=headers, timeout=30)
+            _log_response(rid, "ML product items RETRY after refresh", r)
+
+    if r.status_code >= 400:
+        return _json_with_rid(rid, {"detail": r.text}, status_code=r.status_code)
+
+    return _json_with_rid(rid, r.json(), status_code=200)
+
 @router.get("/search")
 def ml_search_proxy(
     request: Request,
