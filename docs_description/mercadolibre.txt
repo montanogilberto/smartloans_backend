@@ -1400,121 +1400,467 @@ queued → processing → completed
 
 ---
 
-## Token Management Helper Functions
+## MercadoLibre Jobs Queue (mlJobs)
 
-The following helper functions in `modules/mercadolibre.py` are used internally and by workers:
+### POST /mlJobs
+**Purpose:** Manage job queue operations for MercadoLibre pipeline workers
 
-### get_valid_access_token()
-**Purpose:** Returns a valid access token, automatically refreshing if expired
+**Stored Procedure:** `sp_ml_jobs`
 
-**Returns:** `str` - Valid MercadoLibre access token
-
-**Behavior:**
-1. Retrieves stored tokens from `dbo.ml_tokens`
-2. Checks if token is expired
-3. If expired, calls `refresh_access_token()` to get new tokens
-4. Updates database with new tokens
-5. Returns valid access token
-
-**Raises:**
-- `RuntimeError` - If no tokens found in database
-
-**Usage Example:**
-```python
-from modules.mercadolibre import get_valid_access_token
-
-token = get_valid_access_token()
-# Use token for API calls
-```
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create new job (enqueue) |
+| UPDATE | 2 | Update job status |
+| DEQUEUE | 4 | Dequeue next available job |
 
 ---
 
-### refresh_access_token(refresh_token: str)
-**Purpose:** Refreshes an expired access token using a refresh token
+#### Action 1: Create/Enqueue Job (INSERT)
 
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| refresh_token | string | Yes | Valid refresh token from database |
-
-**Returns:** `Dict[str, Any]` - New token response from MercadoLibre
-
-**Response Fields:**
-| Field | Type | Description |
-|-------|------|-------------|
-| access_token | string | New access token |
-| refresh_token | string | New refresh token |
-| expires_in | int | Token validity in seconds |
-| token_type | string | Token type (usually "Bearer") |
-| user_id | string | MercadoLibre user ID |
-
-**Raises:**
-- `RuntimeError` - If refresh fails (invalid/expired refresh token)
-
-**Usage Example:**
-```python
-from modules.mercadolibre import refresh_access_token, upsert_tokens
-
-new_tokens = refresh_access_token(old_refresh_token)
-upsert_tokens(new_tokens)  # Save to database
-```
-
----
-
-### get_latest_tokens()
-**Purpose:** Retrieves the most recent tokens from the database
-
-**Returns:** `Optional[Dict[str, Any]]` - Token object or None
-
-**Response Fields:**
-| Field | Type | Description |
-|-------|------|-------------|
-| access_token | string | Stored access token |
-| refresh_token | string | Stored refresh token |
-| expires_at | datetime | Token expiration timestamp |
-
-**Usage Example:**
-```python
-from modules.mercadolibre import get_latest_tokens
-
-tokens = get_latest_tokens()
-if tokens:
-    print(f"Token expires at: {tokens['expires_at']}")
-```
-
----
-
-### upsert_tokens(token_json: Dict[str, Any])
-**Purpose:** Inserts new tokens or updates existing tokens in the database
-
-**Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| token_json | dict | Yes | Token response from MercadoLibre API |
-
-**Expected token_json format:**
+**Request Body:**
 ```json
 {
-    "access_token": "new_access_token",
-    "refresh_token": "new_refresh_token",
-    "expires_in": 21600
+  "jobs": [
+    {
+      "action": 1,
+      "job_type": "search",
+      "payload_json": {
+        "site_id": "MLM",
+        "query_text": "iphone 15",
+        "category_id": "MLM1051",
+        "filters_json": { "offset": 0, "limit": 50 }
+      },
+      "priority": 100,
+      "available_in_seconds": 0,
+      "max_attempts": 6
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| action | string | Yes | Must be "1" for INSERT |
+| job_type | string | Yes | Type: "search", "enrich", "score" |
+| payload_json | json | Yes | Job-specific payload |
+| priority | int | No | Lower = higher priority (default: 100) |
+| available_in_seconds | int | No | Delay before job available (default: 0) |
+| max_attempts | int | No | Max retry attempts (default: 6) |
+
+---
+
+#### Action 2: Update Job Status (UPDATE)
+
+**Request Body (Success):**
+```json
+{
+  "jobs": [
+    {
+      "action": 2,
+      "job_id": 123,
+      "status": "succeeded",
+      "last_error": null,
+      "unlock": true
+    }
+  ]
+}
+```
+
+**Request Body (Retry with backoff):**
+```json
+{
+  "jobs": [
+    {
+      "action": 2,
+      "job_id": 123,
+      "status": "retry",
+      "last_error": {"http_status": 403, "code": "PolicyAgent", "msg": "blocked"},
+      "unlock": true,
+      "backoff_seconds": 300
+    }
+  ]
+}
+```
+
+**Request Body (Permanent Failure):**
+```json
+{
+  "jobs": [
+    {
+      "action": 2,
+      "job_id": 123,
+      "status": "failed_permanent",
+      "last_error": {"http_status": 403, "code": "PolicyAgent", "msg": "blocked"},
+      "unlock": true
+    }
+  ]
+}
+```
+
+**Status Values:**
+| Status | Description |
+|--------|-------------|
+| succeeded | Job completed successfully |
+| retry | Job failed, should retry with backoff |
+| failed_permanent | Job failed permanently, no more retries |
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| action | string | Yes | Must be "2" for UPDATE |
+| job_id | int | Yes | Job ID to update |
+| status | string | Yes | Status value |
+| last_error | json | No | Error details object |
+| unlock | bool | Yes | Whether to release lock |
+| backoff_seconds | int | No | Seconds until next retry |
+
+---
+
+#### Action 4: Dequeue Job (DEQUEUE)
+
+**Request Body:**
+```json
+{
+  "jobs": [
+    {
+      "action": 4,
+      "locked_by": "ml_worker_01",
+      "lock_seconds": 120
+    }
+  ]
 }
 ```
 
 **Behavior:**
-- If tokens exist in `dbo.ml_tokens`, updates them
-- If no tokens exist, inserts new record
-- Calculates `expires_at` as current time + expires_in - 60 seconds
+1. Finds next available job where:
+   - `available_at <= NOW`
+   - `attempts < max_attempts`
+   - (`locked_until < NOW` OR `locked_by` matches)
+2. Atomically locks the job by setting `locked_until` and `locked_by`
+3. Returns the job JSON payload
 
-**Usage Example:**
+**Response:**
+```json
+{
+  "result": [
+    {
+      "job_id": 123,
+      "job_type": "search",
+      "payload_json": {...},
+      "attempts": 0,
+      "max_attempts": 6,
+      "locked_until": "2026-01-26T19:00:00.000Z"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| action | string | Yes | Must be "4" for DEQUEUE |
+| locked_by | string | Yes | Worker identifier (e.g., "ml_worker_01") |
+| lock_seconds | int | Yes | Lock duration in seconds (default: 120) |
+
+---
+
+## MercadoLibre Search Runs (mlSearchRuns)
+
+### POST /mlSearchRuns
+**Purpose:** Persist search run results and track search execution history
+
+**Stored Procedure:** `sp_ml_search_runs`
+
+**Action Types:**
+| Action | Value | Description |
+|--------|-------|-------------|
+| INSERT | 1 | Create new search run |
+| UPDATE | 2 | Update existing run |
+| DELETE | 3 | Delete run |
+
+---
+
+#### Action 1: Create Search Run (INSERT)
+
+**Request Body (Success):**
+```json
+{
+  "search_runs": [
+    {
+      "action": 1,
+      "site_id": "MLM",
+      "query_text": "iphone 15",
+      "domain_id": "MLM-CELLPHONES",
+      "filters_json": { "offset": 0, "limit": 50 },
+      "status": "succeeded",
+      "http_status": 200,
+      "error_json": null,
+      "started_at": "2026-01-26T19:00:00.000Z",
+      "finished_at": "2026-01-26T19:00:02.100Z",
+      "results": [
+        {
+          "item_id": "MLM1234567890",
+          "title": "iPhone 15 Pro Max",
+          "price": 25999,
+          "currency_id": "MXN",
+          "condition": "new",
+          "seller_id": 123456789,
+          "raw_json": {...}
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Request Body (Failure with 403):**
+```json
+{
+  "search_runs": [
+    {
+      "action": 1,
+      "site_id": "MLM",
+      "query_text": "iphone 15",
+      "domain_id": "MLM-CELLPHONES",
+      "filters_json": { "offset": 0, "limit": 50 },
+      "status": "failed",
+      "http_status": 403,
+      "error_json": {
+        "code": "PolicyAgent",
+        "msg": "blocked by WAF",
+        "x-policy-agent-block-code": "..."
+      },
+      "started_at": "2026-01-26T19:00:00.000Z",
+      "finished_at": "2026-01-26T19:00:02.100Z"
+    }
+  ]
+}
+```
+
+**Field Descriptions:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| action | string | Yes | Must be "1" for INSERT |
+| site_id | string | Yes | MercadoLibre site (e.g., "MLM", "MLA") |
+| query_text | string | Yes | Search query |
+| domain_id | string | No | Domain/category ID |
+| category_id | string | No | Category filter |
+| filters_json | json | No | Search filters (offset, limit, etc.) |
+| status | string | Yes | "succeeded" or "failed" |
+| http_status | int | Yes | HTTP status code from API |
+| error_json | json | No | Error details (required if failed) |
+| started_at | datetime | Yes | When search started (ISO) |
+| finished_at | datetime | Yes | When search finished (ISO) |
+| results | array | No | Array of search results (required if succeeded) |
+
+**Search Result Schema:**
+| Field | Type | Description |
+|-------|------|-------------|
+| item_id | string | MercadoLibre item ID |
+| site_id | string | Site ID |
+| title | string | Item title |
+| subtitle | string | Item subtitle |
+| price | decimal | Current price |
+| base_price | decimal | Original price |
+| currency_id | string | Currency code |
+| condition | string | "new", "used", etc. |
+| listing_type_id | string | Listing type |
+| category_id | string | Category ID |
+| domain_id | string | Domain ID |
+| permalink | string | Item URL |
+| thumbnail | string | Thumbnail URL |
+| seller_id | int | Seller ID |
+| seller_nickname | string | Seller username |
+| accepts_mercadopago | bool | Accepts MercadoPago |
+| pictures_count | int | Number of pictures |
+| raw_json | json | Full API response |
+
+---
+
+## MercadoLibre Search Worker
+
+### ml_search_worker.py
+
+Robust worker implementation that handles the full search pipeline with proper error handling.
+
+**Features:**
+- Atomic job dequeue with lock management
+- Automatic retry with exponential backoff
+- 403/WAF blocking handled gracefully
+- Search results persisted with full details
+- Automatic enrichment job enqueueing
+
+**Configuration:**
+```bash
+export BACKEND_BASE="https://smartloansbackend.azurewebsites.net"
+export WORKER_KEY=""  # Optional: X-Worker-Key header
+export LOCKED_BY="ml_worker_01"
+export LOCK_SECONDS=120
+export MAX_ATTEMPTS=6
+export SLEEP_EMPTY=2.0
+export SLEEP_ERROR=3.0
+```
+
+**Run the worker:**
+```bash
+# Search worker (default)
+python ml_search_worker.py
+
+# Enrichment worker
+python ml_search_worker.py enrich
+```
+
+**Worker Flow:**
+```
+Dequeue Job → Check Job Type
+    ↓
+    ├─→ search → Call /ml/search
+    │           ↓
+    │           ├─→ 200 OK → Normalize results
+    │           │           → Persist run + results
+    │           │           → Enqueue enrich jobs
+    │           │           → Update job succeeded
+    │           │
+    │           └─→ 403/Error → Persist failed run
+    │                       → Retry or permanent fail
+    │
+    └─→ enrich → Call /ml/items/{item_id}
+                → Normalize item
+                → Save to features table
+                → Enqueue score job
+```
+
+**Backoff Calculation:**
 ```python
-from modules.mercadolibre import exchange_code_for_token, upsert_tokens
-
-token_json = exchange_code_for_token(code, verifier)
-upsert_tokens(token_json)
+base = 60 seconds
+max_wait = 3600 seconds (1 hour)
+wait = min(max_wait, base * (2 ** (attempts - 1)))
+wait_with_jitter = wait * (0.7 + random() * 0.6)  # 70-130%
 ```
 
 ---
+
+## Database Stored Procedures Requirements
+
+### sp_ml_jobs Requirements
+
+**Dequeue Query (Action 4):**
+```sql
+SELECT TOP 1 *
+FROM dbo.ml_jobs
+WHERE available_at <= SYSUTCDATETIME()
+  AND attempts < max_attempts
+  AND (locked_until < SYSUTCDATETIME() OR locked_by = @locked_by)
+  AND (status = 'pending' OR status = 'retry')
+ORDER BY priority ASC, available_at ASC
+FOR UPDATE WITH (UPDLOCK, ROWLOCK, READPAST)
+```
+
+**Lock Update:**
+```sql
+UPDATE dbo.ml_jobs
+SET locked_by = @locked_by,
+    locked_until = DATEADD(SECOND, @lock_seconds, SYSUTCDATETIME()),
+    status = 'processing',
+    updated_at = SYSUTCDATETIME()
+WHERE id = @job_id
+```
+
+**Retry with Backoff (Action 2):**
+```sql
+UPDATE dbo.ml_jobs
+SET attempts = attempts + 1,
+    status = 'retry',
+    available_at = DATEADD(SECOND, @backoff_seconds, SYSUTCDATETIME()),
+    last_error = @last_error,
+    locked_until = NULL,
+    locked_by = NULL,
+    updated_at = SYSUTCDATETIME()
+WHERE id = @job_id
+```
+
+**Permanent Failure (Action 2):**
+```sql
+UPDATE dbo.ml_jobs
+SET attempts = attempts + 1,
+    status = 'failed_permanent',
+    last_error = @last_error,
+    locked_until = NULL,
+    locked_by = NULL,
+    updated_at = SYSUTCDATETIME()
+WHERE id = @job_id
+```
+
+---
+
+### sp_ml_search_runs Requirements
+
+**Insert with Idempotency (Action 1):**
+```sql
+-- Check for existing result before insert
+IF NOT EXISTS (
+    SELECT 1 FROM dbo.ml_search_results
+    WHERE search_run_id = @search_run_id AND item_id = @item_id
+)
+BEGIN
+    INSERT INTO dbo.ml_search_results (search_run_id, item_id, ...)
+    VALUES (@search_run_id, @item_id, ...)
+END
+```
+
+**Always persist error info:**
+```sql
+INSERT INTO dbo.ml_search_runs (
+    site_id, query_text, domain_id, filters_json,
+    status, http_status, error_json, started_at, finished_at
+)
+VALUES (
+    @site_id, @query_text, @domain_id, @filters_json,
+    'failed', @http_status, @error_json, @started_at, @finished_at
+)
+```
+
+---
+
+## Fallback Enrichment Pipeline
+
+Since `/ml/search` may be blocked by MercadoLibre WAF, use these alternative strategies:
+
+### 1. Seed Items from Allowed Sources
+
+**Webhooks:**
+- `orders_v2` - Orders contain item IDs
+- `questions` - Questions contain item IDs
+- `publications` - Your own listings
+
+**Existing Data:**
+- Items from successful search runs
+- Imported datasets
+- Competitor items from other sources
+
+### 2. Enrichment Flow
+
+```
+Item ID → /ml/items/{item_id} → Normalize → Save to ml_item_features
+                                            ↓
+                                    Enqueue score job
+                                            ↓
+                                    Call scoring endpoint
+                                            ↓
+                                    Save to ml_item_scores
+```
+
+### 3. Worker Commands
+
+```bash
+# Start search worker
+python ml_search_worker.py
+
+# Start enrichment worker
+python ml_search_worker.py enrich
+```
 
 ---
 
