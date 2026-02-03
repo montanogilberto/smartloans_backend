@@ -4,11 +4,12 @@ from databases import connection
 import json
 
 app = FastAPI()
-conn = connection()
+
 
 def products_sp(json_file: dict):
-    print(json_file)
+    #print(json_file)
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_products] @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -21,11 +22,16 @@ def products_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def all_products_sp():
-
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_products_all]")
 
@@ -41,9 +47,15 @@ def all_products_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def one_products_sp(json_file: dict):
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_products_one @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -56,10 +68,15 @@ def one_products_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def food_products_sp():
-
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_products_food]")
 
@@ -75,10 +92,15 @@ def food_products_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def food_categories_products_sp():
-
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_products_categories_food]")
 
@@ -94,9 +116,15 @@ def food_categories_products_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def by_company_products_sp(json_file: dict):
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_products_by_company @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -109,10 +137,16 @@ def by_company_products_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def by_company_products_category_sp(json_file: dict):
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_products_categories_by_company @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -125,12 +159,18 @@ def by_company_products_category_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 
 def products_categories_sp(json_file: dict):
     print(json_file)
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_product_categories] @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -143,3 +183,8 @@ def products_categories_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
