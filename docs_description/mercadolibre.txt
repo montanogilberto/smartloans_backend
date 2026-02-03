@@ -168,6 +168,89 @@ Content-Type: application/json
 
 ## MercadoLibreProxy Endpoints
 
+### GET /ml/products/{product_id}/items
+**Purpose:** Proxy endpoint for MercadoLibre Products API - retrieves all items associated with a unified product
+
+**Path Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| product_id | string | Yes | MercadoLibre unified product ID |
+
+**Query Parameters:**
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| limit | integer | No | 50 | Results per page (max 50) |
+| offset | integer | No | 0 | Pagination offset |
+
+**Request Example:**
+```
+/ml/products/MLM1234567890/items?limit=20&offset=0
+```
+
+**Response:** MercadoLibre product items JSON
+
+**Example Response:**
+```json
+{
+    "product_id": "MLM1234567890",
+    "paging": {
+        "total": 100,
+        "offset": 0,
+        "limit": 20
+    },
+    "results": [
+        {
+            "id": "MLM9876543210",
+            "site_id": "MLM",
+            "title": "iPhone 15 Pro Max 256GB",
+            "price": 25999,
+            "currency_id": "MXN",
+            "condition": "new",
+            "seller_id": 123456789,
+            "category_id": "MLM1051",
+            "official_store_id": 1234,
+            "domain_id": "MLM-CELLPHONES",
+            "thumbnail": "http://http2.mlstatic.com/D_9876543210-I.jpg",
+            "permalink": "https://articulo.mercadolibre.com.mx/MLM-9876543210",
+            "listing_type_id": "gold_special",
+            "status": "active",
+            "variations": []
+        }
+    ]
+}
+```
+
+**Headers Sent:**
+```python
+{
+    "Accept": "application/json",
+    "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Referer": "https://www.mercadolibre.com.mx/",
+    "Origin": "https://www.mercadolibre.com.mx",
+    "Authorization": "Bearer {access_token}"
+}
+```
+
+**Authentication:**
+- Requires valid OAuth access token
+- Requires valid X-Worker-Key header
+
+**Error Handling:**
+- 400: Bad request (invalid parameters)
+- 401: Unauthorized (invalid/expired token)
+- 403: Forbidden (token or access issue)
+- 404: Product not found
+- 500: Internal server error (token retrieval failure)
+
+**Advantages over /ml/search:**
+- Uses MercadoLibre's unified Products API
+- Less likely to be blocked by WAF
+- Returns structured product-item relationships
+- Better for batch operations on product catalogs
+
+---
+
 ### GET /ml/search
 **Purpose:** Proxy endpoint for MercadoLibre site search API
 
