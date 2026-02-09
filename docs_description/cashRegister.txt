@@ -1,0 +1,171 @@
+Manage Cash Register (Caja) sessions and movements using the provided JSON.
+
+This endpoint supports:
+- Opening a cash register session (start of shift)
+- Closing a cash register session (end of shift)
+- Registering cash movements (manual IN/OUT and automatic CASH SALES)
+- Querying current open session
+- Listing movements for the current session (or by sessionId)
+
+Parameters:
+    ```
+    Actions:
+    OPEN_SESSION   --> 1
+    CLOSE_SESSION  --> 2
+    ADD_MOVEMENT   --> 3
+    GET_OPEN       --> 4
+    LIST_MOVEMENTS --> 5
+
+    JSON Schema:
+    {
+      "register": [
+        {
+          "action": 1|2|3|4|5,
+          "companyId": 1,
+          "userId": 1,
+
+          // Action 1 (OPEN_SESSION) required:
+          "openingCash": 500.00,
+          "notes": "Optional opening note",
+
+          // Action 2 (CLOSE_SESSION) required:
+          "closingCash": 1500.00,
+          "notes": "Optional closing note",
+
+          // Action 3 (ADD_MOVEMENT) required:
+          "movementType": "in" | "out" | "sale_cash",
+          "amount": 200.00,
+          "notes": "Optional movement note",
+          "incomeId": 1234,     // Optional, required when movementType = sale_cash
+          "sessionId": 10       // Optional, if omitted SP uses current open session
+
+          // Action 4 (GET_OPEN):
+          // only companyId required
+
+          // Action 5 (LIST_MOVEMENTS):
+          "sessionId": 10       // Optional, if omitted SP uses current open session
+        }
+      ]
+    }
+    ```
+
+Examples:
+
+1) OPEN cash register session
+    ```
+    {
+      "register": [
+        {
+          "action": 1,
+          "companyId": 1,
+          "userId": 1,
+          "openingCash": 500.00,
+          "notes": "Inicio de turno"
+        }
+      ]
+    }
+    ```
+
+2) CLOSE cash register session
+    ```
+    {
+      "register": [
+        {
+          "action": 2,
+          "companyId": 1,
+          "userId": 1,
+          "closingCash": 1500.00,
+          "notes": "Cierre del día"
+        }
+      ]
+    }
+    ```
+
+3) ADD manual cash IN (entrada)
+    ```
+    {
+      "register": [
+        {
+          "action": 3,
+          "companyId": 1,
+          "userId": 1,
+          "movementType": "in",
+          "amount": 200.00,
+          "notes": "Cambio inicial"
+        }
+      ]
+    }
+    ```
+
+4) ADD manual cash OUT (salida)
+    ```
+    {
+      "register": [
+        {
+          "action": 3,
+          "companyId": 1,
+          "userId": 1,
+          "movementType": "out",
+          "amount": 50.00,
+          "notes": "Compra insumos"
+        }
+      ]
+    }
+    ```
+
+5) ADD CASH SALE (auto after sp_income insert)
+    ```
+    {
+      "register": [
+        {
+          "action": 3,
+          "companyId": 1,
+          "userId": 1,
+          "movementType": "sale_cash",
+          "amount": 110.00,
+          "incomeId": 999,
+          "notes": "Venta pagada en efectivo"
+        }
+      ]
+    }
+    ```
+
+6) GET current open session
+    ```
+    {
+      "register": [
+        {
+          "action": 4,
+          "companyId": 1
+        }
+      ]
+    }
+    ```
+
+7) LIST movements (current open session)
+    ```
+    {
+      "register": [
+        {
+          "action": 5,
+          "companyId": 1
+        }
+      ]
+    }
+    ```
+
+Returns:
+- Standard response:
+    {
+      "result": [
+        {
+          "value": "1",     -- identifier (sessionId or movementId depending on action)
+          "msg": "OK",      -- status message
+          "error": "0"      -- "1" if an error occurred
+        }
+      ]
+    }
+
+Notes:
+- For movementType = "sale_cash", incomeId should be provided to link the cash movement to the sale record.
+- If there is no open cash session, ADD_MOVEMENT should return error=1 and msg like "No open cash session. Please open register first."
