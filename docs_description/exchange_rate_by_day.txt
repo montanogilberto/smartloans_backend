@@ -1,0 +1,27 @@
+
+
+
+  Log in with the provided JSON credentials.
+
+Parameters:
+    ```
+    {
+      "exchangeRates": [
+        {
+          "asOfDate": "2026-02-18"
+        }
+      ]
+    }
+
+    ```
+
+Returns:
+-     {
+          "result": [
+          {
+             "value": "1", --identifier table, return the id associate
+             "msg": "user valid", --return msg
+             "error": "" --if exists error return 1
+           }
+          ]
+        }
