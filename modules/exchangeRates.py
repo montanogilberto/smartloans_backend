@@ -30,14 +30,12 @@ def exchange_rate_by_day_sp(json_file: dict):
         cursor.execute("EXEC [dbo].[sp_exchangeRates_by_day] @pjsonfile = %s", (json.dumps(json_file)))
 
         # Fetch the result as a JSON string
-        json_result = cursor.fetchall()
-
-        #print(json_result[0][1])
+        json_result = cursor.fetchone()[0]
 
         # Parse the JSON string to a Python dictionary
-        #result = json.loads(json_result[0][1])
+        result = json.loads(json_result)
 
-        return JSONResponse(content=json_result[0][1], status_code=200)
+        return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
