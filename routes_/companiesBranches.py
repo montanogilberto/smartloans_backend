@@ -14,8 +14,8 @@ def companiesBranches(json: dict):
 # Read all companiesBranches.txt docstring from the file
 with open("./docs_description/companiesBranches_by_company.txt", "r") as file:
     companiesBranches_by_company_docstring = file.read()
-@router.get("/all_companiesBranches_by_company", summary="by_company companiesBranches", description=companiesBranches_by_company_docstring)
-def all_companiesBranchesby_company():
+@router.post("/companiesBranches_by_company", summary="by_company companiesBranches", description=companiesBranches_by_company_docstring)
+def companiesBranches_by_company():
     return by_company_companiesBranches_sp()
 
 

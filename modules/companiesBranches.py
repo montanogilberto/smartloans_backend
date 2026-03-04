@@ -42,17 +42,14 @@ def all_companiesBranches_sp():
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-def by_company_companiesBranches_sp():
+def by_company_companiesBranches_sp(json_file: dict):
 
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC [dbo].[sp_companiesBranch_by_company]")
+        cursor.execute("EXEC sp_companiesBranches_one @pjsonfile = %s", (json.dumps(json_file)))
 
-        # Fetch all the results as a list of tuples
-        rows = cursor.fetchall()
-
-        # Concatenate JSON strings from all rows into one string
-        json_result = "".join(row[0] for row in rows)
+        # Fetch the result as a JSON string
+        json_result = cursor.fetchone()[0]
 
         # Parse the JSON string to a Python dictionary
         result = json.loads(json_result)
