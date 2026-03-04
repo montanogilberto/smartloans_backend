@@ -41,6 +41,26 @@ def all_companiesBranches_sp():
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
+
+def by_company_companiesBranches_sp():
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("EXEC [dbo].[sp_companiesBranch_by_company]")
+
+        # Fetch all the results as a list of tuples
+        rows = cursor.fetchall()
+
+        # Concatenate JSON strings from all rows into one string
+        json_result = "".join(row[0] for row in rows)
+
+        # Parse the JSON string to a Python dictionary
+        result = json.loads(json_result)
+
+        return JSONResponse(content=result, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
 def one_companiesBranches_sp(json_file: dict):
     try:
         cursor = conn.cursor()
