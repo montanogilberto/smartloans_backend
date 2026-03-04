@@ -43,10 +43,9 @@ def all_companiesBranches_sp():
 
 
 def by_company_companiesBranches_sp(json_file: dict):
-
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_companiesBranches_one @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC sp_companiesBranch_by_company @pjsonfile = %s", (json.dumps(json_file)))
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
