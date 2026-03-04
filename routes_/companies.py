@@ -21,7 +21,7 @@ def all_companies():
 
 # Read one contractor docstring from the file
 with open("./docs_description/companies_one.txt", "r") as file:
-    contractor_one_docstring = file.read()
-@router.post("/one_contractor", summary="one contractor", description=contractor_one_docstring)
-def one_contractor(json: dict):
+    companies_one_docstring = file.read()
+@router.post("/one_companies", summary="one companies", description=companies_one_docstring)
+def one_companies(json: dict):
     return one_companies_sp(json)
