@@ -12,7 +12,7 @@ from routes_ import (
     expenses, exchangeRates, buyOffers, unifiedProducts, costRules,
     listingDrafts, messageTickets, procurementJobs, productMatches,
     publishJobs, sellListings, shipments, opportunities, marketplaceOrders, mercadolibre, ml_proxy,
-    mlSearchRuns, mlJobs, routes_ml_proxy, cashRegister
+    mlSearchRuns, mlJobs, routes_ml_proxy, cashRegister, companies
 )
 
 app = FastAPI(
@@ -119,6 +119,7 @@ app.include_router(ml_proxy.router)
 app.include_router(mlSearchRuns.router)
 app.include_router(mlJobs.router)
 app.include_router(routes_ml_proxy.router)
+app.include_router(companies.router)
 
 # --------------------------------------------------
 # Local development only
