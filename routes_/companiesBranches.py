@@ -10,14 +10,12 @@ with open("./docs_description/companiesBranches.txt", "r") as file:
 def companiesBranches(json: dict):
     return companiesBranches_sp(json)
 
-
-# Read all companiesBranches.txt docstring from the file
+# Read by company companiesBranches docstring from the file
 with open("./docs_description/companiesBranches_by_company.txt", "r") as file:
     companiesBranches_by_company_docstring = file.read()
 @router.post("/companiesBranches_by_company", summary="by_company companiesBranches", description=companiesBranches_by_company_docstring)
-def companiesBranches_by_company():
-    return by_company_companiesBranches_sp()
-
+def companiesBranches_by_company(json: dict):
+    return by_company_companiesBranches_sp(json)
 
 # Read all companiesBranches.txt docstring from the file
 with open("./docs_description/companiesBranches_all.txt", "r") as file:
