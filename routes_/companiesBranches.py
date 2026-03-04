@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.companiesBranches import companiesBranches_sp, all_companiesBranches_sp, one_companiesBranches_sp
+from modules.companiesBranches import companiesBranches_sp, all_companiesBranches_sp, one_companiesBranches_sp, by_company_companiesBranches_sp
 
 router = APIRouter()
 
@@ -9,6 +9,14 @@ with open("./docs_description/companiesBranches.txt", "r") as file:
 @router.post("/companiesBranches", summary="companiesBranches CRUD", description=companiesBranches_docstring)
 def companiesBranches(json: dict):
     return companiesBranches_sp(json)
+
+
+# Read all companiesBranches.txt docstring from the file
+with open("./docs_description/companiesBranches_by_company.txt", "r") as file:
+    companiesBranches_by_company_docstring = file.read()
+@router.get("/all_companiesBranches_by_company", summary="by_company companiesBranches", description=companiesBranches_by_company_docstring)
+def all_companiesBranchesby_company():
+    return by_company_companiesBranches_sp()
 
 
 # Read all companiesBranches.txt docstring from the file
