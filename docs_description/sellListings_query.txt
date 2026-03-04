@@ -1,0 +1,23 @@
+Retrieve a single status record with the provided JSON.
+
+Parameters:
+    ```
+    JSON
+    {
+      "sellListings": [
+        {
+          "channel": "amazon",
+          "market": "US",
+          "channelItemId": "B0XXXXXXX",
+          "unifiedProductId": null,
+          "dateFrom": "2026-02-01",
+          "dateTo": "2026-02-19",
+          "page": 1,
+          "pageSize": 50
+        }
+      ]
+    }
+    ```
+
+Returns:
+- JSON representation of the specified status record.
