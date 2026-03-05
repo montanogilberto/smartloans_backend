@@ -4,12 +4,12 @@ from databases import connection
 import json
 
 app = FastAPI()
-
+conn = connection()
 
 def products_sp(json_file: dict):
     #print(json_file)
     try:
-        conn = connection()
+
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_products] @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -31,7 +31,7 @@ def products_sp(json_file: dict):
 
 def all_products_sp():
     try:
-        conn = connection()
+
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_products_all]")
 
@@ -55,7 +55,7 @@ def all_products_sp():
 
 def one_products_sp(json_file: dict):
     try:
-        conn = connection()
+
         cursor = conn.cursor()
         cursor.execute("EXEC sp_products_one @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -76,7 +76,7 @@ def one_products_sp(json_file: dict):
 
 def food_products_sp():
     try:
-        conn = connection()
+
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_products_food]")
 
@@ -100,7 +100,7 @@ def food_products_sp():
 
 def food_categories_products_sp():
     try:
-        conn = connection()
+
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_products_categories_food]")
 
@@ -124,29 +124,35 @@ def food_categories_products_sp():
 
 def by_company_products_sp(json_file: dict):
     try:
-        conn = connection()
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_products_by_company @pjsonfile = %s", (json.dumps(json_file)))
 
-        # Fetch the result as a JSON string
-        json_result = cursor.fetchone()[0]
+        payload = json.dumps(json_file)
 
-        # Parse the JSON string to a Python dictionary
+        cursor.execute( "EXEC dbo.sp_products_by_company @pjsonfile = %s",(payload,))
+
+        rows = cursor.fetchall()
+        if not rows:
+            return JSONResponse(content={"products": []}, status_code=200)
+
+        json_result = "".join((r[0] or "") for r in rows)
+
         result = json.loads(json_result)
-
         return JSONResponse(content=result, status_code=200)
+
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
     finally:
         try:
-            conn.close()
+            if conn:
+                conn.close()
         except Exception:
             pass
 
 
 def by_company_products_category_sp(json_file: dict):
     try:
-        conn = connection()
+
         cursor = conn.cursor()
         cursor.execute("EXEC sp_products_categories_by_company @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -168,9 +174,9 @@ def by_company_products_category_sp(json_file: dict):
 
 
 def products_categories_sp(json_file: dict):
-    print(json_file)
+
     try:
-        conn = connection()
+
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_product_categories] @pjsonfile = %s", (json.dumps(json_file)))
 
