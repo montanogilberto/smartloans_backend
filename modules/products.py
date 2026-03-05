@@ -123,12 +123,17 @@ def food_categories_products_sp():
             pass
 
 def by_company_products_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
 
         payload = json.dumps(json_file)
 
-        cursor.execute( "EXEC dbo.sp_products_by_company @pjsonfile = %s",(payload,))
+        cursor.execute(
+            "EXEC dbo.sp_products_by_company @pjsonfile = %s",
+            (payload,)
+        )
 
         rows = cursor.fetchall()
         if not rows:
