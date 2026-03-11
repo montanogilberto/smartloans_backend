@@ -39,6 +39,7 @@ def health_check():
 origins = [
     # Local development
     "http://localhost",
+    "https://localhost",
     "http://localhost:3000",
     "http://localhost:8000",
     "http://localhost:8100",
