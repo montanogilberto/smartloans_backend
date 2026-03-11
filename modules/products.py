@@ -131,37 +131,6 @@ def by_company_products_sp(json_file: dict):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-# ---------------------------------------------------------
-# PRODUCT CATEGORIES BY COMPANY
-# ---------------------------------------------------------
-def by_company_products_category_sp(json_file: dict):
-    try:
-        payload = json.dumps(json_file)
-
-        result = execute_sp_json(
-            "EXEC dbo.sp_products_categories_by_company @pjsonfile = %s",
-            (payload,)
-        )
-
-        return JSONResponse(content=result or {"categories": []}, status_code=200)
-
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-# ---------------------------------------------------------
-# PRODUCT CATEGORIES CRUD
-# ---------------------------------------------------------
-def products_categories_sp(json_file: dict):
-    try:
-        payload = json.dumps(json_file)
 
-        result = execute_sp_json(
-            "EXEC dbo.sp_product_categories @pjsonfile = %s",
-            (payload,)
-        )
-
-        return JSONResponse(content=result or {"result": []}, status_code=200)
-
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
