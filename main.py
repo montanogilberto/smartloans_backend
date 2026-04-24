@@ -51,6 +51,7 @@ origins = [
     "https://delightful-river-039129e0f.5.azurestaticapps.net",
     "https://mango-smoke-0323ed91e.3.azurestaticapps.net",
     "https://proud-grass-09761cb1e.1.azurestaticapps.net",
+    "https://ashy-ground-041405f1e.7.azurestaticapps.net"       
 
     # Custom domain
     "https://www.rpmtoolsmx.com",
