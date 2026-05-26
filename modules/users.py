@@ -7,12 +7,14 @@ import ssl
 import os
 
 app = FastAPI()
-conn = connection()
 
 def users_sp(json_file: dict):
+    conn = None
+    cursor = None
     try:
+        conn = connection()
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_users @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC sp_users @pjsonfile = %s", (json.dumps(json_file),))
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
@@ -23,11 +25,24 @@ def users_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 
 def all_users_sp():
-
+    conn = None
+    cursor = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_users_all]")
 
@@ -43,11 +58,25 @@ def all_users_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 def one_users_sp(json_file: dict):
+    conn = None
+    cursor = None
     try:
+        conn = connection()
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_users_one @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC sp_users_one @pjsonfile = %s", (json.dumps(json_file),))
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
@@ -58,12 +87,26 @@ def one_users_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 
 def one_users_email_sp(json_file: dict):
+    conn = None
+    cursor = None
     try:
+        conn = connection()
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_users_one_email @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC sp_users_one_email @pjsonfile = %s", (json.dumps(json_file),))
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
@@ -74,10 +117,24 @@ def one_users_email_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 
 def send_recovery_email(json_file: dict):
+    conn = None
+    cursor = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_users_one_email @pjsonfile = %s", (json.dumps(json_file),))
         json_result = cursor.fetchone()[0]
@@ -89,6 +146,17 @@ def send_recovery_email(json_file: dict):
         password = user["password"]
     except Exception as e:
         return JSONResponse(content={"error": f"Database error: {str(e)}"}, status_code=500)
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
     # Gmail SMTP settings
     smtp_server = "smtp.gmail.com"

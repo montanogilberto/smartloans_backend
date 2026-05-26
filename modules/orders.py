@@ -4,10 +4,12 @@ from databases import connection
 import json
 
 app = FastAPI()
-conn = connection()
 def orders_sp(json_file: dict):
     print(json_file)
+    conn = None
+    cursor = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_orders] @pjsonfile = %s", (json.dumps(json_file),))
 
@@ -31,11 +33,24 @@ def orders_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 
 def all_orders_sp():
-
+    conn = None
+    cursor = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_orders_all]")
 
@@ -51,13 +66,27 @@ def all_orders_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 
 def one_orders_sp(json_file: dict):
+    conn = None
+    cursor = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         print(json.dumps(json_file))
-        cursor.execute("EXEC sp_orders_one @pjsonfile = %s", (json.dumps(json_file)))
+        cursor.execute("EXEC sp_orders_one @pjsonfile = %s", (json.dumps(json_file),))
 
         # Fetch the result as a JSON string
         json_result = cursor.fetchone()[0]
@@ -70,11 +99,24 @@ def one_orders_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 
 def list_orders_sp():
-
+    conn = None
+    cursor = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_orders_list]")
 
@@ -90,9 +132,23 @@ def list_orders_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 def orders_tracking_status_sp(json_file: dict):
+    conn = None
+    cursor = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_orders_tracking_status] @pjsonfile = %s", (json.dumps(json_file),))
 
@@ -116,12 +172,26 @@ def orders_tracking_status_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
 
 
 def products_one_orders_sp(json_file: dict):
+        conn = None
+        cursor = None
         try:
+            conn = connection()
             cursor = conn.cursor()
-            cursor.execute("EXEC [dbo].[sp_orders_products_one] @pjsonfile = %s", (json.dumps(json_file)))
+            cursor.execute("EXEC [dbo].[sp_orders_products_one] @pjsonfile = %s", (json.dumps(json_file),))
 
             # Fetch the result as a JSON string
             json_result = cursor.fetchone()[0]
@@ -132,3 +202,14 @@ def products_one_orders_sp(json_file: dict):
             return JSONResponse(content=result, status_code=200)
         except Exception as e:
             return JSONResponse(content={"error": str(e)}, status_code=500)
+        finally:
+            try:
+                if cursor:
+                    cursor.close()
+            except Exception:
+                pass
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
