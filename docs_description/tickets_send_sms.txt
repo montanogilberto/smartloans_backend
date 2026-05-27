@@ -1,0 +1,12 @@
+Send a ticket notification by SMS.
+
+Request body:
+- phone (required): E.164 format (example: +521234567890)
+- message (optional): custom message body
+- receiptUrl (optional): URL appended to the message
+
+This endpoint sends outbound SMS through the configured provider (Twilio).
+Requires environment variables:
+- TWILIO_ACCOUNT_SID
+- TWILIO_AUTH_TOKEN
+- TWILIO_SMS_FROM

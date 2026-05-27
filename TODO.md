@@ -1,20 +1,24 @@
-# FreeTDS Assertion Crash Fix Plan
+# Ticket Notifications Endpoints Plan
 
 ## Goal
-Eliminate unsafe shared DB connection usage causing:
-`tds_dataout_stream_write: Assertion 'stream->buffer == (char *) tds->out_buf + tds->out_pos' failed.`
+Add two backend endpoints to send ticket notifications via provider APIs (no DB changes):
+- `POST /api/tickets/{ticketId}/send-sms`
+- `POST /api/tickets/{ticketId}/send-whatsapp`
 
 ## Steps
-1. [x] Patch `modules/users.py`:
-   - remove global `conn = connection()`
-   - use per-call connection acquisition
-   - close cursor/connection in `finally`
-2. [x] Search `modules/*.py` for `conn = connection()` global pattern.
-3. [x] Patch targeted high-traffic modules to per-call connection lifecycle:
-   - [x] `modules/users.py`
-   - [x] `modules/login.py`
-   - [x] `modules/orders.py`
-   - [x] `modules/productCategories.py` already safe before changes
-   - [x] `modules/products.py` already safe before changes
-4. [ ] Run syntax validation on modified files.
-5. [ ] Mark completed steps and summarize changes.
+1. [x] Create `modules/ticket_notifications.py`:
+   - E.164 phone validation
+   - Twilio client setup via env vars
+   - send SMS helper
+   - send WhatsApp helper
+   - message builder with optional `message` and `receiptUrl`
+2. [x] Add doc description files:
+   - `docs_description/tickets_send_sms.txt`
+   - `docs_description/tickets_send_whatsapp.txt`
+3. [x] Update `routes_/tickets.py`:
+   - keep `/one_tickets`
+   - add `/api/tickets/{ticketId}/send-sms`
+   - add `/api/tickets/{ticketId}/send-whatsapp`
+   - request body schema with `phone`, optional `message`, optional `receiptUrl`
+4. [x] Validate Python syntax for changed files.
+5. [x] Mark all tasks completed and summarize.
