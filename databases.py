@@ -1,6 +1,5 @@
 import os
 import pymssql
-import os
 
 
 class DatabaseConnection:
@@ -55,21 +54,24 @@ class DatabaseConnection:
 
 
 def connection():
+    server = os.getenv("LOCAL_DB_SERVER")
+    database = os.getenv("LOCAL_DB_NAME")
+    username = os.getenv("LOCAL_DB_USER")
+    password = os.getenv("LOCAL_DB_PASSWORD")
 
-    server = r"sql.bsite.net\MSSQL2016"
-    database = "montanogilberto_smartloans"
-    username = "montanogilberto_smartloans"
-    password = "Admin#1914"
+    missing_vars = [
+        name for name, value in {
+            "LOCAL_DB_SERVER": server,
+            "LOCAL_DB_NAME": database,
+            "LOCAL_DB_USER": username,
+            "LOCAL_DB_PASSWORD": password,
+        }.items() if not value
+    ]
 
-    #server = os.getenv("LOCAL_DB_SERVER")
-    #database = os.getenv("LOCAL_DB_NAME")
-    #username = os.getenv("LOCAL_DB_USER")
-    #password = os.getenv("LOCAL_DB_PASSWORD")
-
-    #print(f"server: {server}, database: {database}, username: {username}, password: {password}")
-
-    if None in (server, database, username, password):
-        raise ValueError("One or more required environment variables are missing.")
+    if missing_vars:
+        raise ValueError(
+            f"Missing required database environment variables: {', '.join(missing_vars)}"
+        )
 
     connection_string = {
         "server": server,
@@ -79,5 +81,10 @@ def connection():
         "autocommit": True,
     }
 
-    raw_conn = pymssql.connect(**connection_string)
-    return DatabaseConnection(raw_conn, server, database)
+    try:
+        raw_conn = pymssql.connect(**connection_string)
+        return DatabaseConnection(raw_conn, server, database)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Database connection failed for server '{server}' and database '{database}': {str(exc)}"
+        ) from exc

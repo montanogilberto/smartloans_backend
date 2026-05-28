@@ -52,3 +52,16 @@ Maintain ticket notification endpoints and add one new backend endpoint to persi
    - `/api/tickets/{ticketId}/send-sms`
    - `/api/tickets/{ticketId}/send-whatsapp`
 10. [ ] Mark testing complete and summarize outcomes.
+
+### DB Connectivity + Error Visibility Plan
+11. [x] Update `databases.py`:
+   - prioritize environment variables for DB connection
+   - remove hardcoded credential usage path
+   - keep connection wrapper behavior unchanged
+12. [x] Improve DB connection error diagnostics:
+   - wrap `pymssql.connect` with explicit exception handling
+   - raise actionable RuntimeError message for API layer visibility
+13. [ ] Re-test endpoints:
+   - `GET /all_companies`
+   - `POST /api/tickets/receipt-html`
+14. [ ] Summarize root cause and final config requirements.
