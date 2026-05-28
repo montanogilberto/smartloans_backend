@@ -4,8 +4,6 @@ from typing import Dict, Any
 
 from azure.storage.blob import BlobServiceClient, ContentSettings
 
-
-
 AZURE_STORAGE_CONNECTION_STRING_ENV = os.getenv("AZURE_STORAGE_CONNECTION_STRING_ENV", "AZURE_STORAGE_CONNECTION_STRING")
 AZURE_STORAGE_ACCOUNT_URL_FALLBACK = os.getenv("AZURE_STORAGE_ACCOUNT_URL_FALLBACK", "https://imageprofile.blob.core.windows.net")
 TICKETS_CONTAINER_NAME = os.getenv("TICKETS_CONTAINER_NAME", "ticketspos")
