@@ -1,0 +1,28 @@
+Persist ticket receipt HTML to Azure Blob Storage and return a public URL.
+
+Request body:
+{
+  "incomeId": 12345,
+  "branchId": 1,
+  "html": "<html>...</html>",
+  "fileName": "receipt_12345.html"
+}
+
+Behavior:
+- Validates required fields:
+  - incomeId (integer > 0)
+  - html (non-empty string)
+- Uploads HTML to Azure Blob container: ticketspos
+- Blob path format: receipts/{year}/{month}/receipt_{incomeId}.html
+- Uses content type: text/html
+- Overwrites existing blob safely when the same path exists
+
+Success response:
+{
+  "success": true,
+  "receiptUrl": "https://imageprofile.blob.core.windows.net/ticketspos/receipts/2026/05/receipt_12345.html"
+}
+
+Error responses:
+- 400 for validation errors
+- 500 for Azure configuration/upload errors
