@@ -65,3 +65,18 @@ Maintain ticket notification endpoints and add one new backend endpoint to persi
    - `GET /all_companies`
    - `POST /api/tickets/receipt-html`
 14. [ ] Summarize root cause and final config requirements.
+
+### New Ticket Tracking Endpoint Plan
+15. [x] Analyze current ticket structure (`routes_/tickets.py`, `modules/tickets.py`, `main.py`).
+16. [x] Create docs file:
+   - `docs_description/ticket_tracking_one.txt`
+17. [x] Update module:
+   - add `one_ticket_tracking_sp` in `modules/tickets.py`
+   - execute `EXEC sp_ticket_tracking @pjsonfile = %s`
+   - parse JSON response and return `JSONResponse`
+18. [x] Update route:
+   - import `one_ticket_tracking_sp` in `routes_/tickets.py`
+   - load docstring from `docs_description/ticket_tracking_one.txt`
+   - add `POST /one_ticket_tracking`
+19. [x] Run syntax sanity check on updated files.
+20. [x] Summarize implementation.

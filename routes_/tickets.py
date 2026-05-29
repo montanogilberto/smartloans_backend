@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from modules.tickets import one_tickets_sp
+from modules.tickets import one_tickets_sp, one_ticket_tracking_sp
 from modules.ticket_notifications import send_ticket_sms, send_ticket_whatsapp
 from modules.ticket_receipts import save_receipt_html
 from starlette.responses import JSONResponse
@@ -24,6 +24,9 @@ with open("./docs_description/tickets_send_whatsapp.txt", "r") as file:
 with open("./docs_description/tickets_receipt_html.txt", "r") as file:
     ticket_receipt_html_docstring = file.read()
 
+with open("./docs_description/ticket_tracking_one.txt", "r") as file:
+    ticket_tracking_one_docstring = file.read()
+
 
 class TicketNotificationRequest(BaseModel):
     phone: str
@@ -41,6 +44,11 @@ class TicketReceiptHtmlRequest(BaseModel):
 @router.post("/one_tickets", summary="one ticket", description=ticket_one_docstring)
 def one_tickets(json: dict):
     return one_tickets_sp(json)
+
+
+@router.post("/one_ticket_tracking", summary="one ticket tracking", description=ticket_tracking_one_docstring)
+def one_ticket_tracking(json: dict):
+    return one_ticket_tracking_sp(json)
 
 
 @router.post("/api/tickets/{ticketId}/send-sms", summary="Send ticket by SMS", description=ticket_send_sms_docstring)
