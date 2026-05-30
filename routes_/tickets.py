@@ -1,13 +1,14 @@
 
+import json
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from modules.tickets import one_tickets_sp, one_ticket_tracking_sp
+from modules.tickets import one_tickets_sp, one_ticket_tracking_sp, ticket_redirect_sp
 from modules.ticket_notifications import send_ticket_sms, send_ticket_whatsapp
 from modules.ticket_receipts import save_receipt_html
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 router = APIRouter()
 
@@ -26,6 +27,9 @@ with open("./docs_description/tickets_receipt_html.txt", "r") as file:
 
 with open("./docs_description/ticket_tracking_one.txt", "r") as file:
     ticket_tracking_one_docstring = file.read()
+
+with open("./docs_description/tickets_redirect.txt", "r") as file:
+    ticket_redirect_docstring = file.read()
 
 
 class TicketNotificationRequest(BaseModel):
@@ -99,3 +103,33 @@ def save_receipt(payload: TicketReceiptHtmlRequest):
         return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
     except Exception as e:
         return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+@router.get("/r/{short_code}", summary="Redirect ticket receipt", description=ticket_redirect_docstring)
+async def redirect_ticket(short_code: str):
+    payload = {
+        "ticket": [
+            {
+                "action": "redirect",
+                "shortCode": short_code
+            }
+        ]
+    }
+
+    response = ticket_redirect_sp(payload)
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Failed to fetch ticket redirect data")
+
+    result = response.body.decode("utf-8")
+    result_json = json.loads(result)
+
+    tickets = result_json.get("tickets", [])
+    if not tickets:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    receipt_url = tickets[0].get("receiptUrl")
+    if not receipt_url:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    return RedirectResponse(url=receipt_url, status_code=302)

@@ -1,0 +1,25 @@
+Redirect a ticket short code to its stored receipt URL.
+
+- Method: GET
+- Path: /r/{short_code}
+- Path params:
+  - short_code (string): ticket short code (example: T4346)
+
+Behavior:
+1) The API builds this payload:
+   {
+     "ticket": [
+       {
+         "action": "redirect",
+         "shortCode": "{short_code}"
+       }
+     ]
+   }
+2) Calls SQL stored procedure:
+   EXEC sp_ticket_redirect @pjsonfile = %s
+3) If a matching ticket is found with `receiptUrl`, the endpoint returns HTTP 302 redirect to that URL.
+
+Responses:
+- 302: Redirect to receipt URL
+- 404: Ticket not found or missing receipt URL
+- 500: Error while fetching redirect data from database

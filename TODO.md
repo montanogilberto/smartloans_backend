@@ -80,3 +80,16 @@ Maintain ticket notification endpoints and add one new backend endpoint to persi
    - add `POST /one_ticket_tracking`
 19. [x] Run syntax sanity check on updated files.
 20. [x] Summarize implementation.
+
+### New Ticket Redirect Endpoint Plan
+21. [x] Add reusable SQL JSON helper and redirect service function:
+   - update `modules/tickets.py`
+   - add `execute_sp_json(...)`
+   - add `ticket_redirect_sp(short_code)` calling `EXEC dbo.sp_ticket_redirect @pjsonfile = %s`
+22. [x] Add redirect route:
+   - update `routes_/tickets.py`
+   - add `GET /r/{short_code}`
+   - return `404` when not found
+   - return `RedirectResponse(..., status_code=302)` to `receiptUrl`
+23. [ ] Run syntax sanity check for updated files.
+24. [ ] Summarize implementation.

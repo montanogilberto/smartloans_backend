@@ -6,6 +6,22 @@ import json
 app = FastAPI()
 conn = connection()
 
+
+def execute_sp_json(sp_sql: str, params=()):
+    cursor = conn.cursor()
+    cursor.execute(sp_sql, params)
+
+    rows = cursor.fetchall()
+    if not rows:
+        return None
+
+    json_text = "".join((row[0] or "") for row in rows).strip()
+    if not json_text:
+        return None
+
+    return json.loads(json_text)
+
+
 def one_tickets_sp(json_file: dict):
     try:
         cursor = conn.cursor()
@@ -54,5 +70,18 @@ def one_ticket_tracking_sp(json_file: dict):
                 )
 
         return JSONResponse(content={"success": True, "rawResult": str(raw_result)}, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+def ticket_redirect_sp(json_file: dict):
+    try:
+        cursor = conn.cursor()
+        cursor.execute("EXEC sp_ticket_redirect @pjsonfile = %s", (json.dumps(json_file),))
+
+        json_result = cursor.fetchone()[0]
+        result = json.loads(json_result)
+
+        return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
