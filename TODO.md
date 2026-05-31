@@ -93,3 +93,13 @@ Maintain ticket notification endpoints and add one new backend endpoint to persi
    - return `RedirectResponse(..., status_code=302)` to `receiptUrl`
 23. [ ] Run syntax sanity check for updated files.
 24. [ ] Summarize implementation.
+
+### Companies DB Connection Stabilization Plan
+25. [x] Refactor `modules/companies.py` to avoid global DB connection at import time.
+26. [x] Create DB connection per request in:
+   - `companies_sp`
+   - `all_companies_sp`
+   - `one_companies_sp`
+27. [x] Ensure connections are closed safely (`finally`) and preserve current JSON response contract.
+28. [x] Run syntax/import sanity check (attempted; local `python` not available in current shell environment).
+29. [ ] Summarize root cause and deployment verification steps for `/all_companies`.
