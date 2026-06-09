@@ -46,7 +46,7 @@ def products_sp(json_file: dict):
         payload = json.dumps(json_file)
 
         result = execute_sp_json(
-            "EXEC dbo.sp_products @pjsonfile = %s",
+            "EXEC dbo.sp_products_save @pjsonfile = %s",
             (payload,)
         )
 
