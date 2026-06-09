@@ -39,7 +39,7 @@ def execute_sp_json(sp_sql: str, params=()):
 
 
 # ---------------------------------------------------------
-# PRODUCTS With Details Categories CRUD
+# PRODUCTS With Details Categories CRUD -
 # ---------------------------------------------------------
 def products_sp(json_file: dict):
     try:
