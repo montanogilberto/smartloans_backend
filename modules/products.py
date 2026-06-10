@@ -39,14 +39,14 @@ def execute_sp_json(sp_sql: str, params=()):
 
 
 # ---------------------------------------------------------
-# PRODUCTS CRUD
+# PRODUCTS With Details Categories CRUD
 # ---------------------------------------------------------
 def products_sp(json_file: dict):
     try:
         payload = json.dumps(json_file)
 
         result = execute_sp_json(
-            "EXEC dbo.sp_products @pjsonfile = %s",
+            "EXEC dbo.sp_products_save @pjsonfile = %s",
             (payload,)
         )
 
