@@ -13,9 +13,9 @@ def suppliers(json: dict):
 
 with open("./docs_description/suppliers_all.txt", "r") as file:
     suppliers_all_docstring = file.read()
-@router.get("/all_suppliers", summary="all suppliers", description=suppliers_all_docstring)
-def all_suppliers():
-    return all_suppliers_sp()
+@router.post("/all_suppliers", summary="all suppliers", description=suppliers_all_docstring)
+def all_suppliers(json: dict):
+    return all_suppliers_sp(json)
 
 
 with open("./docs_description/suppliers_one.txt", "r") as file:
