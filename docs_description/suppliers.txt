@@ -1,3 +1,1 @@
-This endpoint handles the creation, updating, and deletion of supplier records.
-It expects a JSON payload containing supplier data and an 'action' field (1 for insert, 2 for update, 3 for delete).
-Admin and Manager roles are allowed to access this endpoint.
+This endpoint handles the creation, update, and deletion of supplier records. It expects a JSON payload containing the supplier data and an 'action' field to specify the operation.
