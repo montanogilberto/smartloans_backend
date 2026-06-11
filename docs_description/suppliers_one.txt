@@ -1,3 +1,1 @@
-This endpoint retrieves the details of a single supplier based on their unique ID.
-It expects a JSON payload containing the 'supplierId'.
-Admin and Manager roles are allowed to access this endpoint.
+Retrieves a single supplier record based on the provided identifier. This allows for fetching detailed information about a specific supplier.
