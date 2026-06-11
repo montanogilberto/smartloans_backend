@@ -1,3 +1,1 @@
-This endpoint retrieves a list of all active suppliers associated with the company.
-It does not require any input parameters and returns a JSON array of supplier objects.
-Admin and Manager roles are allowed to access this endpoint.
+Retrieves a list of all suppliers registered in the system. This endpoint provides a comprehensive view of all active and inactive suppliers.
