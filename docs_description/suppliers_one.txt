@@ -1,1 +1,5 @@
-Retrieves a single supplier record based on the provided identifier. This allows for fetching detailed information about a specific supplier.
+Returns a single supplier record by its primary key via sp_suppliers_one.
+Stored procedure: EXEC [dbo].[sp_suppliers_one] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/one_suppliers"   -H "Content-Type: application/json"   -d '{"companyId":1,"supplierId":1}'
