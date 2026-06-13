@@ -12,8 +12,8 @@ from routes_ import (
     expenses, exchangeRates, buyOffers, unifiedProducts, costRules,
     listingDrafts, messageTickets, procurementJobs, productMatches,
     publishJobs, sellListings, shipments, opportunities, marketplaceOrders, mercadolibre, ml_proxy,
-    mlSearchRuns, mlJobs, routes_ml_proxy, cashRegister, companies, companiesBranches, productCategories
-    supplier,
+    mlSearchRuns, mlJobs, routes_ml_proxy, cashRegister, companies, companiesBranches, productCategories,
+    supplier
 )
 
 app = FastAPI(
