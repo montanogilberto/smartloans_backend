@@ -1,1 +1,5 @@
-Retrieves a list of all suppliers registered in the system. This endpoint provides a comprehensive view of all active and inactive suppliers.
+Returns all suppliers records for the given company filtered by companyId via sp_suppliers_all.
+Stored procedure: EXEC [dbo].[sp_suppliers_all] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/all_suppliers"   -H "Content-Type: application/json"   -d '{"suppliers":[{"companyId":1}]}'

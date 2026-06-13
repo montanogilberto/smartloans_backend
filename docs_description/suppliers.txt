@@ -1,1 +1,5 @@
-This endpoint handles the creation, update, and deletion of supplier records. It expects a JSON payload containing the supplier data and an 'action' field to specify the operation.
+Performs INSERT, UPDATE, or DELETE on the suppliers table via sp_suppliers.
+Stored procedure: EXEC [dbo].[sp_suppliers] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/suppliers"   -H "Content-Type: application/json"   -d '{"action":"INSERT","companyId":1,"supplierName":"Example Supplier Co.","contactName":"Jane Doe","phone":"555-123-4567","email":"jane.doe@example.com","address":"123 Main St, Anytown USA","active":"1"}'
