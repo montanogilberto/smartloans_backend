@@ -19,7 +19,7 @@ def suppliers_sp(json_file: dict):
 def all_suppliers_sp(json_file: dict):
     try:
         cursor = conn.cursor()
-        cursor.execute("EXEC [dbo].[sp_suppliers_all]")
+        cursor.execute("EXEC [dbo].[sp_suppliers_all] @pjsonfile = %s", (json.dumps(json_file),))
         rows = cursor.fetchall()
         json_result = "".join(row[0] for row in rows)
         result = json.loads(json_result)
