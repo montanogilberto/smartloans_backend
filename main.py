@@ -14,6 +14,7 @@ from routes_ import (
     publishJobs, sellListings, shipments, opportunities, marketplaceOrders, mercadolibre, ml_proxy,
     mlSearchRuns, mlJobs, routes_ml_proxy, cashRegister, companies, companiesBranches, productCategories,
     supplier
+    loan,
 )
 
 app = FastAPI(
@@ -128,6 +129,7 @@ app.include_router(companies.router)
 app.include_router(companiesBranches.router)
 app.include_router(productCategories.router)
 app.include_router(supplier.router)
+app.include_router(loan.router)
 
 # --------------------------------------------------
 # Local development only
