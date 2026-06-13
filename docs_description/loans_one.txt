@@ -1,0 +1,5 @@
+Returns a single loan record by its primary key via sp_loans_one.
+Stored procedure: EXEC [dbo].[sp_loans_one] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/one_loans"   -H "Content-Type: application/json"   -d '{"companyId":1,"loanId":1}'
