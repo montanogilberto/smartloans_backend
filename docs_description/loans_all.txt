@@ -1,0 +1,5 @@
+Returns all loans records for the given company filtered by companyId via sp_loans_all.
+Stored procedure: EXEC [dbo].[sp_loans_all] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/all_loans"   -H "Content-Type: application/json"   -d '{"loans":[{"companyId":1}]}'
