@@ -2,4 +2,4 @@ Performs INSERT, UPDATE, or DELETE on the suppliers table via sp_suppliers.
 Stored procedure: EXEC [dbo].[sp_suppliers] @pjsonfile = '<json>'
 
 Example:
-curl -X POST "https://smartloansbackend.azurewebsites.net/suppliers"   -H "Content-Type: application/json"   -d '{"action":"INSERT","companyId":1,"supplierName":"Global Supply Co","contactName":"Alice Smith","phone":"555-1234","email":"alice@globalsupply.com","address":"123 Main St","active":"1"}'
+curl -X POST "https://smartloansbackend.azurewebsites.net/suppliers"   -H "Content-Type: application/json"   -d '{"action":"INSERT","companyId":1,"supplierName":"Acme Corp","contactName":"John Doe","phone":"555-1234","email":"john.doe@acmecorp.com","address":"123 Main St","active":"1"}'
