@@ -1,0 +1,5 @@
+Performs INSERT, UPDATE, or DELETE on the loans table via sp_loans.
+Stored procedure: EXEC [dbo].[sp_loans] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/loans"   -H "Content-Type: application/json"   -d '{"action":1,"companyId":1,"loanNumber":"LN001","clientId":101,"principalAmount":1000.00,"interestRate":0.05,"termMonths":12,"paymentFrequency":"Monthly","loanStatus":"Draft"}'
