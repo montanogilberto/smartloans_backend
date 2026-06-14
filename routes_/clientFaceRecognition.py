@@ -28,13 +28,12 @@ with open("./docs_description/clientFaceRecognitions_one.txt", "r") as file:
 def one_clientFaceRecognitions(json: dict):
     return one_clientFaceRecognitions_sp(json)
 
-
 # --- connector routes (async) ---
-@router.post("/api/client-face-recognition/verify", summary="Biometric verify ClientFaceRecognition", tags=["connector"])
+@router.post("/api/clientFaceRecognition/verify", summary="Biometric verify ClientFaceRecognition", tags=["connector"])
 async def verify_clientFaceRecognition(json: dict):
     return await verify_clientFaceRecognition_connector(json)
 
 
-@router.post("/api/client-face-recognition/contract", summary="Submit contract ClientFaceRecognition", tags=["connector"])
+@router.post("/api/clientFaceRecognition/contract", summary="Submit contract ClientFaceRecognition", tags=["connector"])
 async def contract_clientFaceRecognition(json: dict):
     return await contract_clientFaceRecognition_connector(json)
