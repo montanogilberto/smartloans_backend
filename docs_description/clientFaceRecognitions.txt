@@ -2,4 +2,4 @@ Performs INSERT, UPDATE, or DELETE on the clientFaceRecognitions table via sp_cl
 Stored procedure: EXEC [dbo].[sp_clientFaceRecognitions] @pjsonfile = '<json>'
 
 Example:
-curl -X POST "https://smartloansbackend.azurewebsites.net/clientFaceRecognitions"   -H "Content-Type: application/json"   -d '{"action":1,"companyId":1,"documentType":"INE","idFrontImageBlobUrl":"https://example.blob.core.windows.net/clients/id_front.jpg","clientSelfieBlobUrl":"https://example.blob.core.windows.net/clients/selfie.jpg","confidenceScore":0.9567,"isVerified":true,"contractAccepted":true,"acceptedAt":"2023-10-27T10:30:00"}'
+curl -X POST "https://smartloansbackend.azurewebsites.net/clientFaceRecognitions"   -H "Content-Type: application/json"   -d '{"action":1,"companyId":1,"documentType":"INE","idFrontImageBlobUrl":"https://smartloans.blob.core.windows.net/clients/2023/11/INE_id_20231120103000_abcdefg.jpg","clientSelfieBlobUrl":"https://smartloans.blob.core.windows.net/clients/2023/11/selfie_20231120103000_abcdefg.jpg","confidenceScore":0.95,"isVerified":true,"contractAccepted":true,"acceptedAt":"2023-11-20T10:30:00Z"}'
