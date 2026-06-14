@@ -1,0 +1,5 @@
+Returns all clientFaceRecognitions records for the given company filtered by companyId via sp_clientFaceRecognitions_all.
+Stored procedure: EXEC [dbo].[sp_clientFaceRecognitions_all] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/all_clientFaceRecognitions"   -H "Content-Type: application/json"   -d '{"clientFaceRecognitions":[{"companyId":1}]}'
