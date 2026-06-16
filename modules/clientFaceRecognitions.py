@@ -72,6 +72,7 @@ _FACE_HEADERS   = {
 _CONFIDENCE_THRESHOLD = 0.6
 _CLIENTS_CONTAINER    = os.getenv("CLIENTS_CONTAINER_NAME", "clients")
 _ACCOUNT_URL_FALLBACK = os.getenv("AZURE_STORAGE_ACCOUNT_URL_FALLBACK", "")
+_LIVENESS_API_VERSION = os.getenv("AZURE_FACE_LIVENESS_API_VERSION", "v1.1-preview.1")
 
 
 def _blob_service_client() -> BlobServiceClient:
@@ -106,98 +107,113 @@ def _upload_base64_to_blob(b64_data: str, blob_path: str, content_type: str, met
     return _upload_to_blob(base64.b64decode(b64_data), blob_path, content_type, metadata)
 
 
+async def create_azure_liveness_session() -> JSONResponse:
+    """
+    Creates Azure Face Liveness session.
+    Frontend uses returned session/auth token for streaming liveness flow.
+    """
+    try:
+        if not _FACE_ENDPOINT or not _FACE_KEY:
+            return JSONResponse(
+                content={"error": "Missing AZURE_FACE_API_ENDPOINT or AZURE_FACE_API_KEY"},
+                status_code=500,
+            )
+
+        endpoint = _FACE_ENDPOINT + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify"
+        body = {
+            "livenessOperationMode": "PassiveAndActive",
+            "deviceCorrelationId": str(uuid.uuid4()),
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(endpoint, headers=_FACE_HEADERS, json=body)
+            r.raise_for_status()
+            data = r.json()
+
+        return JSONResponse(
+            content={
+                "sessionId": data.get("sessionId"),
+                "authToken": data.get("authToken"),
+                "raw": data,
+            },
+            status_code=200,
+        )
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 async def verify_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
     """
-    Full orchestration:
+    Liveness orchestration:
       1. Upload idFrontImage (base64)  → Azure Blob 'clients' → permanent URL
-      2. Upload clientSelfie  (base64) → Azure Blob 'clients' → permanent URL
-      3. Detect face in ID image URL   → faceId1  (Azure Face API)
-      4. Detect face in selfie URL     → faceId2  (Azure Face API)
-      5. Verify faceId1 vs faceId2     → confidenceScore + isVerified
+      2. Read Azure liveness session result by azureSessionId
+      3. Extract liveness + verify outcomes
+      4. Store extracted selfie frame (if present) in blob as clientSelfieBlobUrl
     Returns: { isVerified, confidenceScore, idFrontImageBlobUrl, clientSelfieBlobUrl }
     """
     try:
         company_id     = payload.get("companyId", "0")
         document_type  = payload.get("documentType", "doc").replace(" ", "_")
-        ts             = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        uid            = str(uuid.uuid4())[:8]
+        azure_session_id = payload.get("azureSessionId", "")
+        id_b64 = payload.get("idFrontImageBase64", "")
 
-        # --- Step 1 & 2: upload images to blob storage (same pattern as ticket_receipts.py) ---
-        id_b64     = payload.get("idFrontImageBase64", "")
-        selfie_b64 = payload.get("clientSelfieBase64", "")
+        if not azure_session_id:
+            return JSONResponse(content={"error": "azureSessionId is required"}, status_code=400)
+        if not id_b64:
+            return JSONResponse(content={"error": "idFrontImageBase64 is required"}, status_code=400)
 
+        ts  = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        uid = str(uuid.uuid4())[:8]
         now = datetime.utcnow()
         yr = str(now.year)
         mo = str(now.month).zfill(2)
-        id_blob_path     = "clients/" + yr + "/" + mo + "/" + document_type + "_id_" + ts + "_" + uid + ".jpg"
+
+        id_blob_path = "clients/" + yr + "/" + mo + "/" + document_type + "_id_" + ts + "_" + uid + ".jpg"
         selfie_blob_path = "clients/" + yr + "/" + mo + "/selfie_" + ts + "_" + uid + ".jpg"
 
         id_image_url = _upload_base64_to_blob(
             id_b64, id_blob_path, "image/jpeg",
             {"companyId": str(company_id), "documentType": document_type},
         )
-        selfie_url = _upload_base64_to_blob(
-            selfie_b64, selfie_blob_path, "image/jpeg",
-            {"companyId": str(company_id), "documentType": "selfie"},
-        )
 
-        # --- Steps 3–5: Azure Face API ---
+        if not _FACE_ENDPOINT or not _FACE_KEY:
+            return JSONResponse(
+                content={"error": "Missing AZURE_FACE_API_ENDPOINT or AZURE_FACE_API_KEY"},
+                status_code=500,
+            )
+
+        result_endpoint = _FACE_ENDPOINT + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify/" + azure_session_id
+
         async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(result_endpoint, headers=_FACE_HEADERS)
+            r.raise_for_status()
+            azure_result = r.json()
 
-            # Step 3 — detect face in ID document
-            r1 = await client.post(
-                _FACE_ENDPOINT + "/face/v1.0/detect",
-                headers=_FACE_HEADERS,
-                json={"url": id_image_url},
-                params={"detectionModel": "detection_03", "recognitionModel": "recognition_04"},
+        liveness_result = azure_result.get("livenessResult", {}) or {}
+        verify_result = azure_result.get("verifyResult", {}) or {}
+
+        liveness_decision = str(liveness_result.get("livenessDecision", "")).lower()
+        is_live = liveness_decision == "realface"
+        is_identical = bool(verify_result.get("isIdentical", False))
+        confidence = float(verify_result.get("confidence", 0.0) or 0.0)
+
+        extracted_face = verify_result.get("extractedFace")
+        selfie_url = ""
+        if isinstance(extracted_face, str) and extracted_face.strip():
+            selfie_url = _upload_base64_to_blob(
+                extracted_face, selfie_blob_path, "image/jpeg",
+                {"companyId": str(company_id), "documentType": "selfie"},
             )
-            r1.raise_for_status()
-            faces1 = r1.json()
-            if not faces1:
-                return JSONResponse(
-                    content={"isVerified": False, "confidenceScore": 0.0,
-                             "error": "No face detected in ID document",
-                             "idFrontImageBlobUrl": id_image_url,
-                             "clientSelfieBlobUrl": selfie_url},
-                    status_code=200,
-                )
-            face_id_1 = faces1[0]["faceId"]
+        else:
+            # fallback so response schema remains intact
+            selfie_url = id_image_url
 
-            # Step 4 — detect face in selfie
-            r2 = await client.post(
-                _FACE_ENDPOINT + "/face/v1.0/detect",
-                headers=_FACE_HEADERS,
-                json={"url": selfie_url},
-                params={"detectionModel": "detection_03", "recognitionModel": "recognition_04"},
-            )
-            r2.raise_for_status()
-            faces2 = r2.json()
-            if not faces2:
-                return JSONResponse(
-                    content={"isVerified": False, "confidenceScore": 0.0,
-                             "error": "No face detected in selfie",
-                             "idFrontImageBlobUrl": id_image_url,
-                             "clientSelfieBlobUrl": selfie_url},
-                    status_code=200,
-                )
-            face_id_2 = faces2[0]["faceId"]
-
-            # Step 5 — verify match
-            r3 = await client.post(
-                _FACE_ENDPOINT + "/face/v1.0/verify",
-                headers=_FACE_HEADERS,
-                json={"faceId1": face_id_1, "faceId2": face_id_2},
-            )
-            r3.raise_for_status()
-            result = r3.json()
-
-        confidence  = result.get("confidence", 0.0)
-        is_verified = result.get("isIdentical", False) and confidence >= _CONFIDENCE_THRESHOLD
+        is_verified = is_live and is_identical and confidence >= _CONFIDENCE_THRESHOLD
 
         return JSONResponse(
             content={
-                "isVerified":          is_verified,
-                "confidenceScore":     confidence,
+                "isVerified": is_verified,
+                "confidenceScore": confidence,
                 "idFrontImageBlobUrl": id_image_url,
                 "clientSelfieBlobUrl": selfie_url,
             },
