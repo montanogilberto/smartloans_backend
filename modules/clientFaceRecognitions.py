@@ -63,16 +63,25 @@ def one_clientFaceRecognitions_sp(json_file: dict):
             conn.close()
 
 
-_FACE_ENDPOINT  = os.getenv("AZURE_FACE_API_ENDPOINT", "").rstrip("/")
-_FACE_KEY       = os.getenv("AZURE_FACE_API_KEY", "")
-_FACE_HEADERS   = {
-    "Ocp-Apim-Subscription-Key": _FACE_KEY,
-    "Content-Type": "application/json",
-}
 _CONFIDENCE_THRESHOLD = 0.6
 _CLIENTS_CONTAINER    = os.getenv("CLIENTS_CONTAINER_NAME", "clients")
 _ACCOUNT_URL_FALLBACK = os.getenv("AZURE_STORAGE_ACCOUNT_URL_FALLBACK", "")
 _LIVENESS_API_VERSION = os.getenv("AZURE_FACE_LIVENESS_API_VERSION", "v1.1-preview.1")
+
+
+def _get_face_config():
+    endpoint = os.getenv("AZURE_FACE_API_ENDPOINT", "").rstrip("/")
+    key = os.getenv("AZURE_FACE_API_KEY", "")
+    missing = []
+    if not endpoint:
+        missing.append("AZURE_FACE_API_ENDPOINT")
+    if not key:
+        missing.append("AZURE_FACE_API_KEY")
+    headers = {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": "application/json",
+    }
+    return endpoint, key, headers, missing
 
 
 def _blob_service_client() -> BlobServiceClient:
@@ -113,20 +122,24 @@ async def create_azure_liveness_session() -> JSONResponse:
     Frontend uses returned session/auth token for streaming liveness flow.
     """
     try:
-        if not _FACE_ENDPOINT or not _FACE_KEY:
+        face_endpoint, _, face_headers, missing = _get_face_config()
+        if missing:
             return JSONResponse(
-                content={"error": "Missing AZURE_FACE_API_ENDPOINT or AZURE_FACE_API_KEY"},
+                content={
+                    "error": "Missing required Azure Face configuration",
+                    "missing": missing,
+                },
                 status_code=500,
             )
 
-        endpoint = _FACE_ENDPOINT + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify"
+        endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify"
         body = {
             "livenessOperationMode": "PassiveAndActive",
             "deviceCorrelationId": str(uuid.uuid4()),
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(endpoint, headers=_FACE_HEADERS, json=body)
+            r = await client.post(endpoint, headers=face_headers, json=body)
             r.raise_for_status()
             data = r.json()
 
@@ -176,16 +189,20 @@ async def verify_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
             {"companyId": str(company_id), "documentType": document_type},
         )
 
-        if not _FACE_ENDPOINT or not _FACE_KEY:
+        face_endpoint, _, face_headers, missing = _get_face_config()
+        if missing:
             return JSONResponse(
-                content={"error": "Missing AZURE_FACE_API_ENDPOINT or AZURE_FACE_API_KEY"},
+                content={
+                    "error": "Missing required Azure Face configuration",
+                    "missing": missing,
+                },
                 status_code=500,
             )
 
-        result_endpoint = _FACE_ENDPOINT + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify/" + azure_session_id
+        result_endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify/" + azure_session_id
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(result_endpoint, headers=_FACE_HEADERS)
+            r = await client.get(result_endpoint, headers=face_headers)
             r.raise_for_status()
             azure_result = r.json()
 
