@@ -100,9 +100,7 @@ def _upload_to_blob(raw_bytes: bytes, blob_path: str, content_type: str, metadat
 
 
 def _upload_base64_to_blob(b64_data: str, blob_path: str, content_type: str, metadata: dict) -> str:
-    """
-    Strip optional data-URI prefix then upload.
-    """
+    """Strip optional data-URI prefix then upload."""
     if "," in b64_data:
         b64_data = b64_data.split(",", 1)[1]
     return _upload_to_blob(base64.b64decode(b64_data), blob_path, content_type, metadata)
@@ -193,7 +191,7 @@ async def verify_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
             r3.raise_for_status()
             result = r3.json()
 
-        confidence  = result.get("confidence", 0.0)   # NO rounding — return raw value
+        confidence  = result.get("confidence", 0.0)
         is_verified = result.get("isIdentical", False) and confidence >= _CONFIDENCE_THRESHOLD
 
         return JSONResponse(
@@ -243,6 +241,6 @@ async def contract_clientFaceRecognition_connector(payload: dict) -> JSONRespons
                 "acceptedAt":          payload.get("acceptedAt"),
             }]
         }
-        return clientFaceRecognitions_sp(json_file)
+        return clientFaceRecognitions_sp(json_file)   # reuse CRUD SP for persistence
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
