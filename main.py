@@ -13,8 +13,7 @@ from routes_ import (
     listingDrafts, messageTickets, procurementJobs, productMatches,
     publishJobs, sellListings, shipments, opportunities, marketplaceOrders, mercadolibre, ml_proxy,
     mlSearchRuns, mlJobs, routes_ml_proxy, cashRegister, companies, companiesBranches, productCategories,
-    supplier, loan
-    clientFaceRecognition,
+    supplier, loan, clientFaceRecognition,
 )
 
 app = FastAPI(
