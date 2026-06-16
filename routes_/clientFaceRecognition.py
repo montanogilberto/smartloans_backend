@@ -3,6 +3,7 @@ from modules.clientFaceRecognitions import (
     clientFaceRecognitions_sp, all_clientFaceRecognitions_sp, one_clientFaceRecognitions_sp,
     verify_clientFaceRecognition_connector,
     contract_clientFaceRecognition_connector,
+    create_azure_liveness_session,
 )
 
 
@@ -30,6 +31,11 @@ def one_clientFaceRecognitions(json: dict):
 
 
 # --- connector routes (async) ---
+@router.post("/api/clientFaceRecognition/create-session", summary="Create Azure Liveness Session", tags=["connector"])
+async def create_liveness_session():
+    return await create_azure_liveness_session()
+
+
 @router.post("/api/clientFaceRecognition/verify", summary="Biometric verify ClientFaceRecognition", tags=["connector"])
 async def verify_clientFaceRecognition(json: dict):
     return await verify_clientFaceRecognition_connector(json)
