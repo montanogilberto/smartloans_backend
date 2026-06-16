@@ -1,0 +1,5 @@
+Returns a single clientFaceRecognition record by its primary key via sp_clientFaceRecognitions_one.
+Stored procedure: EXEC [dbo].[sp_clientFaceRecognitions_one] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/one_clientFaceRecognitions"   -H "Content-Type: application/json"   -d '{"companyId":1,"clientFaceRecognitionId":1}'

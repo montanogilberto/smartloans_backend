@@ -13,7 +13,7 @@ from routes_ import (
     listingDrafts, messageTickets, procurementJobs, productMatches,
     publishJobs, sellListings, shipments, opportunities, marketplaceOrders, mercadolibre, ml_proxy,
     mlSearchRuns, mlJobs, routes_ml_proxy, cashRegister, companies, companiesBranches, productCategories,
-    supplier, loan
+    supplier, loan, clientFaceRecognition,
 )
 
 app = FastAPI(
@@ -129,6 +129,7 @@ app.include_router(companiesBranches.router)
 app.include_router(productCategories.router)
 app.include_router(supplier.router)
 app.include_router(loan.router)
+app.include_router(clientFaceRecognition.router)
 
 # --------------------------------------------------
 # Local development only
