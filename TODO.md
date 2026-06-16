@@ -17,5 +17,8 @@
   - [x] Keep response schema unchanged (isVerified, confidenceScore, idFrontImageBlobUrl, clientSelfieBlobUrl)
 
 - [x] Update docs_description/clientFaceRecognition.md with liveness flow
+- [x] Implement runtime Azure env validation + clearer error reporting
+- [x] Accept optional JSON body on create-session route
+- [x] Run syntax check for touched files
 - [ ] Run critical-path API verification (curl) or confirm skip
 - [in-progress] Final review and handoff

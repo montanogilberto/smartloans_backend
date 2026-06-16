@@ -32,7 +32,7 @@ def one_clientFaceRecognitions(json: dict):
 
 # --- connector routes (async) ---
 @router.post("/api/clientFaceRecognition/create-session", summary="Create Azure Liveness Session", tags=["connector"])
-async def create_liveness_session():
+async def create_liveness_session(json: dict = None):
     return await create_azure_liveness_session()
 
 
