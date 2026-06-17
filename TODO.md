@@ -1,7 +1,3 @@
-- [x] Analyze failing Azure Face create-session flow and identify likely wrong endpoint path.
-- [x] Read relevant files (`modules/clientFaceRecognitions.py`, `routes_/clientFaceRecognition.py`).
-- [x] Add robust create-session URL strategy with env-driven version fallbacks and retry attempts.
-- [x] Improve Azure error diagnostics to include attempted URLs and statuses for create-session.
-- [x] Add explicit create URL override and alternate path family fallback support.
-- [x] Run syntax validation for edited module.
-- [x] Mark all tasks completed after verification.
+- [x] Update liveness path template defaults in `modules/clientFaceRecognitions.py` to remove `/face/` prefix.
+- [x] Update `.env` liveness-related variables to use non-`/face/` routes.
+- [x] Mark tasks complete after applying changes.

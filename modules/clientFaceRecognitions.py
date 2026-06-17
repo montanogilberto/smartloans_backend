@@ -80,17 +80,17 @@ _LIVENESS_CREATE_PATH_TEMPLATES = [
     p.strip()
     for p in os.getenv(
         "AZURE_FACE_LIVENESS_CREATE_PATH_TEMPLATES",
-        "/face/{version}/liveness/session,/face/liveness/session",
+        "/{version}/liveness/session,/liveness/session",
     ).split(",")
     if p.strip()
 ]
 _LIVENESS_CREATE_PATH_TEMPLATE = os.getenv(
     "AZURE_FACE_LIVENESS_CREATE_PATH_TEMPLATE",
-    "/face/{version}/liveness/session",
+    "/{version}/liveness/session",
 )
 _LIVENESS_VERIFY_PATH_TEMPLATE = os.getenv(
     "AZURE_FACE_LIVENESS_VERIFY_PATH_TEMPLATE",
-    "/face/{version}/liveness/session/verify/{sessionId}",
+    "/{version}/liveness/session/verify/{sessionId}",
 )
 
 
