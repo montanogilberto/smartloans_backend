@@ -67,6 +67,14 @@ _CONFIDENCE_THRESHOLD = 0.6
 _CLIENTS_CONTAINER    = os.getenv("CLIENTS_CONTAINER_NAME", "clients")
 _ACCOUNT_URL_FALLBACK = os.getenv("AZURE_STORAGE_ACCOUNT_URL_FALLBACK", "")
 _LIVENESS_API_VERSION = os.getenv("AZURE_FACE_LIVENESS_API_VERSION", "v1.1-preview.1")
+_LIVENESS_CREATE_PATH_TEMPLATE = os.getenv(
+    "AZURE_FACE_LIVENESS_CREATE_PATH_TEMPLATE",
+    "/face/{version}/liveness/session",
+)
+_LIVENESS_VERIFY_PATH_TEMPLATE = os.getenv(
+    "AZURE_FACE_LIVENESS_VERIFY_PATH_TEMPLATE",
+    "/face/{version}/liveness/session/verify/{sessionId}",
+)
 
 
 def _get_face_config():
@@ -82,6 +90,11 @@ def _get_face_config():
         "Content-Type": "application/json",
     }
     return endpoint, key, headers, missing
+
+
+def _build_face_url(base_endpoint: str, template: str, **kwargs) -> str:
+    path = template.format(**kwargs).lstrip("/")
+    return base_endpoint.rstrip("/") + "/" + path
 
 
 def _blob_service_client() -> BlobServiceClient:
@@ -132,7 +145,11 @@ async def create_azure_liveness_session() -> JSONResponse:
                 status_code=500,
             )
 
-        endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify"
+        endpoint = _build_face_url(
+            face_endpoint,
+            _LIVENESS_CREATE_PATH_TEMPLATE,
+            version=_LIVENESS_API_VERSION,
+        )
         body = {
             "livenessOperationMode": "PassiveAndActive",
             "deviceCorrelationId": str(uuid.uuid4()),
@@ -152,7 +169,14 @@ async def create_azure_liveness_session() -> JSONResponse:
             status_code=200,
         )
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        return JSONResponse(
+            content={
+                "error": str(e),
+                "requestMethod": "POST",
+                "requestUrl": endpoint if "endpoint" in locals() else None,
+            },
+            status_code=500,
+        )
 
 
 async def verify_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
@@ -199,7 +223,12 @@ async def verify_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
                 status_code=500,
             )
 
-        result_endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify/" + azure_session_id
+        result_endpoint = _build_face_url(
+            face_endpoint,
+            _LIVENESS_VERIFY_PATH_TEMPLATE,
+            version=_LIVENESS_API_VERSION,
+            sessionId=azure_session_id,
+        )
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.get(result_endpoint, headers=face_headers)
@@ -237,7 +266,14 @@ async def verify_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
             status_code=200,
         )
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        return JSONResponse(
+            content={
+                "error": str(e),
+                "requestMethod": "GET",
+                "requestUrl": result_endpoint if "result_endpoint" in locals() else None,
+            },
+            status_code=500,
+        )
 
 
 async def contract_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
