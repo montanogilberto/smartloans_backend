@@ -67,6 +67,14 @@ _CONFIDENCE_THRESHOLD = 0.6
 _CLIENTS_CONTAINER    = os.getenv("CLIENTS_CONTAINER_NAME", "clients")
 _ACCOUNT_URL_FALLBACK = os.getenv("AZURE_STORAGE_ACCOUNT_URL_FALLBACK", "")
 _LIVENESS_API_VERSION = os.getenv("AZURE_FACE_LIVENESS_API_VERSION", "v1.1-preview.1")
+_LIVENESS_FALLBACK_API_VERSIONS = [
+    v.strip()
+    for v in os.getenv(
+        "AZURE_FACE_LIVENESS_FALLBACK_API_VERSIONS",
+        "v1.1-preview.1,v1.0-preview.1,v1.0",
+    ).split(",")
+    if v.strip()
+]
 _LIVENESS_CREATE_PATH_TEMPLATE = os.getenv(
     "AZURE_FACE_LIVENESS_CREATE_PATH_TEMPLATE",
     "/face/{version}/liveness/session",
@@ -133,7 +141,9 @@ async def create_azure_liveness_session() -> JSONResponse:
     """
     Creates Azure Face Liveness session.
     Frontend uses returned session/auth token for streaming liveness flow.
+    Retries across configured API versions to handle regional/version differences.
     """
+    attempted_requests = []
     try:
         face_endpoint, _, face_headers, missing = _get_face_config()
         if missing:
@@ -145,35 +155,68 @@ async def create_azure_liveness_session() -> JSONResponse:
                 status_code=500,
             )
 
-        endpoint = _build_face_url(
-            face_endpoint,
-            _LIVENESS_CREATE_PATH_TEMPLATE,
-            version=_LIVENESS_API_VERSION,
-        )
+        preferred_versions = [_LIVENESS_API_VERSION] + [
+            v for v in _LIVENESS_FALLBACK_API_VERSIONS if v != _LIVENESS_API_VERSION
+        ]
         body = {
             "livenessOperationMode": "PassiveAndActive",
             "deviceCorrelationId": str(uuid.uuid4()),
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(endpoint, headers=face_headers, json=body)
-            r.raise_for_status()
-            data = r.json()
+            last_error = None
+            for version in preferred_versions:
+                endpoint = _build_face_url(
+                    face_endpoint,
+                    _LIVENESS_CREATE_PATH_TEMPLATE,
+                    version=version,
+                )
+                try:
+                    r = await client.post(endpoint, headers=face_headers, json=body)
+                    attempted_requests.append(
+                        {"version": version, "url": endpoint, "statusCode": r.status_code}
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+                    return JSONResponse(
+                        content={
+                            "sessionId": data.get("sessionId"),
+                            "authToken": data.get("authToken"),
+                            "raw": data,
+                            "apiVersionUsed": version,
+                        },
+                        status_code=200,
+                    )
+                except httpx.HTTPStatusError as http_err:
+                    last_error = http_err
+                    continue
+                except Exception as e:
+                    return JSONResponse(
+                        content={
+                            "error": str(e),
+                            "requestMethod": "POST",
+                            "requestUrl": endpoint,
+                            "attemptedRequests": attempted_requests,
+                        },
+                        status_code=500,
+                    )
 
         return JSONResponse(
             content={
-                "sessionId": data.get("sessionId"),
-                "authToken": data.get("authToken"),
-                "raw": data,
+                "error": str(last_error) if last_error else "Unable to create liveness session",
+                "requestMethod": "POST",
+                "requestUrl": attempted_requests[-1]["url"] if attempted_requests else None,
+                "attemptedRequests": attempted_requests,
             },
-            status_code=200,
+            status_code=500,
         )
     except Exception as e:
         return JSONResponse(
             content={
                 "error": str(e),
                 "requestMethod": "POST",
-                "requestUrl": endpoint if "endpoint" in locals() else None,
+                "requestUrl": attempted_requests[-1]["url"] if attempted_requests else None,
+                "attemptedRequests": attempted_requests,
             },
             status_code=500,
         )
