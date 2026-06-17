@@ -1,0 +1,5 @@
+Returns a single clientDashboard record by its primary key via sp_ClientDashboards_one.
+Stored procedure: EXEC [dbo].[sp_ClientDashboards_one] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/one_clientDashboards"   -H "Content-Type: application/json"   -d '{"companyId":1,"clientDashboardId":1}'
