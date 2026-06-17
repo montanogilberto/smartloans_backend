@@ -1,0 +1,5 @@
+Returns all clientDashboards records for the given company filtered by companyId via sp_ClientDashboards_all.
+Stored procedure: EXEC [dbo].[sp_ClientDashboards_all] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/all_clientDashboards"   -H "Content-Type: application/json"   -d '{"clientDashboards":[{"companyId":1}]}'
