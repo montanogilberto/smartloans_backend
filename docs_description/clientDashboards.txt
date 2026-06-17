@@ -1,0 +1,5 @@
+Performs INSERT, UPDATE, or DELETE on the clientDashboards table via sp_ClientDashboards.
+Stored procedure: EXEC [dbo].[sp_ClientDashboards] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/clientDashboards"   -H "Content-Type: application/json"   -d '{"clientDashboards":[{"action":1,"companyId":1,"clientId":101,"availableCredit":1500.00,"activeLoanBalance":500.00,"nextPaymentAmount":120.50,"nextPaymentDate":"2024-07-20","activityDate":"2024-07-15T10:30:00","activityType":"Loan Payment","description":"Payment for loan #12345","amount":120.50,"loanNumber":"LN001","loanAmount":1000.00,"remainingBalance":500.00,"status":"Active"}]}'
