@@ -75,6 +75,15 @@ _LIVENESS_FALLBACK_API_VERSIONS = [
     ).split(",")
     if v.strip()
 ]
+_LIVENESS_CREATE_URL = os.getenv("AZURE_FACE_LIVENESS_CREATE_URL", "").strip()
+_LIVENESS_CREATE_PATH_TEMPLATES = [
+    p.strip()
+    for p in os.getenv(
+        "AZURE_FACE_LIVENESS_CREATE_PATH_TEMPLATES",
+        "/face/{version}/liveness/session,/face/liveness/session",
+    ).split(",")
+    if p.strip()
+]
 _LIVENESS_CREATE_PATH_TEMPLATE = os.getenv(
     "AZURE_FACE_LIVENESS_CREATE_PATH_TEMPLATE",
     "/face/{version}/liveness/session",
@@ -158,23 +167,59 @@ async def create_azure_liveness_session() -> JSONResponse:
         preferred_versions = [_LIVENESS_API_VERSION] + [
             v for v in _LIVENESS_FALLBACK_API_VERSIONS if v != _LIVENESS_API_VERSION
         ]
+        path_templates = list(dict.fromkeys(_LIVENESS_CREATE_PATH_TEMPLATES + [_LIVENESS_CREATE_PATH_TEMPLATE]))
         body = {
             "livenessOperationMode": "PassiveAndActive",
             "deviceCorrelationId": str(uuid.uuid4()),
         }
 
+        candidate_requests = []
+        if _LIVENESS_CREATE_URL:
+            candidate_requests.append(
+                {
+                    "version": "explicit",
+                    "pathTemplate": "AZURE_FACE_LIVENESS_CREATE_URL",
+                    "url": _LIVENESS_CREATE_URL,
+                }
+            )
+
+        for template in path_templates:
+            if "{version}" in template:
+                for version in preferred_versions:
+                    candidate_requests.append(
+                        {
+                            "version": version,
+                            "pathTemplate": template,
+                            "url": _build_face_url(face_endpoint, template, version=version),
+                        }
+                    )
+            else:
+                candidate_requests.append(
+                    {
+                        "version": "none",
+                        "pathTemplate": template,
+                        "url": _build_face_url(face_endpoint, template),
+                    }
+                )
+
+        dedup = {}
+        for item in candidate_requests:
+            dedup[item["url"]] = item
+        candidate_requests = list(dedup.values())
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             last_error = None
-            for version in preferred_versions:
-                endpoint = _build_face_url(
-                    face_endpoint,
-                    _LIVENESS_CREATE_PATH_TEMPLATE,
-                    version=version,
-                )
+            for attempt in candidate_requests:
+                endpoint = attempt["url"]
                 try:
                     r = await client.post(endpoint, headers=face_headers, json=body)
                     attempted_requests.append(
-                        {"version": version, "url": endpoint, "statusCode": r.status_code}
+                        {
+                            "version": attempt["version"],
+                            "pathTemplate": attempt["pathTemplate"],
+                            "url": endpoint,
+                            "statusCode": r.status_code,
+                        }
                     )
                     r.raise_for_status()
                     data = r.json()
@@ -183,7 +228,9 @@ async def create_azure_liveness_session() -> JSONResponse:
                             "sessionId": data.get("sessionId"),
                             "authToken": data.get("authToken"),
                             "raw": data,
-                            "apiVersionUsed": version,
+                            "apiVersionUsed": attempt["version"],
+                            "pathTemplateUsed": attempt["pathTemplate"],
+                            "requestUrlUsed": endpoint,
                         },
                         status_code=200,
                     )

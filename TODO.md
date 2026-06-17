@@ -2,5 +2,6 @@
 - [x] Read relevant files (`modules/clientFaceRecognitions.py`, `routes_/clientFaceRecognition.py`).
 - [x] Add robust create-session URL strategy with env-driven version fallbacks and retry attempts.
 - [x] Improve Azure error diagnostics to include attempted URLs and statuses for create-session.
-- [x] Run a quick syntax validation for edited module.
+- [x] Add explicit create URL override and alternate path family fallback support.
+- [x] Run syntax validation for edited module.
 - [x] Mark all tasks completed after verification.
