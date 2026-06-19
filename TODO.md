@@ -1,7 +1,8 @@
-# Push Notifications Debug Workflow TODO
+# Push Notifications Fix Workflow TODO
 
 - [x] Review push notification request flow (`routes_/pushNotification.py` -> `modules/pushNotifications.py` -> SQL SP).
-- [x] Add `print()` tracing in `routes_/pushNotification.py` for request in/out.
-- [x] Add `print()` tracing in `modules/pushNotifications.py` for DB execution, SP output, action branching, Azure push call, and exceptions.
-- [x] Keep endpoint behavior unchanged (only add diagnostics).
+- [x] Identify bug: Azure push is sent when `action == 1` even if SP response status is error.
+- [x] Update `modules/pushNotifications.py` to parse SP response before action branch.
+- [x] Gate Azure push send with: `action == 1` and SP response indicates success.
+- [x] Keep API response body aligned with SP response payload.
 - [ ] Run a quick syntax/import verification.

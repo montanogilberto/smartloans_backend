@@ -24,15 +24,19 @@ async def pushNotifications_sp(json_file: dict):
         json_result = row[0] if row else '{"message": "ok"}'
         print("[pushNotifications][module] SP json_result:", json_result)
 
+        parsed_content = json.loads(json_result)
         action = json_file.get("action")
         print("[pushNotifications][module] action:", action)
 
-        if action == 1:
+        status_value = str(parsed_content.get("status", "")).lower() if isinstance(parsed_content, dict) else ""
+        is_success = status_value in {"success", "ok"}
+
+        if action == 1 and is_success:
             title = json_file.get("title", "New Notification")
             message = json_file.get("message", "")
             target_user_id = json_file.get("targetUserId")
             print(
-                "[pushNotifications][module] action==1, preparing Azure push:",
+                "[pushNotifications][module] action==1 and SP success, preparing Azure push:",
                 {"title": title, "message": message, "targetUserId": target_user_id}
             )
             try:
@@ -40,8 +44,12 @@ async def pushNotifications_sp(json_file: dict):
                 print("[pushNotifications][module] Azure push sent successfully.")
             except Exception as azure_error:
                 print("[pushNotifications][module] Azure push failed:", str(azure_error))
+        elif action == 1:
+            print(
+                "[pushNotifications][module] action==1 but SP status is not success; skipping Azure push.",
+                {"status": parsed_content.get("status") if isinstance(parsed_content, dict) else None}
+            )
 
-        parsed_content = json.loads(json_result)
         print("[pushNotifications][module] Returning parsed response:", parsed_content)
         return JSONResponse(content=parsed_content, status_code=200)
     except Exception as e:
