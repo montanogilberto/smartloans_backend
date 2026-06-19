@@ -7,29 +7,50 @@ import json
 async def pushNotifications_sp(json_file: dict):
     conn = None
     try:
+        print("[pushNotifications][module] Handler started.")
+        print("[pushNotifications][module] Payload received:", json_file)
+
         conn = connection()
         cursor = conn.cursor()
-        cursor.execute("EXEC [dbo].[sp_pushNotifications] @pjsonfile = %s", (json.dumps(json_file),))
+
+        payload_json = json.dumps(json_file)
+        print("[pushNotifications][module] Executing SP: sp_pushNotifications")
+        print("[pushNotifications][module] SP payload JSON:", payload_json)
+        cursor.execute("EXEC [dbo].[sp_pushNotifications] @pjsonfile = %s", (payload_json,))
+
         # Upsert SP returns ONE row, ONE column -- use fetchone()[0]
         row = cursor.fetchone()
+        print("[pushNotifications][module] Raw DB row:", row)
         json_result = row[0] if row else '{"message": "ok"}'
+        print("[pushNotifications][module] SP json_result:", json_result)
 
         action = json_file.get("action")
+        print("[pushNotifications][module] action:", action)
+
         if action == 1:
             title = json_file.get("title", "New Notification")
             message = json_file.get("message", "")
             target_user_id = json_file.get("targetUserId")
+            print(
+                "[pushNotifications][module] action==1, preparing Azure push:",
+                {"title": title, "message": message, "targetUserId": target_user_id}
+            )
             try:
                 await send_azure_push(title, message, target_user_id)
-            except Exception:
-                pass
+                print("[pushNotifications][module] Azure push sent successfully.")
+            except Exception as azure_error:
+                print("[pushNotifications][module] Azure push failed:", str(azure_error))
 
-        return JSONResponse(content=json.loads(json_result), status_code=200)
+        parsed_content = json.loads(json_result)
+        print("[pushNotifications][module] Returning parsed response:", parsed_content)
+        return JSONResponse(content=parsed_content, status_code=200)
     except Exception as e:
+        print("[pushNotifications][module] Exception raised:", str(e))
         return JSONResponse(content={"error": str(e)}, status_code=500)
     finally:
         if conn:
             conn.close()
+            print("[pushNotifications][module] DB connection closed.")
 
 
 def all_pushNotifications_sp(json_file: dict):

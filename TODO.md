@@ -1,7 +1,7 @@
-# Azure Notification Hubs Integration TODO
+# Push Notifications Debug Workflow TODO
 
-- [x] Add `modules/azure_notifications.py` helper for SAS token generation and Azure Hub REST dispatch with `httpx`.
-- [x] Convert `pushNotifications_sp` in `modules/pushNotifications.py` to async and call Azure dispatch after successful DB execution when `action == 1`.
-- [x] Update `routes_/pushNotification.py` so `/pushNotifications` route is async and awaits handler.
-- [x] Add `httpx` dependency to `requirements.txt`.
-- [x] Run a quick syntax/import verification.
+- [x] Review push notification request flow (`routes_/pushNotification.py` -> `modules/pushNotifications.py` -> SQL SP).
+- [x] Add `print()` tracing in `routes_/pushNotification.py` for request in/out.
+- [x] Add `print()` tracing in `modules/pushNotifications.py` for DB execution, SP output, action branching, Azure push call, and exceptions.
+- [x] Keep endpoint behavior unchanged (only add diagnostics).
+- [ ] Run a quick syntax/import verification.

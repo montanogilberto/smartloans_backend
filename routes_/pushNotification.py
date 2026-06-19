@@ -8,7 +8,10 @@ with open("./docs_description/pushNotifications.txt", "r") as file:
     pushNotifications_docstring = file.read()
 @router.post("/pushNotifications", summary="pushNotifications CRUD", description=pushNotifications_docstring)
 async def pushNotifications(json: dict):
-    return await pushNotifications_sp(json)
+    print("[pushNotifications][route] Incoming request payload:", json)
+    response = await pushNotifications_sp(json)
+    print("[pushNotifications][route] Outgoing response prepared.")
+    return response
 
 
 with open("./docs_description/pushNotifications_all.txt", "r") as file:
