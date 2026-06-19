@@ -13,7 +13,15 @@ async def pushNotifications_sp(json_file: dict):
         conn = connection()
         cursor = conn.cursor()
 
-        payload_json = json.dumps(json_file)
+        # SP expects: {"pushNotifications":[{...}]}
+        if isinstance(json_file, dict) and isinstance(json_file.get("pushNotifications"), list):
+            sp_payload = json_file
+            payload_item = sp_payload["pushNotifications"][0] if sp_payload["pushNotifications"] else {}
+        else:
+            payload_item = json_file if isinstance(json_file, dict) else {}
+            sp_payload = {"pushNotifications": [payload_item]}
+
+        payload_json = json.dumps(sp_payload)
         print("[pushNotifications][module] Executing SP: sp_pushNotifications")
         print("[pushNotifications][module] SP payload JSON:", payload_json)
         cursor.execute("EXEC [dbo].[sp_pushNotifications] @pjsonfile = %s", (payload_json,))
@@ -25,16 +33,16 @@ async def pushNotifications_sp(json_file: dict):
         print("[pushNotifications][module] SP json_result:", json_result)
 
         parsed_content = json.loads(json_result)
-        action = json_file.get("action")
+        action = payload_item.get("action") if isinstance(payload_item, dict) else None
         print("[pushNotifications][module] action:", action)
 
         status_value = str(parsed_content.get("status", "")).lower() if isinstance(parsed_content, dict) else ""
         is_success = status_value in {"success", "ok"}
 
         if action == 1 and is_success:
-            title = json_file.get("title", "New Notification")
-            message = json_file.get("message", "")
-            target_user_id = json_file.get("targetUserId")
+            title = payload_item.get("title", "New Notification") if isinstance(payload_item, dict) else "New Notification"
+            message = payload_item.get("message", "") if isinstance(payload_item, dict) else ""
+            target_user_id = payload_item.get("targetUserId") if isinstance(payload_item, dict) else None
             print(
                 "[pushNotifications][module] action==1 and SP success, preparing Azure push:",
                 {"title": title, "message": message, "targetUserId": target_user_id}
