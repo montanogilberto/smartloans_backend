@@ -42,7 +42,7 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
 
     if not AZURE_CONNECTION_STRING or not AZURE_HUB_NAME:
         print("[azure_notifications] Missing AZURE_NOTIFICATION_HUB_CONNECTION_STRING or AZURE_NOTIFICATION_HUB_NAME. Skipping push.")
-        return 0
+        return {"sent": False, "reason": "missing_config", "status_code": None}
 
     endpoint, key_name, key = parse_connection_string(AZURE_CONNECTION_STRING)
     print("[azure_notifications] Parsed connection settings.", {
@@ -52,7 +52,7 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
     })
     if not endpoint or not key_name or not key:
         print("[azure_notifications] Invalid connection string parts. Skipping push.")
-        return 0
+        return {"sent": False, "reason": "invalid_connection_string", "status_code": None}
 
     base_url = endpoint.replace("sb://", "https://").rstrip("/")
     uri = f"{base_url}/{AZURE_HUB_NAME}/messages/"
@@ -88,7 +88,13 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
                 "status_code": response.status_code,
                 "response_text": response.text[:500] if response.text else "",
             })
-            return response.status_code
+            is_sent = 200 <= response.status_code < 300
+            return {
+                "sent": is_sent,
+                "reason": "ok" if is_sent else "azure_non_success_status",
+                "status_code": response.status_code,
+                "response_text": response.text[:500] if response.text else "",
+            }
     except Exception as e:
         print("[azure_notifications] Exception while sending push:", str(e))
         raise

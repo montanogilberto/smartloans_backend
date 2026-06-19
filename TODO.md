@@ -1,8 +1,6 @@
-# Push Notifications Fix Workflow TODO
+# TODO - Push Notifications Azure logging fix
 
-- [x] Review push notification request flow (`routes_/pushNotification.py` -> `modules/pushNotifications.py` -> SQL SP).
-- [x] Identify bug: Azure push is sent when `action == 1` even if SP response status is error.
-- [x] Update `modules/pushNotifications.py` to parse SP response before action branch.
-- [x] Gate Azure push send with: `action == 1` and SP response indicates success.
-- [x] Keep API response body aligned with SP response payload.
-- [ ] Run a quick syntax/import verification.
+- [x] Update `modules/azure_notifications.py` to return structured result from `send_azure_push`.
+- [x] Update `modules/pushNotifications.py` to log based on structured Azure result (sent/skipped/failed).
+- [x] Run syntax check for touched files.
+- [x] Mark all tasks complete.
