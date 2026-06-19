@@ -225,6 +225,133 @@ curl -X POST "https://smartloansbackend.azurewebsites.net/one_pushNotification" 
   - `docs_description/pushNotifications_all.txt`
   - `docs_description/pushNotifications_one.txt`
 
+## Latest Validation Results
+
+The following tests were executed recently to validate the push notification flow end-to-end.
+
+### 1) Database-level stored procedure test (direct SQL)
+
+```sql
+DECLARE @jsonInput VARCHAR(MAX);
+
+SET @jsonInput = '{
+    "pushNotifications": [
+        {
+            "action": 1,
+            "companyId": 1,
+            "title": "Test Notification 🚀",
+            "message": "Hello from the new Azure integrated pipeline!",
+            "notificationType": "Info",
+            "priority": "Normal",
+            "targetType": "User",
+            "targetUserId": 123,
+            "isRead": 0,
+            "isSent": 0,
+            "targetRoleId": null,
+            "targetCompanyId": null,
+            "navigationRoute": null,
+            "sentAt": null,
+            "scheduledAt": null,
+            "payloadJson": null
+        }
+    ]
+}';
+
+EXEC [dbo].[sp_pushNotifications] @pjsonfile = @jsonInput;
+```
+
+Observed output:
+
+```json
+{
+  "status": "success",
+  "message": "PushNotification(s) inserted successfully.",
+  "pushNotificationId": "1"
+}
+```
+
+Interpretation:
+- Stored procedure path is operational for the tested payload.
+
+### 2) API-level test (`/pushNotifications`)
+
+```bash
+curl -X POST "http://0.0.0.0:8000/pushNotifications" \
+  -H "accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": 1,
+    "companyId": 1,
+    "title": "Test Notification 🚀",
+    "message": "Hello from the new Azure integrated pipeline!",
+    "notificationType": "Info",
+    "priority": "Normal",
+    "targetType": "User",
+    "targetUserId": 123,
+    "isRead": false,
+    "isSent": false
+  }'
+```
+
+Observed output:
+
+```json
+{
+  "status": "error",
+  "message": "Invalid companyId provided."
+}
+```
+
+Interpretation:
+- The API reached business validation logic and returned an application-level validation error.
+- This is not an infrastructure/import crash. It indicates request/company context validation should be checked.
+
+## Troubleshooting / Dependency Compatibility
+
+During runtime startup, an environment dependency mismatch was observed:
+
+- Error signature:
+  - `ImportError: cannot import name 'Proxy' from 'httpx'`
+- Cause:
+  - incompatible `openai` and `httpx` versions loaded in Python environment.
+- Known-good pair used during recovery:
+  - `openai==1.13.3`
+  - `httpx==0.27.2`
+
+Recommendation:
+- Pin these versions in deployment/runtime environments to prevent drift-related startup failures.
+- Ensure the application runs with the intended project virtual environment interpreter.
+
+## Operational Checklist (Push Notifications)
+
+Use this checklist when validating push notifications in QA/UAT/production diagnostics:
+
+1. **Environment/Startup**
+   - Confirm app starts without import/runtime dependency errors.
+   - Confirm expected venv interpreter is used.
+
+2. **Database-level test**
+   - Execute `sp_pushNotifications` directly with a known-good payload.
+   - Verify success JSON is returned and `pushNotificationId` is generated.
+
+3. **API-level test**
+   - Call `POST /pushNotifications` with equivalent payload.
+   - Verify response status/body.
+   - If API fails while DB succeeds, investigate:
+     - `companyId` validity in application context
+     - tenant/company scoping rules
+     - payload transformation differences between API and direct SP call
+
+4. **Read-back verification**
+   - Validate inserted record via:
+     - `POST /all_pushNotifications`
+     - `POST /one_pushNotification`
+
+5. **Error-path checks**
+   - Invalid `companyId`
+   - Missing required fields (`action`, `companyId`, `title`, etc.)
+   - type mismatches (`isRead`/`isSent`, ID fields)
+
 ## Related Files (Quick Reference)
 
 - `routes_/pushNotification.py`
