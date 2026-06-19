@@ -1,9 +1,10 @@
 from fastapi.responses import JSONResponse
 from databases import connection
+from modules.azure_notifications import send_azure_push
 import json
 
 
-def pushNotifications_sp(json_file: dict):
+async def pushNotifications_sp(json_file: dict):
     conn = None
     try:
         conn = connection()
@@ -12,6 +13,17 @@ def pushNotifications_sp(json_file: dict):
         # Upsert SP returns ONE row, ONE column -- use fetchone()[0]
         row = cursor.fetchone()
         json_result = row[0] if row else '{"message": "ok"}'
+
+        action = json_file.get("action")
+        if action == 1:
+            title = json_file.get("title", "New Notification")
+            message = json_file.get("message", "")
+            target_user_id = json_file.get("targetUserId")
+            try:
+                await send_azure_push(title, message, target_user_id)
+            except Exception:
+                pass
+
         return JSONResponse(content=json.loads(json_result), status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)

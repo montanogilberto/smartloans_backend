@@ -1,24 +1,7 @@
-# TODO - clientFaceRecognition liveness migration + docs
+# Azure Notification Hubs Integration TODO
 
-- [x] Read implementation files:
-  - [x] modules/clientFaceRecognitions.py
-  - [x] routes_/clientFaceRecognition.py
-- [x] Read existing endpoint description files:
-  - [x] docs_description/clientFaceRecognitions.txt
-  - [x] docs_description/clientFaceRecognitions_all.txt
-  - [x] docs_description/clientFaceRecognitions_one.txt
-- [x] Create consolidated markdown documentation:
-  - [x] docs_description/clientFaceRecognition.md
-
-- [x] Implement Azure Face Liveness migration:
-  - [x] Add create-session route in routes_/clientFaceRecognition.py
-  - [x] Add create_azure_liveness_session() in modules/clientFaceRecognitions.py
-  - [x] Refactor verify_clientFaceRecognition_connector() to use azureSessionId flow
-  - [x] Keep response schema unchanged (isVerified, confidenceScore, idFrontImageBlobUrl, clientSelfieBlobUrl)
-
-- [x] Update docs_description/clientFaceRecognition.md with liveness flow
-- [x] Implement runtime Azure env validation + clearer error reporting
-- [x] Accept optional JSON body on create-session route
-- [x] Run syntax check for touched files
-- [ ] Run critical-path API verification (curl) or confirm skip
-- [in-progress] Final review and handoff
+- [x] Add `modules/azure_notifications.py` helper for SAS token generation and Azure Hub REST dispatch with `httpx`.
+- [x] Convert `pushNotifications_sp` in `modules/pushNotifications.py` to async and call Azure dispatch after successful DB execution when `action == 1`.
+- [x] Update `routes_/pushNotification.py` so `/pushNotifications` route is async and awaits handler.
+- [x] Add `httpx` dependency to `requirements.txt`.
+- [x] Run a quick syntax/import verification.
