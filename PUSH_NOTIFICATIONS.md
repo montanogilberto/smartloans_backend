@@ -13,7 +13,11 @@ Push notification data is managed through three API endpoints exposed by FastAPI
   - Loads endpoint descriptions from `docs_description/*.txt`.
 - `modules/pushNotifications.py`
   - Implements DB calls and JSON response handling.
+  - Integrates Azure push dispatch for insert action flow.
   - Uses `connection()` from `databases.py`.
+- `modules/azure_notifications.py`
+  - Builds and sends Azure Notification Hub requests.
+  - Handles missing/invalid config checks and returns structured send results.
 - `docs_description/pushNotifications.txt`
 - `docs_description/pushNotifications_all.txt`
 - `docs_description/pushNotifications_one.txt`
@@ -38,23 +42,51 @@ File: `routes_/pushNotification.py`
 
 ```python
 @router.post("/pushNotifications", summary="pushNotifications CRUD", description=pushNotifications_docstring)
-def pushNotifications(json: dict):
-    return pushNotifications_sp(json)
+async def pushNotifications(json: dict):
+    return await pushNotifications_sp(json)
 ```
 
-**Handler function**  
+**Handler function (current behavior)**  
 File: `modules/pushNotifications.py`
 
 ```python
-def pushNotifications_sp(json_file: dict):
+async def pushNotifications_sp(json_file: dict):
     conn = None
     try:
         conn = connection()
         cursor = conn.cursor()
-        cursor.execute("EXEC [dbo].[sp_pushNotifications] @pjsonfile = %s", (json.dumps(json_file),))
+
+        # Accepts both wrapped and flat payload formats
+        # Wrapped: {"pushNotifications":[{...}]}
+        # Flat: {...} -> auto-wrapped for SP
+        if isinstance(json_file, dict) and isinstance(json_file.get("pushNotifications"), list):
+            sp_payload = json_file
+            payload_item = sp_payload["pushNotifications"][0] if sp_payload["pushNotifications"] else {}
+        else:
+            payload_item = json_file if isinstance(json_file, dict) else {}
+            sp_payload = {"pushNotifications": [payload_item]}
+
+        cursor.execute("EXEC [dbo].[sp_pushNotifications] @pjsonfile = %s", (json.dumps(sp_payload),))
         row = cursor.fetchone()
         json_result = row[0] if row else '{"message": "ok"}'
-        return JSONResponse(content=json.loads(json_result), status_code=200)
+        parsed_content = json.loads(json_result)
+
+        action = payload_item.get("action") if isinstance(payload_item, dict) else None
+        status_value = str(parsed_content.get("status", "")).lower() if isinstance(parsed_content, dict) else ""
+        is_success = status_value in {"success", "ok"}
+
+        # Azure push integration:
+        # Only when action==1 and SP reports success
+        if action == 1 and is_success:
+            title = payload_item.get("title", "New Notification")
+            message = payload_item.get("message", "")
+            target_user_id = payload_item.get("targetUserId")
+            azure_result = await send_azure_push(title, message, target_user_id)
+
+            # Logging is based on structured result:
+            # sent / skipped-unsent / legacy fallback
+            ...
+        return JSONResponse(content=parsed_content, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
     finally:
@@ -188,6 +220,62 @@ curl -X POST "https://smartloansbackend.azurewebsites.net/one_pushNotification" 
 
 ---
 
+## Azure Notification Hub Integration
+
+Azure push is triggered from `modules/pushNotifications.py` only when:
+
+- `action == 1` (insert path), and
+- Stored procedure response status is success-like (`success` / `ok`).
+
+### Azure sender function
+
+File: `modules/azure_notifications.py`
+
+`send_azure_push(title, message, target_user_id)` now returns a **structured result**:
+
+- Missing env configuration:
+  - `{"sent": False, "reason": "missing_config", "status_code": None}`
+- Invalid parsed connection-string parts:
+  - `{"sent": False, "reason": "invalid_connection_string", "status_code": None}`
+- Azure HTTP response received:
+  - `{"sent": True, "reason": "ok", "status_code": <2xx>, "response_text": "..."}`
+  - `{"sent": False, "reason": "azure_non_success_status", "status_code": <non-2xx>, "response_text": "..."}`
+
+Required environment variables:
+
+- `AZURE_NOTIFICATION_HUB_CONNECTION_STRING`
+- `AZURE_NOTIFICATION_HUB_NAME`
+- `AZURE_NOTIFICATION_HUB_FORMAT` (optional, default: `fcm`, legacy option: `gcm`)
+
+### Targeted Delivery Requirement (Important)
+
+Setting `ServiceBusNotification-Tags: user_<id>` only works if the mobile device is registered in Azure Notification Hub with the same tag.
+
+Example installation/registration tag set:
+
+```json
+{
+  "installationId": "device-installation-id",
+  "pushChannel": "fcm_device_token",
+  "tags": ["user_123"]
+}
+```
+
+If registrations/installations are missing or tags do not match, Azure may return success while delivering to `0` devices.
+
+### Push module logging semantics (updated)
+
+`modules/pushNotifications.py` logs based on structured Azure result:
+
+- Success:
+  - `[pushNotifications][module] Azure push sent successfully. {'status_code': ...}`
+- Skipped/unsent:
+  - `[pushNotifications][module] Azure push skipped/unsent. {'reason': 'missing_config'|'invalid_connection_string'|'azure_non_success_status', 'status_code': ...}`
+- Exception path:
+  - `[pushNotifications][module] Azure push failed: <error>`
+
+This prevents false-positive success logs when Azure push is skipped.
+
 ## Request/Response Behavior Summary
 
 ### Success responses
@@ -211,10 +299,35 @@ curl -X POST "https://smartloansbackend.azurewebsites.net/one_pushNotification" 
 2. Route function delegates to corresponding function in `modules/pushNotifications.py`.
 3. Module function:
    - opens DB connection
+   - normalizes payload shape for SP (`wrapped` or auto-wrapped from `flat`)
    - executes stored procedure with `@pjsonfile`
    - parses returned JSON text
+   - for insert-success flow (`action==1` + SP success), attempts Azure push
+   - logs Azure outcome using structured result
    - wraps response with FastAPI `JSONResponse`
 4. Connection is closed in `finally`.
+
+## Latest Verified Log Sample
+
+Validated log output for missing Azure configuration case:
+
+```text
+[pushNotifications][module] action: 1
+[pushNotifications][module] status_value: success
+[pushNotifications][module] is_success: True
+[pushNotifications][module] action==1 and SP success, preparing Azure push: {'title': 'Welcome!', 'message': 'This is your first notification.', 'targetUserId': 123}
+[azure_notifications] send_azure_push called. {'title': 'Welcome!', 'message_length': 32, 'target_user_id': 123}
+[azure_notifications] Missing AZURE_NOTIFICATION_HUB_CONNECTION_STRING or AZURE_NOTIFICATION_HUB_NAME. Skipping push.
+[pushNotifications][module] Azure push skipped/unsent. {'reason': 'missing_config', 'status_code': None}
+[pushNotifications][module] Returning parsed response: {'status': 'success', 'message': 'PushNotification(s) inserted successfully.', 'pushNotificationId': '4'}
+[pushNotifications][module] DB connection closed.
+[pushNotifications][route] Outgoing response prepared.
+```
+
+Interpretation:
+- Stored procedure succeeded.
+- Azure push was skipped due to missing config.
+- Logging is now accurate (`skipped/unsent`) and no longer reports false success.
 
 ## Notes for Maintenance
 
@@ -224,87 +337,6 @@ curl -X POST "https://smartloansbackend.azurewebsites.net/one_pushNotification" 
   - `docs_description/pushNotifications.txt`
   - `docs_description/pushNotifications_all.txt`
   - `docs_description/pushNotifications_one.txt`
-
-## Latest Validation Results
-
-The following tests were executed recently to validate the push notification flow end-to-end.
-
-### 1) Database-level stored procedure test (direct SQL)
-
-```sql
-DECLARE @jsonInput VARCHAR(MAX);
-
-SET @jsonInput = '{
-    "pushNotifications": [
-        {
-            "action": 1,
-            "companyId": 1,
-            "title": "Test Notification 🚀",
-            "message": "Hello from the new Azure integrated pipeline!",
-            "notificationType": "Info",
-            "priority": "Normal",
-            "targetType": "User",
-            "targetUserId": 123,
-            "isRead": 0,
-            "isSent": 0,
-            "targetRoleId": null,
-            "targetCompanyId": null,
-            "navigationRoute": null,
-            "sentAt": null,
-            "scheduledAt": null,
-            "payloadJson": null
-        }
-    ]
-}';
-
-EXEC [dbo].[sp_pushNotifications] @pjsonfile = @jsonInput;
-```
-
-Observed output:
-
-```json
-{
-  "status": "success",
-  "message": "PushNotification(s) inserted successfully.",
-  "pushNotificationId": "1"
-}
-```
-
-Interpretation:
-- Stored procedure path is operational for the tested payload.
-
-### 2) API-level test (`/pushNotifications`)
-
-```bash
-curl -X POST "http://0.0.0.0:8000/pushNotifications" \
-  -H "accept: application/json" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "action": 1,
-    "companyId": 1,
-    "title": "Test Notification 🚀",
-    "message": "Hello from the new Azure integrated pipeline!",
-    "notificationType": "Info",
-    "priority": "Normal",
-    "targetType": "User",
-    "targetUserId": 123,
-    "isRead": false,
-    "isSent": false
-  }'
-```
-
-Observed output:
-
-```json
-{
-  "status": "error",
-  "message": "Invalid companyId provided."
-}
-```
-
-Interpretation:
-- The API reached business validation logic and returned an application-level validation error.
-- This is not an infrastructure/import crash. It indicates request/company context validation should be checked.
 
 ## Troubleshooting / Dependency Compatibility
 
@@ -342,12 +374,18 @@ Use this checklist when validating push notifications in QA/UAT/production diagn
      - tenant/company scoping rules
      - payload transformation differences between API and direct SP call
 
-4. **Read-back verification**
+4. **Azure integration checks**
+   - Missing Azure env vars -> expect `skipped/unsent` with `missing_config`.
+   - Invalid connection string parts -> expect `skipped/unsent` with `invalid_connection_string`.
+   - Azure non-2xx response -> expect `skipped/unsent` with `azure_non_success_status`.
+   - Azure exception -> expect `Azure push failed` log.
+
+5. **Read-back verification**
    - Validate inserted record via:
      - `POST /all_pushNotifications`
      - `POST /one_pushNotification`
 
-5. **Error-path checks**
+6. **Error-path checks**
    - Invalid `companyId`
    - Missing required fields (`action`, `companyId`, `title`, etc.)
    - type mismatches (`isRead`/`isSent`, ID fields)
@@ -356,6 +394,7 @@ Use this checklist when validating push notifications in QA/UAT/production diagn
 
 - `routes_/pushNotification.py`
 - `modules/pushNotifications.py`
+- `modules/azure_notifications.py`
 - `docs_description/pushNotifications.txt`
 - `docs_description/pushNotifications_all.txt`
 - `docs_description/pushNotifications_one.txt`

@@ -9,10 +9,6 @@ import urllib.parse
 import httpx
 
 
-AZURE_CONNECTION_STRING = os.getenv("AZURE_NOTIFICATION_HUB_CONNECTION_STRING", "")
-AZURE_HUB_NAME = os.getenv("AZURE_NOTIFICATION_HUB_NAME", "")
-
-
 def parse_connection_string(conn_str: str):
     parts = dict(item.split("=", 1) for item in conn_str.split(";") if item)
     return parts.get("Endpoint"), parts.get("SharedAccessKeyName"), parts.get("SharedAccessKey")
@@ -40,11 +36,19 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
         "target_user_id": target_user_id,
     })
 
-    if not AZURE_CONNECTION_STRING or not AZURE_HUB_NAME:
+    # Load env vars at runtime (not import time)
+    connection_string = os.getenv("AZURE_NOTIFICATION_HUB_CONNECTION_STRING", "")
+    hub_name = os.getenv("AZURE_NOTIFICATION_HUB_NAME", "")
+    notification_format = os.getenv("AZURE_NOTIFICATION_HUB_FORMAT", "fcm").strip().lower() or "fcm"
+
+    print("[azure_notifications] Hub Name:", hub_name)
+    print("[azure_notifications] Connection String Loaded:", bool(connection_string))
+
+    if not connection_string or not hub_name:
         print("[azure_notifications] Missing AZURE_NOTIFICATION_HUB_CONNECTION_STRING or AZURE_NOTIFICATION_HUB_NAME. Skipping push.")
         return {"sent": False, "reason": "missing_config", "status_code": None}
 
-    endpoint, key_name, key = parse_connection_string(AZURE_CONNECTION_STRING)
+    endpoint, key_name, key = parse_connection_string(connection_string)
     print("[azure_notifications] Parsed connection settings.", {
         "has_endpoint": bool(endpoint),
         "has_key_name": bool(key_name),
@@ -55,29 +59,43 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
         return {"sent": False, "reason": "invalid_connection_string", "status_code": None}
 
     base_url = endpoint.replace("sb://", "https://").rstrip("/")
-    uri = f"{base_url}/{AZURE_HUB_NAME}/messages/"
+    uri = f"{base_url}/{hub_name}/messages/"
     url = f"{uri}?api-version=2015-01"
+
+    # Critical for SAS verification troubleshooting
+    print("[azure_notifications] URI SIGNED:", uri)
     print("[azure_notifications] Computed Azure URL:", url)
 
     token = generate_sas_token(uri, key_name, key)
     print("[azure_notifications] SAS token generated.")
 
-    payload = {
-        "notification": {"title": title, "body": message},
-        "data": {"title": title, "body": message},
-    }
-    print("[azure_notifications] Payload prepared.")
+    # Payload by format
+    if notification_format == "gcm":
+        payload = {
+            "notification": {"title": title, "body": message},
+            "data": {"title": title, "body": message},
+        }
+    else:
+        # default to modern Android-safe payload
+        notification_format = "fcm"
+        payload = {
+            "data": {"title": title, "body": message},
+        }
 
     headers = {
         "Authorization": token,
         "Content-Type": "application/json;charset=utf-8",
-        "ServiceBusNotification-Format": "gcm",
+        "ServiceBusNotification-Format": notification_format,
     }
 
     if target_user_id:
         headers["ServiceBusNotification-Tags"] = f"user_{target_user_id}"
-        print("[azure_notifications] Target tag applied.", {"tag": headers["ServiceBusNotification-Tags"]})
-    else:
+
+    print("[azure_notifications] Notification Format:", headers["ServiceBusNotification-Format"])
+    print("[azure_notifications] Tag:", headers.get("ServiceBusNotification-Tags"))
+    print("[azure_notifications] Payload:", json.dumps(payload))
+
+    if not target_user_id:
         print("[azure_notifications] No target_user_id provided; sending untagged notification.")
 
     try:
