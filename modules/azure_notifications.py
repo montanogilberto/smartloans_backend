@@ -16,17 +16,27 @@ def parse_connection_string(conn_str: str):
 
 
 def generate_sas_token(uri: str, sas_key_name: str, sas_key: str) -> str:
-    target_uri = urllib.parse.quote_plus(uri).lower()
-    expiry = int(time.time() + 3600)
-    to_sign = f"{target_uri}\n{expiry}"
+    encoded_uri = urllib.parse.quote_plus(uri.lower())
+    expiry = str(int(time.time() + 3600))
 
-    signature = base64.b64encode(
-        hmac.new(sas_key.encode("utf-8"), to_sign.encode("utf-8"), hashlib.sha256).digest()
-    ).decode("utf-8")
+    string_to_sign = encoded_uri + "\n" + expiry
+
+    signature = urllib.parse.quote_plus(
+        base64.b64encode(
+            hmac.new(
+                sas_key.encode("utf-8"),
+                string_to_sign.encode("utf-8"),
+                hashlib.sha256,
+            ).digest()
+        ).decode("utf-8")
+    )
 
     return (
-        f"SharedAccessSignature sig={urllib.parse.quote_plus(signature)}"
-        f"&se={expiry}&skn={sas_key_name}"
+        f"SharedAccessSignature "
+        f"sr={encoded_uri}"
+        f"&sig={signature}"
+        f"&se={expiry}"
+        f"&skn={sas_key_name}"
     )
 
 
@@ -83,6 +93,9 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
 
     token = generate_sas_token(uri, key_name, key)
     print("[azure_notifications] SAS token generated.")
+    print("[azure_notifications] KEY NAME:", key_name)
+    print("[azure_notifications] URI USED FOR SAS:", uri)
+    print("[azure_notifications] TOKEN PREVIEW:", token[:150] + "...")
 
     # Payload by format
     if notification_format == "gcm":
