@@ -104,10 +104,12 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
             "data": {"title": title, "body": message},
         }
     else:
-        # default to modern Android-safe payload
+        # default to FCM body expected by Azure Notification Hub
         notification_format = "fcm"
         payload = {
-            "data": {"title": title, "body": message},
+            "message": {
+                "notification": {"title": title, "body": message}
+            }
         }
 
     headers = {
@@ -129,11 +131,13 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             print("[azure_notifications] Sending POST request to Azure Notification Hub...")
-            response = await client.post(url, headers=headers, content=json.dumps(payload))
+            response = await client.post(url, headers=headers, json=payload)
             print("[azure_notifications] Azure response received.", {
                 "status_code": response.status_code,
                 "response_text": response.text[:500] if response.text else "",
             })
+            print("[azure_notifications] RESPONSE HEADERS:", dict(response.headers))
+            print("[azure_notifications] RESPONSE BODY:", response.text[:1000] if response.text else "")
             is_sent = 200 <= response.status_code < 300
             return {
                 "sent": is_sent,
