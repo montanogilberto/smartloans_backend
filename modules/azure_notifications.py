@@ -98,21 +98,24 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
     print("[azure_notifications] TOKEN PREVIEW:", token[:150] + "...")
 
     # Payload by format
-    if notification_format == "gcm":
+    if notification_format == "fcm":
         payload = {
-            "notification": {"title": title, "body": message},
-            "data": {"title": title, "body": message},
+            "message": {
+                "notification": {"title": title, "body": message}
+            }
         }
     else:
-        # default to legacy NH + FCM compatible body
-        notification_format = "fcm"
+        # default to Azure NH legacy-compatible Android payload
+        notification_format = "gcm"
         payload = {
-            "data": {"title": title, "body": message},
+            "title": title,
+            "body": message,
+            "targetUserId": str(target_user_id) if target_user_id else "",
         }
 
     headers = {
         "Authorization": token,
-        "Content-Type": "application/json",
+        "Content-Type": "application/json;charset=utf-8",
         "ServiceBusNotification-Format": notification_format,
     }
 
