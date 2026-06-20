@@ -116,7 +116,7 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
     headers = {
         "Authorization": token,
         "Content-Type": "application/json;charset=utf-8",
-        "ServiceBusNotification-Format": notification_format,
+        "ServiceBusNotification-Format": "fcmv1",
     }
 
     if target_user_id:
