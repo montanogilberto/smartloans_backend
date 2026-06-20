@@ -5,6 +5,7 @@ import json
 import os
 import time
 import urllib.parse
+import socket
 
 import httpx
 
@@ -58,13 +59,27 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
         print("[azure_notifications] Invalid connection string parts. Skipping push.")
         return {"sent": False, "reason": "invalid_connection_string", "status_code": None}
 
+    endpoint = (endpoint or "").strip().strip('"').strip("'")
+    hub_name = (hub_name or "").strip().strip('"').strip("'")
     base_url = endpoint.replace("sb://", "https://").rstrip("/")
     uri = f"{base_url}/{hub_name}/messages/"
     url = f"{uri}?api-version=2015-01"
 
-    # Critical for SAS verification troubleshooting
+    # Critical diagnostics for SAS/network troubleshooting
+    print("[azure_notifications] ENDPOINT RAW:", repr(endpoint))
+    print("[azure_notifications] BASE URL RAW:", repr(base_url))
+    print("[azure_notifications] URL RAW:", repr(url))
     print("[azure_notifications] URI SIGNED:", uri)
     print("[azure_notifications] Computed Azure URL:", url)
+
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname
+    print("[azure_notifications] HOST:", host)
+    try:
+        dns_ip = socket.gethostbyname(host) if host else None
+        print("[azure_notifications] DNS:", dns_ip)
+    except Exception as dns_error:
+        print("[azure_notifications] DNS ERROR:", str(dns_error))
 
     token = generate_sas_token(uri, key_name, key)
     print("[azure_notifications] SAS token generated.")
