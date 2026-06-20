@@ -104,17 +104,15 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
             "data": {"title": title, "body": message},
         }
     else:
-        # default to FCM body expected by Azure Notification Hub
+        # default to legacy NH + FCM compatible body
         notification_format = "fcm"
         payload = {
-            "message": {
-                "notification": {"title": title, "body": message}
-            }
+            "data": {"title": title, "body": message},
         }
 
     headers = {
         "Authorization": token,
-        "Content-Type": "application/json;charset=utf-8",
+        "Content-Type": "application/json",
         "ServiceBusNotification-Format": notification_format,
     }
 
@@ -131,7 +129,9 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             print("[azure_notifications] Sending POST request to Azure Notification Hub...")
-            response = await client.post(url, headers=headers, json=payload)
+            print("[azure_notifications] HEADERS:", headers)
+            print("[azure_notifications] BODY:", json.dumps(payload))
+            response = await client.post(url, headers=headers, content=json.dumps(payload))
             print("[azure_notifications] Azure response received.", {
                 "status_code": response.status_code,
                 "response_text": response.text[:500] if response.text else "",
