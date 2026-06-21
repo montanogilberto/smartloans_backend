@@ -1,10 +1,8 @@
-# TODO - WhatsApp and SMS Module/Router Doc Descriptions
+# TODO - Push Device Registration Endpoint (Azure Notification Hub)
 
-- [x] Review existing WhatsApp/SMS routes and module implementation.
-- [x] Review existing doc descriptions for ticket SMS/WhatsApp.
-- [x] Create `WHATSAPP_SMS_MODULE_ROUTER_DOC_DESCRIPTIONS.md` with:
-  - [x] Module section (`modules/ticket_notifications.py`)
-  - [x] Router section (`routes_/tickets.py`, `routes_/whatsapp.py`)
-  - [x] Doc descriptions section (`docs_description/tickets_send_sms.txt`, `docs_description/tickets_send_whatsapp.txt`)
-  - [x] Env var requirements and request payload details
-- [x] Mark TODO as complete after file creation.
+- [x] Review existing push notification route/module/azure helper integration.
+- [x] Add Azure NH installation registration helper in `modules/azure_notifications.py`.
+- [x] Add backend handler in `modules/pushNotifications.py` for `registerDevice`.
+- [x] Add route `POST /registerDevice` in `routes_/pushNotification.py`.
+- [x] Add endpoint description file `docs_description/registerDevice.txt`.
+- [ ] Run syntax check for updated Python files.

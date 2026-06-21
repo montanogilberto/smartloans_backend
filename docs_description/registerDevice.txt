@@ -1,0 +1,18 @@
+Registers a mobile device token in Azure Notification Hub so push notifications can be targeted by user tag.
+
+Request body (JSON):
+{
+  "userId": 123,
+  "token": "fcm_or_apns_device_token",
+  "platform": "android" // or "ios"
+}
+
+Behavior:
+- Validates required fields: userId, token, platform.
+- Maps platform to Azure NH installation platform:
+  - android -> fcmv1
+  - ios -> apns
+- Creates/updates an Azure Notification Hub Installation with:
+  - pushChannel = token
+  - tags includes user_{userId}
+- Returns success/error details including upstream status code when available.

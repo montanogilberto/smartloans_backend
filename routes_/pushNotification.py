@@ -1,5 +1,10 @@
 from fastapi import APIRouter
-from modules.pushNotifications import pushNotifications_sp, all_pushNotifications_sp, one_pushNotifications_sp
+from modules.pushNotifications import (
+    pushNotifications_sp,
+    all_pushNotifications_sp,
+    one_pushNotifications_sp,
+    register_device_sp,
+)
 
 
 router = APIRouter()
@@ -26,3 +31,13 @@ with open("./docs_description/pushNotifications_one.txt", "r") as file:
 @router.post("/one_pushNotification", summary="one pushNotification", description=pushNotifications_one_docstring)
 def one_pushNotification(json: dict):
     return one_pushNotifications_sp(json)
+
+
+with open("./docs_description/registerDevice.txt", "r") as file:
+    register_device_docstring = file.read()
+@router.post("/registerDevice", summary="register device token", description=register_device_docstring)
+async def registerDevice(json: dict):
+    print("[pushNotifications][route][registerDevice] Incoming request payload:", json)
+    response = await register_device_sp(json)
+    print("[pushNotifications][route][registerDevice] Outgoing response prepared.")
+    return response

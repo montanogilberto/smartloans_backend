@@ -1,6 +1,6 @@
 from fastapi.responses import JSONResponse
 from databases import connection
-from modules.azure_notifications import send_azure_push
+from modules.azure_notifications import send_azure_push, register_device_token
 import json
 
 
@@ -119,6 +119,54 @@ def all_pushNotifications_sp(json_file: dict):
     finally:
         if conn:
             conn.close()
+
+
+async def register_device_sp(json_file: dict):
+    try:
+        print("[pushNotifications][registerDevice] Handler started.")
+        print("[pushNotifications][registerDevice] Payload received:", json_file)
+
+        user_id = json_file.get("userId") if isinstance(json_file, dict) else None
+        token = json_file.get("token") if isinstance(json_file, dict) else None
+        platform = json_file.get("platform") if isinstance(json_file, dict) else None
+
+        if user_id is None or token is None or platform is None:
+            return JSONResponse(
+                content={
+                    "status": "error",
+                    "message": "Missing required fields: userId, token, platform",
+                },
+                status_code=400,
+            )
+
+        result = await register_device_token(user_id=user_id, token=token, platform=platform)
+
+        if result.get("success"):
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "message": "Device registered successfully.",
+                    "installationId": result.get("installationId"),
+                },
+                status_code=200,
+            )
+
+        status_code = result.get("status_code") or 500
+        if status_code < 400:
+            status_code = 500
+
+        return JSONResponse(
+            content={
+                "status": "error",
+                "message": "Device registration failed.",
+                "reason": result.get("reason"),
+                "details": result.get("response_text") or result.get("error"),
+            },
+            status_code=status_code,
+        )
+    except Exception as e:
+        print("[pushNotifications][registerDevice] Exception raised:", str(e))
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
 def one_pushNotifications_sp(json_file: dict):
