@@ -1,0 +1,5 @@
+Returns a single pushNotification record by its primary key via sp_pushNotifications_one.
+Stored procedure: EXEC [dbo].[sp_pushNotifications_one] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/one_pushNotification"   -H "Content-Type: application/json"   -d '{"companyId":1,"pushNotificationId":1}'

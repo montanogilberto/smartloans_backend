@@ -1,0 +1,5 @@
+Performs INSERT, UPDATE, or DELETE on the pushNotifications table via sp_pushNotifications.
+Stored procedure: EXEC [dbo].[sp_pushNotifications] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/pushNotifications"   -H "Content-Type: application/json"   -d '{"action":1,"companyId":1,"title":"Welcome!","message":"This is your first notification.","notificationType":"Info","priority":"Normal","targetType":"User","targetUserId":123,"isRead":false,"isSent":false}'

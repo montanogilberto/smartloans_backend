@@ -1,0 +1,5 @@
+Returns all pushNotifications records for the given company filtered by companyId via sp_pushNotifications_all.
+Stored procedure: EXEC [dbo].[sp_pushNotifications_all] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/all_pushNotifications"   -H "Content-Type: application/json"   -d '{"pushNotifications":[{"companyId":1}]}'
