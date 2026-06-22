@@ -2,12 +2,23 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 import urllib.parse
 import socket
 
 import httpx
+
+logger = logging.getLogger("azure_notifications")
+
+# Set AZURE_NOTIFICATION_DEBUG=true to enable verbose logging (never in production).
+_DEBUG = os.getenv("AZURE_NOTIFICATION_DEBUG", "false").strip().lower() == "true"
+
+
+def _dbg(msg, *args):
+    if _DEBUG:
+        logger.debug(msg, *args)
 
 
 def parse_connection_string(conn_str: str):
@@ -55,12 +66,61 @@ def _build_installation_id(user_id, token: str, platform: str) -> str:
     return f"u{user_id}_{digest[:32]}"
 
 
+def _build_payload_and_format(fmt: str, title: str, message: str, target_user_id) -> tuple[dict, str]:
+    """Return (payload, nh_format_header) for a given send format."""
+    if fmt == "fcmv1":
+        return (
+            {"message": {
+                "notification": {"title": title, "body": message},
+                "android": {"notification": {"channel_id": "push_notifications", "sound": "default"}},
+            }},
+            "fcmv1",
+        )
+    if fmt == "apns":
+        return (
+            {"aps": {"alert": {"title": title, "body": message}}},
+            "apple",
+        )
+    # gcm legacy fallback
+    return (
+        {"data": {"title": title, "body": message,
+                  "targetUserId": str(target_user_id) if target_user_id else ""}},
+        "gcm",
+    )
+
+
+async def _send_single(url: str, sas_token: str, fmt: str, payload: dict,
+                       target_user_id) -> dict:
+    nh_format = fmt  # already the NH header value
+    headers = {
+        "Authorization": sas_token,
+        "Content-Type": "application/json;charset=utf-8",
+        "ServiceBusNotification-Format": nh_format,
+    }
+    if target_user_id:
+        headers["ServiceBusNotification-Tags"] = f"user_{target_user_id}"
+
+    _dbg("[azure_notifications] Sending %s push. tag=user_%s", nh_format, target_user_id)
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, headers=headers, content=json.dumps(payload))
+            is_sent = 200 <= response.status_code < 300
+            logger.info("[azure_notifications] %s → %s", nh_format, response.status_code)
+            return {
+                "format": nh_format,
+                "sent": is_sent,
+                "reason": "ok" if is_sent else "azure_non_success_status",
+                "status_code": response.status_code,
+            }
+    except Exception as e:
+        logger.error("[azure_notifications] Exception sending %s push: %s", nh_format, e)
+        return {"format": nh_format, "sent": False, "reason": "request_exception",
+                "status_code": 500, "error": str(e)}
+
+
 async def register_device_token(user_id, token: str, platform: str):
-    print("[azure_notifications] register_device_token called.", {
-        "user_id": user_id,
-        "token_length": len(token) if isinstance(token, str) else None,
-        "platform": platform,
-    })
+    logger.info("[azure_notifications] register_device_token. user_id=%s platform=%s", user_id, platform)
 
     if user_id is None or not str(user_id).strip():
         return {"success": False, "reason": "missing_user_id", "status_code": 400}
@@ -86,9 +146,8 @@ async def register_device_token(user_id, token: str, platform: str):
     base_url = endpoint.replace("sb://", "https://").rstrip("/")
 
     installation_id = _build_installation_id(user_id, token, nh_platform)
-    api_version = "2020-06"
     uri = f"{base_url}/{hub_name}/installations/{installation_id}"
-    url = f"{uri}?api-version={api_version}"
+    url = f"{uri}?api-version=2020-06"
 
     sas_token = generate_sas_token(uri, key_name, key)
 
@@ -100,22 +159,22 @@ async def register_device_token(user_id, token: str, platform: str):
         "tags": tags,
     }
 
-    headers = {
-        "Authorization": sas_token,
-        "Content-Type": "application/json; charset=utf-8",
-    }
-
-    print("[azure_notifications] Registering installation.", {
-        "url": url,
-        "installation_id": installation_id,
-        "platform": nh_platform,
-        "tags": tags,
-    })
+    logger.info("[azure_notifications] Registering installation. id=%s platform=%s tags=%s",
+                installation_id, nh_platform, tags)
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.put(url, headers=headers, content=json.dumps(payload))
+            response = await client.put(
+                url,
+                headers={
+                    "Authorization": sas_token,
+                    "Content-Type": "application/json; charset=utf-8",
+                },
+                content=json.dumps(payload),
+            )
             success = 200 <= response.status_code < 300
+            logger.info("[azure_notifications] Installation %s → %s",
+                        installation_id, response.status_code)
             return {
                 "success": success,
                 "reason": "ok" if success else "azure_non_success_status",
@@ -124,7 +183,7 @@ async def register_device_token(user_id, token: str, platform: str):
                 "installationId": installation_id,
             }
     except Exception as error:
-        print("[azure_notifications] Exception while registering device:", str(error))
+        logger.error("[azure_notifications] Exception registering device: %s", error)
         return {
             "success": False,
             "reason": "request_exception",
@@ -134,32 +193,27 @@ async def register_device_token(user_id, token: str, platform: str):
 
 
 async def send_azure_push(title: str, message: str, target_user_id: int = None):
-    print("[azure_notifications] send_azure_push called.", {
-        "title": title,
-        "message_length": len(message) if isinstance(message, str) else None,
-        "target_user_id": target_user_id,
-    })
+    logger.info("[azure_notifications] send_azure_push. title=%r user_id=%s", title, target_user_id)
 
-    # Load env vars at runtime (not import time)
     connection_string = os.getenv("AZURE_NOTIFICATION_HUB_CONNECTION_STRING", "")
     hub_name = os.getenv("AZURE_NOTIFICATION_HUB_NAME", "")
-    notification_format = os.getenv("AZURE_NOTIFICATION_HUB_FORMAT", "fcm").strip().lower() or "fcm"
 
-    print("[azure_notifications] Hub Name:", hub_name)
-    print("[azure_notifications] Connection String Loaded:", bool(connection_string))
+    # AZURE_NOTIFICATION_HUB_FORMAT controls which platforms to send to:
+    #   fcmv1  → Android only (default)
+    #   apns   → iOS only
+    #   all    → both Android (fcmv1) and iOS (apns)
+    #   gcm    → legacy GCM fallback
+    notification_format = os.getenv("AZURE_NOTIFICATION_HUB_FORMAT", "fcmv1").strip().lower() or "fcmv1"
+
+    logger.info("[azure_notifications] Hub=%s format=%s", hub_name, notification_format)
 
     if not connection_string or not hub_name:
-        print("[azure_notifications] Missing AZURE_NOTIFICATION_HUB_CONNECTION_STRING or AZURE_NOTIFICATION_HUB_NAME. Skipping push.")
+        logger.warning("[azure_notifications] Missing hub config. Skipping push.")
         return {"sent": False, "reason": "missing_config", "status_code": None}
 
     endpoint, key_name, key = parse_connection_string(connection_string)
-    print("[azure_notifications] Parsed connection settings.", {
-        "has_endpoint": bool(endpoint),
-        "has_key_name": bool(key_name),
-        "has_key": bool(key),
-    })
     if not endpoint or not key_name or not key:
-        print("[azure_notifications] Invalid connection string parts. Skipping push.")
+        logger.warning("[azure_notifications] Invalid connection string. Skipping push.")
         return {"sent": False, "reason": "invalid_connection_string", "status_code": None}
 
     endpoint = (endpoint or "").strip().strip('"').strip("'")
@@ -168,79 +222,23 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
     uri = f"{base_url}/{hub_name}/messages/"
     url = f"{uri}?api-version=2015-01"
 
-    # Critical diagnostics for SAS/network troubleshooting
-    print("[azure_notifications] ENDPOINT RAW:", repr(endpoint))
-    print("[azure_notifications] BASE URL RAW:", repr(base_url))
-    print("[azure_notifications] URL RAW:", repr(url))
-    print("[azure_notifications] URI SIGNED:", uri)
-    print("[azure_notifications] Computed Azure URL:", url)
+    sas_token = generate_sas_token(uri, key_name, key)
 
-    parsed = urllib.parse.urlparse(url)
-    host = parsed.hostname
-    print("[azure_notifications] HOST:", host)
-    try:
-        dns_ip = socket.gethostbyname(host) if host else None
-        print("[azure_notifications] DNS:", dns_ip)
-    except Exception as dns_error:
-        print("[azure_notifications] DNS ERROR:", str(dns_error))
-
-    token = generate_sas_token(uri, key_name, key)
-    print("[azure_notifications] SAS token generated.")
-    print("[azure_notifications] KEY NAME:", key_name)
-    print("[azure_notifications] URI USED FOR SAS:", uri)
-    print("[azure_notifications] TOKEN PREVIEW:", token[:150] + "...")
-
-    # Payload by format
-    if notification_format == "fcm":
-        payload = {
-            "message": {
-                "notification": {"title": title, "body": message}
-            }
-        }
+    # Determine which formats to send
+    if notification_format == "all":
+        formats = ["fcmv1", "apns"]
     else:
-        # default to Azure NH legacy-compatible Android payload
-        notification_format = "gcm"
-        payload = {
-            "title": title,
-            "body": message,
-            "targetUserId": str(target_user_id) if target_user_id else "",
-        }
+        formats = [notification_format]
 
-    headers = {
-        "Authorization": token,
-        "Content-Type": "application/json;charset=utf-8",
-        "ServiceBusNotification-Format": "fcmv1",
+    results = []
+    for fmt in formats:
+        payload, nh_header = _build_payload_and_format(fmt, title, message, target_user_id)
+        result = await _send_single(url, sas_token, nh_header, payload, target_user_id)
+        results.append(result)
+
+    any_sent = any(r["sent"] for r in results)
+    return {
+        "sent": any_sent,
+        "reason": "ok" if any_sent else "all_failed",
+        "results": results,
     }
-
-    if target_user_id:
-        headers["ServiceBusNotification-Tags"] = f"user_{target_user_id}"
-
-    print("[azure_notifications] Notification Format:", headers["ServiceBusNotification-Format"])
-    print("[azure_notifications] Tag:", headers.get("ServiceBusNotification-Tags"))
-    print("[azure_notifications] Payload:", json.dumps(payload))
-
-    if not target_user_id:
-        print("[azure_notifications] No target_user_id provided; sending untagged notification.")
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            print("[azure_notifications] Sending POST request to Azure Notification Hub...")
-            print("[azure_notifications] HEADERS:", headers)
-            print("[azure_notifications] BODY:", json.dumps(payload))
-            response = await client.post(url, headers=headers, content=json.dumps(payload))
-            print("[azure_notifications] Azure response received.", {
-                "status_code": response.status_code,
-                "response_text": response.text[:500] if response.text else "",
-            })
-            print("[azure_notifications] RESPONSE HEADERS:", dict(response.headers))
-            print("[azure_notifications] RESPONSE BODY:", response.text[:1000] if response.text else "")
-            is_sent = 200 <= response.status_code < 300
-            return {
-                "sent": is_sent,
-                "reason": "ok" if is_sent else "azure_non_success_status",
-                "status_code": response.status_code,
-                "response_text": response.text[:500] if response.text else "",
-            }
-    except Exception as e:
-        print("[azure_notifications] Exception while sending push:", str(e))
-        raise

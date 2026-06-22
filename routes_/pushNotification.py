@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from security.worker_key import require_worker_key
 from modules.pushNotifications import (
     pushNotifications_sp,
     all_pushNotifications_sp,
@@ -35,7 +36,8 @@ def one_pushNotification(json: dict):
 
 with open("./docs_description/registerDevice.txt", "r") as file:
     register_device_docstring = file.read()
-@router.post("/registerDevice", summary="register device token", description=register_device_docstring)
+@router.post("/registerDevice", summary="register device token", description=register_device_docstring,
+             dependencies=[Depends(require_worker_key)])
 async def registerDevice(json: dict):
     print("[pushNotifications][route][registerDevice] Incoming request payload:", json)
     response = await register_device_sp(json)
