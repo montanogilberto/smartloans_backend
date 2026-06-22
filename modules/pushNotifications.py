@@ -59,23 +59,12 @@ async def pushNotifications_sp(json_file: dict):
 
                 if isinstance(azure_result, dict):
                     if azure_result.get("sent") is True:
-                        print(
-                            "[pushNotifications][module] Azure push sent successfully.",
-                            {"status_code": azure_result.get("status_code")}
-                        )
+                        print("[pushNotifications][module] Azure push sent successfully.",
+                              {"results": azure_result.get("results")})
                     else:
-                        print(
-                            "[pushNotifications][module] Azure push skipped/unsent.",
-                            {
-                                "reason": azure_result.get("reason"),
-                                "status_code": azure_result.get("status_code"),
-                            }
-                        )
-                else:
-                    print(
-                        "[pushNotifications][module] Azure push result received in legacy format.",
-                        {"result": azure_result}
-                    )
+                        print("[pushNotifications][module] Azure push skipped/unsent.",
+                              {"reason": azure_result.get("reason"),
+                               "results": azure_result.get("results")})
             except Exception as azure_error:
                 print("[pushNotifications][module] Azure push failed:", str(azure_error))
         elif action == 1:

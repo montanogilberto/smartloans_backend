@@ -1,5 +1,8 @@
 Registers a mobile device token in Azure Notification Hub so push notifications can be targeted by user tag.
 
+Required header:
+  x-worker-key: <WORKER_KEY>
+
 Request body (JSON):
 {
   "userId": 123,
