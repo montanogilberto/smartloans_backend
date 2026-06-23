@@ -16,3 +16,4 @@ python-dotenv==1.0.1
 azure-storage-blob==12.22.0
 httpx
 stripe~=15.2.1
+python-dateutil~=2.9.0
