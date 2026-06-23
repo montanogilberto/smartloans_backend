@@ -15,6 +15,8 @@ from routes_ import (
     mlSearchRuns, mlJobs, routes_ml_proxy, cashRegister, companies, companiesBranches, productCategories,
     supplier, loan, clientFaceRecognition,
     pushNotification,
+    loanProposals, loanOffers, stripe_payments,
+    creditScore, walletBalance, automatedPayments, signatureUpload,
 )
 
 app = FastAPI(
@@ -132,6 +134,13 @@ app.include_router(supplier.router)
 app.include_router(loan.router)
 app.include_router(clientFaceRecognition.router)
 app.include_router(pushNotification.router)
+app.include_router(loanProposals.router)
+app.include_router(loanOffers.router)
+app.include_router(stripe_payments.router)
+app.include_router(creditScore.router)
+app.include_router(walletBalance.router)
+app.include_router(automatedPayments.router)
+app.include_router(signatureUpload.router)
 
 # --------------------------------------------------
 # Local development only
