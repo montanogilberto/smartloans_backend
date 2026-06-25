@@ -1,8 +1,7 @@
-# TODO - Push Device Registration Endpoint (Azure Notification Hub)
+# TODO - Twilio WhatsApp Webhook / Status Callback Hardening
 
-- [x] Review existing push notification route/module/azure helper integration.
-- [x] Add Azure NH installation registration helper in `modules/azure_notifications.py`.
-- [x] Add backend handler in `modules/pushNotifications.py` for `registerDevice`.
-- [x] Add route `POST /registerDevice` in `routes_/pushNotification.py`.
-- [x] Add endpoint description file `docs_description/registerDevice.txt`.
+- [x] Review current Twilio/WhatsApp routes and send flow (`routes_/whatsapp.py`, `modules/whatsapp.py`, `modules/ticket_notifications.py`).
+- [x] Update `routes_/whatsapp.py` to support Twilio form payloads and return safe HTTP 200 TwiML.
+- [x] Add status callback endpoint in `routes_/whatsapp.py` that always responds HTTP 200.
+- [x] Update `modules/ticket_notifications.py` to optionally send `status_callback` URL from environment.
 - [ ] Run syntax check for updated Python files.
