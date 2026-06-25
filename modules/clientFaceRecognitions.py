@@ -132,7 +132,7 @@ async def create_azure_liveness_session() -> JSONResponse:
                 status_code=500,
             )
 
-        endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify"
+        endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/detectLivenessWithVerify/singleModal/sessions"
         body = {
             "livenessOperationMode": "PassiveAndActive",
             "deviceCorrelationId": str(uuid.uuid4()),
@@ -199,7 +199,7 @@ async def verify_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
                 status_code=500,
             )
 
-        result_endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify/" + azure_session_id
+        result_endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/detectLivenessWithVerify/singleModal/sessions/" + azure_session_id
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.get(result_endpoint, headers=face_headers)
