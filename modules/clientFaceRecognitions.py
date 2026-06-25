@@ -66,7 +66,7 @@ def one_clientFaceRecognitions_sp(json_file: dict):
 _CONFIDENCE_THRESHOLD = 0.6
 _CLIENTS_CONTAINER    = os.getenv("CLIENTS_CONTAINER_NAME", "clients")
 _ACCOUNT_URL_FALLBACK = os.getenv("AZURE_STORAGE_ACCOUNT_URL_FALLBACK", "")
-_LIVENESS_API_VERSION = os.getenv("AZURE_FACE_LIVENESS_API_VERSION", "v1.1-preview.1")
+_LIVENESS_API_VERSION = os.getenv("AZURE_FACE_LIVENESS_API_VERSION", "v1.1-preview.1").strip('"').strip("'")
 
 
 def _get_face_config():
