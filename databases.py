@@ -23,13 +23,17 @@ class SafeCursor:
             and "@pjsonfile" in query.lower()
         ):
             json_val = args[0]
-            # Use DECLARE + SET to avoid FreeTDS large-string buffer bug
+            # Use DECLARE + SET to avoid FreeTDS large-string buffer bug.
+            # pymssql uses %s placeholders, so pass the value inline after
+            # escaping single quotes (no user-controlled injection risk here —
+            # this is always a JSON string built internally).
+            escaped = json_val.replace("'", "''")
             safe_sql = (
-                "DECLARE @_json NVARCHAR(MAX);\n"
-                "SET @_json = ?;\n"
+                f"DECLARE @_json NVARCHAR(MAX);\n"
+                f"SET @_json = N'{escaped}';\n"
                 + query.replace("%s", "@_json")
             )
-            return self._cursor.execute(safe_sql, (json_val,))
+            return self._cursor.execute(safe_sql)
 
         # All other queries pass through unchanged
         if args is not None:

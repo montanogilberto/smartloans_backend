@@ -102,7 +102,7 @@ BROWSER_HEADERS: Dict[str, str] = {
 # ✅ WORKER-ONLY: product unify -> items
 # GET /ml/products/{product_id}/items
 # ============================================================
-@router.get("/products/{product_id}/items")
+@router.get("/products/{product_id}/items", operation_id="routes_ml_product_items_proxy")
 def ml_product_items_proxy(
     request: Request,
     product_id: str,
@@ -183,7 +183,7 @@ def ml_items_bulk_proxy(
 # ============================================================
 # Debug: whoami (public or protect—tú decides)
 # ============================================================
-@router.get("/whoami")
+@router.get("/whoami", operation_id="routes_ml_whoami")
 def ml_whoami(request: Request):
     rid = request.headers.get("x-request-id") or _req_id()
 
@@ -206,7 +206,7 @@ def ml_whoami(request: Request):
 # ============================================================
 # Debug: public ping
 # ============================================================
-@router.get("/public_ping")
+@router.get("/public_ping", operation_id="routes_ml_public_ping")
 def public_ping(request: Request):
     rid = request.headers.get("x-request-id") or _req_id()
     r = requests.get("https://api.mercadolibre.com/currencies", timeout=15)
