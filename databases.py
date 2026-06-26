@@ -1,55 +1,97 @@
 import os
+import json
 import pymssql
+
+
+class SafeCursor:
+    """
+    Cursor wrapper that rewrites EXEC SP @pjsonfile = %s calls to use
+    a DECLARE + SET pattern, bypassing the FreeTDS tds_dataout_stream_write
+    assertion crash that occurs with large NVARCHAR(MAX) parameters.
+    """
+
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def execute(self, query: str, args=None):
+        # Intercept single-param EXEC ... @pjsonfile = %s calls
+        if (
+            args
+            and len(args) == 1
+            and isinstance(args[0], str)
+            and "%s" in query
+            and "@pjsonfile" in query.lower()
+        ):
+            json_val = args[0]
+            # Use DECLARE + SET to avoid FreeTDS large-string buffer bug.
+            # pymssql uses %s placeholders, so pass the value inline after
+            # escaping single quotes (no user-controlled injection risk here —
+            # this is always a JSON string built internally).
+            escaped = json_val.replace("'", "''")
+            safe_sql = (
+                f"DECLARE @_json NVARCHAR(MAX);\n"
+                f"SET @_json = N'{escaped}';\n"
+                + query.replace("%s", "@_json")
+            )
+            return self._cursor.execute(safe_sql)
+
+        # All other queries pass through unchanged
+        if args is not None:
+            return self._cursor.execute(query, args)
+        return self._cursor.execute(query)
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    def close(self):
+        return self._cursor.close()
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
 
 
 class DatabaseConnection:
     """
-    Wrapper class for pymssql.Connection that adds server and database properties.
-    This is needed because pymssql connections don't expose these attributes directly.
+    Wrapper around pymssql.Connection.
+    Returns SafeCursor from .cursor() to avoid FreeTDS large-payload crash.
     """
-    
+
     def __init__(self, conn: pymssql.Connection, server: str, database: str):
         self._conn = conn
         self._server = server
         self._database = database
-    
+
     @property
     def server(self) -> str:
-        """Server address."""
         return self._server
-    
+
     @property
     def database(self) -> str:
-        """Database name."""
         return self._database
-    
+
     def cursor(self):
-        """Return a cursor object."""
-        return self._conn.cursor()
-    
+        return SafeCursor(self._conn.cursor())
+
     def close(self):
-        """Close the connection."""
         return self._conn.close()
-    
+
     def commit(self):
-        """Commit the current transaction."""
         return self._conn.commit()
-    
+
     def rollback(self):
-        """Rollback the current transaction."""
         return self._conn.rollback()
-    
+
     def __enter__(self):
-        """Context manager entry."""
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
         self.close()
         return False
-    
+
     def __getattr__(self, name):
-        """Forward any other attribute access to the underlying connection."""
         return getattr(self._conn, name)
 
 
@@ -79,6 +121,9 @@ def connection():
         "user": username,
         "password": password,
         "autocommit": True,
+        "charset": "UTF-8",
+        "login_timeout": 10,
+        "timeout": 30,
     }
 
     try:
