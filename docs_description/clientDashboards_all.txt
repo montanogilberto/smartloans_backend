@@ -1,0 +1,1 @@
+Get all client dashboard entries for a company/client
