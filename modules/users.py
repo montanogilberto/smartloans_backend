@@ -68,67 +68,137 @@ def users_sp(json_file: dict):
             pass
 
 
-def send_verification_code(json_file: dict):
-    """Generate a 6-digit OTP, send it to the given email, store in memory for 10 min."""
+def _send_email_otp(target: str, code: str):
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    msg = MIMEMultipart()
+    msg["From"]    = _SENDER_EMAIL
+    msg["To"]      = target
+    msg["Subject"] = "Código de verificación — SmartLoans"
+    body = (
+        f"Tu código de verificación es:\n\n"
+        f"  {code}\n\n"
+        f"Ingresa este código en la pantalla de registro. Expira en 10 minutos."
+    )
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP(_SMTP_SERVER, _SMTP_PORT) as server:
+        server.starttls(context=ctx)
+        server.login(_SENDER_EMAIL, _SENDER_PWD)
+        server.sendmail(_SENDER_EMAIL, target, msg.as_string())
+
+
+def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False):
+    """Send OTP via Twilio SMS or WhatsApp. Requires TWILIO_* env vars."""
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    from_number = os.environ.get("TWILIO_FROM", "")
+    if not account_sid or not auth_token or not from_number:
+        raise ValueError("Twilio credentials not configured (set TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM)")
     try:
-        email = json_file.get("email", "").strip().lower()
-        if not email:
-            return JSONResponse(content={"error": "email is required"}, status_code=400)
+        from twilio.rest import Client as TwilioClient
+    except ImportError:
+        raise ValueError("twilio package not installed — run: pip install twilio")
+    client = TwilioClient(account_sid, auth_token)
+    to_num = f"whatsapp:{phone}" if via_whatsapp else phone
+    fr_num = f"whatsapp:{from_number}" if via_whatsapp else from_number
+    client.messages.create(body=f"Tu código SmartLoans es: {code}. Expira en 10 min.", from_=fr_num, to=to_num)
 
-        code = "".join(random.choices(string.digits, k=6))
+
+def send_verification_code(json_file: dict):
+    """Generate a 6-digit OTP, send via email / sms / whatsapp, store for 10 min."""
+    try:
+        target = json_file.get("target", "").strip()
+        method = json_file.get("method", "email").strip().lower()  # email | sms | whatsapp
+        if not target:
+            return JSONResponse(content={"error": "target is required"}, status_code=400)
+
+        code    = "".join(random.choices(string.digits, k=6))
         expires = datetime.utcnow() + timedelta(minutes=10)
-        _verification_codes[email] = {"code": code, "expires": expires}
-        logger.info("[send_verification_code] code=%s for %s", code, email)
+        _verification_codes[target] = {"code": code, "expires": expires}
+        logger.info("[send_verification_code] method=%s target=%s code=%s", method, target, code)
 
-        # Build and send the email
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
+        if method == "email":
+            _send_email_otp(target, code)
+        elif method == "sms":
+            _send_sms_otp(target, code, via_whatsapp=False)
+        elif method == "whatsapp":
+            _send_sms_otp(target, code, via_whatsapp=True)
+        else:
+            return JSONResponse(content={"error": f"Unknown method: {method}"}, status_code=400)
 
-        msg = MIMEMultipart()
-        msg["From"]    = _SENDER_EMAIL
-        msg["To"]      = email
-        msg["Subject"] = "Código de verificación — SmartLoans"
-        body = (
-            f"Tu código de verificación es:\n\n"
-            f"  {code}\n\n"
-            f"Ingresa este código en la pantalla de registro. Expira en 10 minutos."
-        )
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP(_SMTP_SERVER, _SMTP_PORT) as server:
-            server.starttls(context=ctx)
-            server.login(_SENDER_EMAIL, _SENDER_PWD)
-            server.sendmail(_SENDER_EMAIL, email, msg.as_string())
-
-        logger.info("[send_verification_code] email sent to %s", email)
-        return JSONResponse(content={"message": "Código enviado", "email": email}, status_code=200)
+        logger.info("[send_verification_code] sent via %s to %s", method, target)
+        return JSONResponse(content={"message": "Código enviado", "method": method}, status_code=200)
     except Exception as e:
         logger.exception("[send_verification_code] EXCEPTION: %s", e)
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
 def verify_code(json_file: dict):
-    """Validate OTP. Returns { valid: true } or { valid: false, error: '...' }."""
+    """Validate OTP keyed by target (email or phone). Returns { valid: bool }."""
     try:
-        email = json_file.get("email", "").strip().lower()
-        code  = str(json_file.get("code", "")).strip()
-        entry = _verification_codes.get(email)
+        target = json_file.get("target", "").strip()
+        code   = str(json_file.get("code", "")).strip()
+        entry  = _verification_codes.get(target)
+        logger.info("[verify_code] target=%s code=%s found=%s", target, code, bool(entry))
 
         if not entry:
-            return JSONResponse(content={"valid": False, "error": "No hay código para este email"}, status_code=200)
+            return JSONResponse(content={"valid": False, "error": "No hay código para este contacto"}, status_code=200)
         if datetime.utcnow() > entry["expires"]:
-            _verification_codes.pop(email, None)
+            _verification_codes.pop(target, None)
             return JSONResponse(content={"valid": False, "error": "El código expiró"}, status_code=200)
         if entry["code"] != code:
             return JSONResponse(content={"valid": False, "error": "Código incorrecto"}, status_code=200)
 
-        _verification_codes.pop(email, None)
-        logger.info("[verify_code] verified OK for %s", email)
+        _verification_codes.pop(target, None)
+        logger.info("[verify_code] verified OK for %s", target)
         return JSONResponse(content={"valid": True}, status_code=200)
     except Exception as e:
         logger.exception("[verify_code] EXCEPTION: %s", e)
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+def check_contact_sp(json_file: dict):
+    """
+    Look up a phone or email in dbo.clients + dbo.users.
+    Returns:
+      { found: true,  clientId, firstName, lastName, cellphone, email,
+                      companyId, userId, userName, hasAccount }
+      { found: false }
+    """
+    conn   = None
+    cursor = None
+    try:
+        contact = json_file.get("contact", "").strip()
+        logger.info("[check_contact_sp] contact=%s", contact)
+        if not contact:
+            return JSONResponse(content={"error": "contact is required"}, status_code=400)
+
+        conn   = connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC sp_check_contact @contact = %s", (contact,))
+        row = cursor.fetchone()
+        logger.info("[check_contact_sp] raw row: %s", row)
+
+        if row is None or row[0] is None:
+            return JSONResponse(content={"found": False}, status_code=200)
+
+        data = json.loads(row[0])
+        data["found"] = True
+        logger.info("[check_contact_sp] RESULT: %s", data)
+        return JSONResponse(content=data, status_code=200)
+    except Exception as e:
+        logger.exception("[check_contact_sp] EXCEPTION: %s", e)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor: cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn: conn.close()
+        except Exception:
+            pass
 
 
 def all_users_sp():
