@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.clients import clients_sp, all_clients_sp, one_clients_sp
+from modules.clients import clients_sp, all_clients_sp, one_clients_sp, upload_client_qr_sp
 
 
 router = APIRouter()
@@ -26,3 +26,8 @@ with open("./docs_description/clients_one.txt", "r") as file:
 @router.post("/one_clients",  summary="one product", description=product_one_docstring)
 def one_clients(json: dict):
     return  one_clients_sp(json)
+
+
+@router.post("/clients/upload-qr", summary="Upload client QR PNG to Azure Blob Storage")
+async def upload_client_qr(json: dict):
+    return await upload_client_qr_sp(json)

@@ -1,10 +1,32 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from databases import connection
-import json
+from azure.storage.blob import BlobServiceClient, ContentSettings
+import json, base64, uuid, os
+from datetime import datetime
 
 app = FastAPI()
 conn = connection()
+
+_CLIENTS_CONTAINER = os.getenv("CLIENTS_CONTAINER_NAME", "clients")
+
+
+def _blob_service_client() -> BlobServiceClient:
+    conn_str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+    if not conn_str:
+        raise RuntimeError("Missing AZURE_STORAGE_CONNECTION_STRING env var")
+    return BlobServiceClient.from_connection_string(conn_str)
+
+
+def _upload_bytes_to_blob(raw_bytes: bytes, blob_path: str, content_type: str, metadata: dict) -> str:
+    svc = _blob_service_client()
+    cc  = svc.get_container_client(_CLIENTS_CONTAINER)
+    bc  = cc.get_blob_client(blob_path)
+    bc.upload_blob(raw_bytes, overwrite=True,
+                   content_settings=ContentSettings(content_type=content_type),
+                   metadata=metadata)
+    account_url = svc.url or os.getenv("AZURE_STORAGE_ACCOUNT_URL_FALLBACK", "")
+    return account_url.rstrip("/") + "/" + _CLIENTS_CONTAINER + "/" + blob_path
 
 def clients_sp(json_file: dict):
     print(json_file)
@@ -56,5 +78,43 @@ def one_clients_sp(json_file: dict):
         result = json.loads(json_result)
 
         return JSONResponse(content=result, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+async def upload_client_qr_sp(json_file: dict):
+    """Upload QR PNG to Azure Blob Storage and persist the URL in dbo.clients."""
+    try:
+        data       = (json_file.get("clients") or [{}])[0]
+        client_id  = data.get("clientId")
+        company_id = data.get("companyId")
+        qr_base64  = data.get("qrBase64", "")
+
+        if not client_id or not qr_base64:
+            return JSONResponse(content={"error": "clientId and qrBase64 are required"}, status_code=400)
+
+        # Strip optional data-URI prefix
+        if "," in qr_base64:
+            qr_base64 = qr_base64.split(",", 1)[1]
+
+        raw_bytes = base64.b64decode(qr_base64)
+
+        now = datetime.utcnow()
+        uid = str(uuid.uuid4())[:8]
+        blob_path = f"clients/{now.year}/{str(now.month).zfill(2)}/qr_{client_id}_{uid}.png"
+
+        qr_url = _upload_bytes_to_blob(raw_bytes, blob_path, "image/png", {
+            "clientId":  str(client_id),
+            "companyId": str(company_id or ""),
+            "type":      "qr",
+        })
+
+        # Persist URL in dbo.clients via sp_clients_qr
+        db_conn = connection()
+        cursor  = db_conn.cursor()
+        payload = {"clients": [{"clientId": client_id, "companyId": company_id, "qrBlobUrl": qr_url}]}
+        cursor.execute("EXEC [dbo].[sp_clients_qr] @pjsonfile = %s", (json.dumps(payload),))
+
+        return JSONResponse(content={"qrBlobUrl": qr_url}, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
