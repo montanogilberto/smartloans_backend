@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.users import users_sp, all_users_sp, one_users_sp, one_users_email_sp, send_recovery_email, send_verification_code, verify_code
+from modules.users import users_sp, all_users_sp, one_users_sp, one_users_email_sp, send_recovery_email, send_verification_code, verify_code, check_contact_sp
 
 
 router = APIRouter()
@@ -39,6 +39,10 @@ with open("./docs_description/recovery_email.txt", "r") as file:
 @router.post("/send_recovery_email", summary="Send recovery email", description=recovery_email_docstring)
 def send_recovery(json: dict):
     return send_recovery_email(json)
+
+@router.post("/check_contact", summary="Check if phone or email exists in clients/users")
+def check_contact(json: dict):
+    return check_contact_sp(json)
 
 @router.post("/send_verification_code", summary="Send email OTP for account creation")
 def send_code(json: dict):
