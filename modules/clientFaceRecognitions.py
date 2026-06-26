@@ -66,7 +66,7 @@ def one_clientFaceRecognitions_sp(json_file: dict):
 _CONFIDENCE_THRESHOLD = 0.6
 _CLIENTS_CONTAINER    = os.getenv("CLIENTS_CONTAINER_NAME", "clients")
 _ACCOUNT_URL_FALLBACK = os.getenv("AZURE_STORAGE_ACCOUNT_URL_FALLBACK", "")
-_LIVENESS_API_VERSION = os.getenv("AZURE_FACE_LIVENESS_API_VERSION", "v1.1-preview.1")
+_LIVENESS_API_VERSION = os.getenv("AZURE_FACE_LIVENESS_API_VERSION", "v1.1-preview.1").strip('"').strip("'")
 
 
 def _get_face_config():
@@ -121,9 +121,16 @@ async def create_azure_liveness_session() -> JSONResponse:
     Creates Azure Face Liveness session.
     Frontend uses returned session/auth token for streaming liveness flow.
     """
+    print("[create-session] ── START ──────────────────────────────────────")
     try:
         face_endpoint, _, face_headers, missing = _get_face_config()
+        print(f"[create-session] face_endpoint : {face_endpoint!r}")
+        print(f"[create-session] api_version   : {_LIVENESS_API_VERSION!r}")
+        print(f"[create-session] headers keys  : {list(face_headers.keys())}")
+        print(f"[create-session] missing config: {missing}")
+
         if missing:
+            print(f"[create-session] ABORT – missing config: {missing}")
             return JSONResponse(
                 content={
                     "error": "Missing required Azure Face configuration",
@@ -132,17 +139,24 @@ async def create_azure_liveness_session() -> JSONResponse:
                 status_code=500,
             )
 
-        endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify"
+        endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/detectLivenessWithVerify/singleModal/sessions"
         body = {
             "livenessOperationMode": "PassiveAndActive",
             "deviceCorrelationId": str(uuid.uuid4()),
         }
+        print(f"[create-session] POST {endpoint}")
+        print(f"[create-session] body: {body}")
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(endpoint, headers=face_headers, json=body)
+            print(f"[create-session] response status : {r.status_code}")
+            print(f"[create-session] response headers: {dict(r.headers)}")
+            print(f"[create-session] response body   : {r.text}")
             r.raise_for_status()
             data = r.json()
 
+        print(f"[create-session] sessionId: {data.get('sessionId')}")
+        print("[create-session] ── SUCCESS ─────────────────────────────────────")
         return JSONResponse(
             content={
                 "sessionId": data.get("sessionId"),
@@ -152,6 +166,7 @@ async def create_azure_liveness_session() -> JSONResponse:
             status_code=200,
         )
     except Exception as e:
+        print(f"[create-session] ── EXCEPTION: {e} ────────────────────────────")
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
@@ -199,7 +214,7 @@ async def verify_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
                 status_code=500,
             )
 
-        result_endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/liveness/session/verify/" + azure_session_id
+        result_endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/detectLivenessWithVerify/singleModal/sessions/" + azure_session_id
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.get(result_endpoint, headers=face_headers)
