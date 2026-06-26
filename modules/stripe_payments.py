@@ -98,16 +98,37 @@ async def create_connected_account(payload: dict):
     company_id = payload.get("companyId")
     email      = payload.get("email", f"client{client_id}@posgmo.mx")
 
+    print(
+        f"[stripe][create_connected_account] start "
+        f"clientId={client_id} companyId={company_id} email={email}"
+    )
+
     if not client_id or not company_id:
+        print("[stripe][create_connected_account] missing required fields")
         return JSONResponse({"error": "clientId and companyId required"}, status_code=400)
 
+    acct_id = None
     try:
         # Check if already exists in SQL
         existing = _sp_connected_accounts({"action": "get", "clientId": client_id, "companyId": company_id})
+        print(
+            f"[stripe][create_connected_account] existing type={type(existing).__name__} "
+            f"value={existing}"
+        )
+
+        if not isinstance(existing, dict):
+            print(
+                "[stripe][create_connected_account] unexpected existing payload from DB; "
+                "forcing empty dict fallback"
+            )
+            existing = {}
+
         acct_id = existing.get("connectedAccountId")
+        print(f"[stripe][create_connected_account] acct_id from DB={acct_id}")
 
         if not acct_id:
             # Create a new Stripe Express account
+            print("[stripe][create_connected_account] creating new Stripe express account")
             acct = stripe.Account.create(
                 type="express",
                 country="MX",
@@ -120,8 +141,10 @@ async def create_connected_account(payload: dict):
                 metadata={"clientId": str(client_id), "companyId": str(company_id)},
             )
             acct_id = acct["id"]
+            print(f"[stripe][create_connected_account] stripe account created acct_id={acct_id}")
 
             # Persist to SQL
+            print("[stripe][create_connected_account] persisting new account status in SQL")
             _sp_connected_accounts({
                 "action": "upsert",
                 "clientId": client_id,
@@ -144,7 +167,14 @@ async def create_connected_account(payload: dict):
             }, status_code=200)
 
         # Account exists — refresh status from Stripe
+        print(f"[stripe][create_connected_account] retrieving existing Stripe account acct_id={acct_id}")
         acct = stripe.Account.retrieve(acct_id)
+        print(
+            "[stripe][create_connected_account] stripe retrieve success "
+            f"charges_enabled={acct.get('charges_enabled', False)} "
+            f"payouts_enabled={acct.get('payouts_enabled', False)} "
+            f"details_submitted={acct.get('details_submitted', False)}"
+        )
         return JSONResponse({
             "account": {
                 "connectedAccountId": acct_id,
@@ -157,10 +187,16 @@ async def create_connected_account(payload: dict):
         }, status_code=200)
 
     except stripe.StripeError as e:
-        print(f"[stripe][create_connected_account] Stripe error: {e}")
+        print(
+            f"[stripe][create_connected_account] Stripe error type={type(e).__name__} "
+            f"clientId={client_id} companyId={company_id} acct_id={acct_id} error={e}"
+        )
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
-        print(f"[stripe][create_connected_account] Error: {e}")
+        print(
+            f"[stripe][create_connected_account] Error type={type(e).__name__} "
+            f"clientId={client_id} companyId={company_id} acct_id={acct_id} error={repr(e)}"
+        )
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -169,19 +205,44 @@ async def get_connected_account_status(payload: dict):
     client_id  = payload.get("clientId")
     company_id = payload.get("companyId")
 
+    print(f"[stripe][get_connected_account_status] start clientId={client_id} companyId={company_id}")
+
+    acct_id = None
     try:
         existing = _sp_connected_accounts({"action": "get", "clientId": client_id, "companyId": company_id})
+        print(
+            f"[stripe][get_connected_account_status] existing type={type(existing).__name__} "
+            f"value={existing}"
+        )
+
+        if not isinstance(existing, dict):
+            print(
+                "[stripe][get_connected_account_status] unexpected existing payload from DB; "
+                "forcing empty dict fallback"
+            )
+            existing = {}
+
         acct_id = existing.get("connectedAccountId")
+        print(f"[stripe][get_connected_account_status] acct_id from DB={acct_id}")
 
         if not acct_id:
+            print("[stripe][get_connected_account_status] no connected account found in DB")
             return JSONResponse({"account": None}, status_code=200)
 
+        print(f"[stripe][get_connected_account_status] retrieving Stripe account acct_id={acct_id}")
         acct = stripe.Account.retrieve(acct_id)
         charges_enabled = acct.get("charges_enabled", False)
         payouts_enabled = acct.get("payouts_enabled", False)
         details_submitted = acct.get("details_submitted", False)
 
+        print(
+            "[stripe][get_connected_account_status] stripe retrieve success "
+            f"charges_enabled={charges_enabled} payouts_enabled={payouts_enabled} "
+            f"details_submitted={details_submitted}"
+        )
+
         # Update SQL with latest status
+        print("[stripe][get_connected_account_status] updating SQL account status")
         _sp_connected_accounts({
             "action": "upsert",
             "clientId": client_id,
@@ -204,8 +265,16 @@ async def get_connected_account_status(payload: dict):
         }, status_code=200)
 
     except stripe.StripeError as e:
+        print(
+            f"[stripe][get_connected_account_status] Stripe error type={type(e).__name__} "
+            f"clientId={client_id} companyId={company_id} acct_id={acct_id} error={e}"
+        )
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
+        print(
+            f"[stripe][get_connected_account_status] Error type={type(e).__name__} "
+            f"clientId={client_id} companyId={company_id} acct_id={acct_id} error={repr(e)}"
+        )
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
