@@ -195,7 +195,7 @@ BEGIN
             CASE WHEN borrowerId = @acceptSenderId THEN lenderUserId ELSE borrowerUserId END
         FROM loanConversations WHERE conversationId = @conversationId
 
-        SELECT (SELECT conversationId, 'accepted' AS status,
+        SELECT (SELECT @conversationId AS conversationId, 'accepted' AS status,
             @agreedAmount AS agreedAmount, @agreedRate AS agreedRate, @agreedTerm AS agreedTermMonths,
             @acceptTargetUserId AS targetUserId
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
@@ -221,7 +221,7 @@ BEGIN
             CASE WHEN borrowerId = @rejectSenderId THEN lenderUserId ELSE borrowerUserId END
         FROM loanConversations WHERE conversationId = @conversationId
 
-        SELECT (SELECT conversationId, 'rejected' AS status,
+        SELECT (SELECT @conversationId AS conversationId, 'rejected' AS status,
             @rejectTargetUserId AS targetUserId
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
     END
