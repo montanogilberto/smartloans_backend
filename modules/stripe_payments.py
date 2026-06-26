@@ -18,12 +18,10 @@ SQL stored procedures expected (create in Azure SQL):
 import os
 import json
 import stripe
-from fastapi import APIRouter, Request
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from databases import connection
 from datetime import datetime
-
-router = APIRouter(prefix="/stripe", tags=["stripe"])
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -94,7 +92,6 @@ def _sp_transactions_list(company_id: int, filters: dict = None):
 
 # ── Connected Accounts ───────────────────────────────────────────────────────
 
-@router.post("/connected-accounts")
 async def create_connected_account(payload: dict):
     """Create or retrieve a Stripe Express Connected Account for a client."""
     client_id  = payload.get("clientId")
@@ -204,7 +201,6 @@ async def create_connected_account(payload: dict):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@router.post("/connected-accounts/status")
 async def get_connected_account_status(payload: dict):
     """Return current KYC/charges status for a client's Connected Account."""
     client_id  = payload.get("clientId")
@@ -283,7 +279,6 @@ async def get_connected_account_status(payload: dict):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@router.post("/onboarding-link")
 async def get_onboarding_link(payload: dict):
     """Generate a Stripe Express onboarding URL for KYC completion."""
     client_id   = payload.get("clientId")
@@ -314,7 +309,6 @@ async def get_onboarding_link(payload: dict):
 
 # ── Payment Intents ──────────────────────────────────────────────────────────
 
-@router.post("/wallet/top-up")
 async def create_payment_intent(payload: dict):
     """
     Create a Stripe PaymentIntent.
@@ -398,7 +392,6 @@ async def create_payment_intent(payload: dict):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@router.post("/wallet/confirm")
 async def confirm_payment_intent(payload: dict):
     """
     Verify a PaymentIntent succeeded (called by frontend after confirmation).
@@ -443,7 +436,6 @@ async def confirm_payment_intent(payload: dict):
 
 # ── Disbursement ─────────────────────────────────────────────────────────────
 
-@router.post("/disburse")
 async def disburse_loan(payload: dict):
     """
     Transfer funds from platform to borrower after loan approval.
@@ -517,7 +509,6 @@ async def disburse_loan(payload: dict):
 
 # ── Transactions list ────────────────────────────────────────────────────────
 
-@router.post("/transactions")
 async def list_transactions(payload: dict):
     company_id = payload.get("companyId")
     client_id  = payload.get("clientId")
@@ -530,7 +521,6 @@ async def list_transactions(payload: dict):
 
 # ── Webhook ──────────────────────────────────────────────────────────────────
 
-@router.post("/webhook")
 async def handle_webhook(request: Request):
     """
     Stripe webhook — validates signature and handles events.
