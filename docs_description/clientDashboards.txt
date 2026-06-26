@@ -1,0 +1,1 @@
+clientDashboards CRUD (action 1=create, 2=update, 3=delete)
