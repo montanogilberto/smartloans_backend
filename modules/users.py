@@ -88,6 +88,23 @@ def _send_email_otp(target: str, code: str):
         server.sendmail(_SENDER_EMAIL, target, msg.as_string())
 
 
+def _normalize_phone(phone: str) -> str:
+    """
+    Ensure phone is in E.164 format required by Twilio.
+    Accepts:  6621408769       → +526621408769  (10-digit MX local)
+              526621408769     → +526621408769  (12-digit, missing +)
+              +526621408769    → +526621408769  (already correct)
+    """
+    digits = "".join(c for c in phone if c.isdigit())
+    if len(digits) == 10:
+        return f"+52{digits}"
+    if len(digits) == 12 and digits.startswith("52"):
+        return f"+{digits}"
+    if phone.strip().startswith("+"):
+        return phone.strip()
+    return phone  # pass through; Twilio will reject if still wrong
+
+
 def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False):
     """Send OTP via Twilio SMS or WhatsApp. Requires TWILIO_* env vars."""
     account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
@@ -99,8 +116,12 @@ def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False):
         from twilio.rest import Client as TwilioClient
     except ImportError:
         raise ValueError("twilio package not installed — run: pip install twilio")
+
+    normalized = _normalize_phone(phone)
+    logger.info("[_send_sms_otp] raw=%s normalized=%s whatsapp=%s", phone, normalized, via_whatsapp)
+
     client = TwilioClient(account_sid, auth_token)
-    to_num = f"whatsapp:{phone}" if via_whatsapp else phone
+    to_num = f"whatsapp:{normalized}" if via_whatsapp else normalized
     fr_num = f"whatsapp:{from_number}" if via_whatsapp else from_number
     client.messages.create(body=f"Tu código SmartLoans es: {code}. Expira en 10 min.", from_=fr_num, to=to_num)
 
