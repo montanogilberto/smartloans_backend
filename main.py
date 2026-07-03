@@ -18,6 +18,7 @@ from routes_ import (
     loanProposals, loanOffers, stripe_payments,
     creditScore, walletBalance, automatedPayments, signatureUpload,
     manufacturing, rewards, loanChat, clientDashboards,
+    digitalContracts, legalCases, disbursement,
 )
 
 app = FastAPI(
@@ -146,6 +147,9 @@ app.include_router(signatureUpload.router)
 app.include_router(manufacturing.router)
 app.include_router(rewards.router)
 app.include_router(loanChat.router)
+app.include_router(digitalContracts.router)
+app.include_router(legalCases.router)
+app.include_router(disbursement.router)
 
 # --------------------------------------------------
 # Local development only
