@@ -57,7 +57,35 @@ Stored procedure used:
 
 ---
 
-### 4) POST `/api/clientFaceRecognition/verify`
+### 4) POST `/api/clientFaceRecognition/upload-image`
+**Summary:** `Upload a single ID/selfie image`
+**Tags:** `connector`
+**Handler:** `upload_id_image_connector(payload)` (async)
+**Purpose:** Persists a single captured image (front/back/selfie) to blob storage
+immediately, decoupled from the full verify+liveness flow, so a capture isn't
+lost if the user doesn't finish the wizard. Returns only `{ blobUrl }` — no
+database writes; the frontend upserts the `ClientFaceRecognitions` row itself
+via the existing CRUD endpoint.
+
+Input:
+```json
+{ "companyId": 1, "clientId": 123, "side": "front", "imageBase64": "<base64, no data-uri prefix>" }
+```
+
+Success response:
+```json
+{ "blobUrl": "https://.../clients/2026/07/front_123_20260705063633_360ca894.jpg" }
+```
+
+Validation errors (HTTP 400):
+- `side` must be `"front"`, `"back"`, or `"selfie"`.
+- `imageBase64` is required.
+
+Blob naming: `clients/<YYYY>/<MM>/<side>_<clientId>_<timestamp>_<uid>.jpg`
+
+---
+
+### 5) POST `/api/clientFaceRecognition/verify`
 **Summary:** `Biometric verify ClientFaceRecognition`  
 **Tags:** `connector`  
 **Handler:** `verify_clientFaceRecognition_connector(payload)` (async)  
@@ -65,7 +93,7 @@ Stored procedure used:
 
 ---
 
-### 5) POST `/api/clientFaceRecognition/contract`
+### 6) POST `/api/clientFaceRecognition/contract`
 **Summary:** `Submit contract ClientFaceRecognition`  
 **Tags:** `connector`  
 **Handler:** `contract_clientFaceRecognition_connector(payload)` (async)  
@@ -136,17 +164,26 @@ Example:
 Implemented in `create_azure_liveness_session`.
 
 ### Purpose
-Creates a short-lived Azure liveness session and returns credentials/token data for frontend liveness capture flow.
+Creates an Azure "Liveness With Verify" session and returns credentials/token
+data for the frontend liveness capture flow. **Azure requires the reference
+(ID) image at session-creation time** — it cannot be attached later — so the
+caller must send the already-captured front ID image in this call.
 
 ### Azure call
-- `POST {AZURE_FACE_API_ENDPOINT}/face/{AZURE_FACE_LIVENESS_API_VERSION}/liveness/session/verify`
+- `POST {AZURE_FACE_API_ENDPOINT}/face/{AZURE_FACE_LIVENESS_API_VERSION}/detectLivenessWithVerify-sessions`
+- **multipart/form-data**, not JSON.
 
-### Request body sent to Azure
+### Request body (to this backend endpoint)
 ```json
-{
-  "livenessOperationMode": "PassiveAndActive",
-  "deviceCorrelationId": "<uuid>"
-}
+{ "idFrontImageBase64": "<base64 image or data-uri>" }
+```
+
+### Form fields sent to Azure
+```
+livenessOperationMode: "PassiveActive"
+deviceCorrelationId:   "<uuid>"
+enableSessionImage:    "true"
+verifyImage:           <file, from idFrontImageBase64>
 ```
 
 ### Response from backend
@@ -157,6 +194,13 @@ Creates a short-lived Azure liveness session and returns credentials/token data 
   "raw": { "...azure full payload..." }
 }
 ```
+
+### Known external blocker
+Azure Face Liveness Detection is a gated feature (Face Recognition Limited
+Access — https://aka.ms/facerecognition). If the configured
+`AZURE_FACE_API_ENDPOINT` resource hasn't been approved for it, Azure returns
+`403 UnsupportedFeature`. This is an approval/account issue, not a code bug —
+confirm the resource has been granted access before assuming a code problem.
 
 ---
 
@@ -178,16 +222,20 @@ Typical fields used by code:
 ### Processing steps
 1. Build blob paths under `clients/<YYYY>/<MM>/...`.
 2. Upload `idFrontImageBase64` as JPEG to Azure Blob.
-3. Call Azure Face liveness result endpoint with `azureSessionId`.
-4. Read:
-   - `livenessResult.livenessDecision`
-   - `verifyResult.isIdentical`
-   - `verifyResult.confidence`
-5. If `verifyResult.extractedFace` is present, upload extracted selfie to blob as `clientSelfieBlobUrl`.
+3. `GET {AZURE_FACE_API_ENDPOINT}/face/{AZURE_FACE_LIVENESS_API_VERSION}/detectLivenessWithVerify-sessions/{azureSessionId}`.
+4. Read the **latest** entry in `results.attempts[]`:
+   - `attempts[-1].result.livenessDecision`
+   - `attempts[-1].result.verifyResult.isIdentical`
+   - `attempts[-1].result.verifyResult.matchConfidence`
+5. Azure's liveness-with-verify API does not return an extracted selfie frame
+   (no `extractedFace` field exists) — `clientSelfieBlobUrl` is set to the
+   uploaded ID image URL as a stand-in.
 6. Compute:
    - `is_live = livenessDecision == "realface"`
-   - `confidenceScore = confidence`
-   - `isVerified = is_live && isIdentical && confidence >= 0.6`
+   - `confidenceScore = matchConfidence`
+   - `isVerified = is_live && isIdentical && confidenceScore >= 0.6`
+7. If `results.attempts[]` is empty (session not completed yet), returns
+   `isVerified: false` with an explanatory `error` rather than raising.
 
 ### Success response
 ```json
@@ -368,6 +416,13 @@ curl -X POST "https://smartloansbackend.azurewebsites.net/one_clientFaceRecognit
 curl -X POST "https://smartloansbackend.azurewebsites.net/api/clientFaceRecognition/create-session" \
   -H "Content-Type: application/json" \
   -d '{}'
+```
+
+## Upload single image connector
+```bash
+curl -X POST "https://smartloansbackend.azurewebsites.net/api/clientFaceRecognition/upload-image" \
+  -H "Content-Type: application/json" \
+  -d '{"companyId":1,"clientId":123,"side":"front","imageBase64":"<base64>"}'
 ```
 
 ## Verify connector

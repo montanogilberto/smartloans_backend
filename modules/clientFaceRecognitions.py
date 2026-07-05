@@ -116,17 +116,72 @@ def _upload_base64_to_blob(b64_data: str, blob_path: str, content_type: str, met
     return _upload_to_blob(base64.b64decode(b64_data), blob_path, content_type, metadata)
 
 
-async def create_azure_liveness_session() -> JSONResponse:
+async def upload_id_image_connector(payload: dict) -> JSONResponse:
     """
-    Creates Azure Face Liveness session.
-    Frontend uses returned session/auth token for streaming liveness flow.
+    Uploads a single ID/selfie image to Azure Blob Storage on its own, decoupled
+    from the full verify+liveness flow, so a capture is saved as soon as it's
+    taken instead of only at the end of the wizard.
+    Returns: { blobUrl }
+    """
+    try:
+        company_id = payload.get("companyId", "0")
+        client_id  = payload.get("clientId", "0")
+        side       = payload.get("side", "")
+        image_b64  = payload.get("imageBase64", "")
+
+        if side not in ("front", "back", "selfie"):
+            return JSONResponse(content={"error": "side must be 'front', 'back', or 'selfie'"}, status_code=400)
+        if not image_b64:
+            return JSONResponse(content={"error": "imageBase64 is required"}, status_code=400)
+
+        now = datetime.utcnow()
+        ts  = now.strftime("%Y%m%d%H%M%S")
+        uid = str(uuid.uuid4())[:8]
+        blob_path = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + \
+            "/" + side + "_" + str(client_id) + "_" + ts + "_" + uid + ".jpg"
+
+        blob_url = _upload_base64_to_blob(
+            image_b64, blob_path, "image/jpeg",
+            {"companyId": str(company_id), "clientId": str(client_id), "side": side},
+        )
+
+        return JSONResponse(content={"blobUrl": blob_url}, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+async def create_azure_liveness_session(payload: dict = None) -> JSONResponse:
+    """
+    Creates an Azure "Liveness With Verify" session.
+
+    Azure requires the reference (ID) image to be attached as multipart
+    form-data at session-creation time — there is no way to attach it
+    afterward — so the caller must already have the front ID image captured
+    before starting liveness. Frontend uses the returned session/auth token
+    for the streaming liveness + face-match flow.
+
+    Correct contract (v1.2):
+      POST {endpoint}/face/{apiVersion}/detectLivenessWithVerify-sessions
+      Content-Type: multipart/form-data
+      fields: livenessOperationMode ("Passive" | "PassiveActive"), verifyImage (file)
     """
     print("[create-session] ── START ──────────────────────────────────────")
     try:
-        face_endpoint, _, face_headers, missing = _get_face_config()
+        payload = payload or {}
+        verify_image_b64 = payload.get("idFrontImageBase64", "")
+        if not verify_image_b64:
+            print("[create-session] ABORT – idFrontImageBase64 is required")
+            return JSONResponse(
+                content={"error": "idFrontImageBase64 is required to create a liveness-with-verify session"},
+                status_code=400,
+            )
+        if "," in verify_image_b64:
+            verify_image_b64 = verify_image_b64.split(",", 1)[1]
+        verify_image_bytes = base64.b64decode(verify_image_b64)
+
+        face_endpoint, face_key, _, missing = _get_face_config()
         print(f"[create-session] face_endpoint : {face_endpoint!r}")
         print(f"[create-session] api_version   : {_LIVENESS_API_VERSION!r}")
-        print(f"[create-session] headers keys  : {list(face_headers.keys())}")
         print(f"[create-session] missing config: {missing}")
 
         if missing:
@@ -139,18 +194,22 @@ async def create_azure_liveness_session() -> JSONResponse:
                 status_code=500,
             )
 
-        endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/detectLivenessWithVerify/singleModal/sessions"
-        body = {
-            "livenessOperationMode": "PassiveAndActive",
+        endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/detectLivenessWithVerify-sessions"
+        # multipart/form-data — do NOT send a Content-Type header here, httpx
+        # sets the correct multipart boundary itself when `files=` is used.
+        headers = {"Ocp-Apim-Subscription-Key": face_key}
+        form_data = {
+            "livenessOperationMode": "PassiveActive",
             "deviceCorrelationId": str(uuid.uuid4()),
+            "enableSessionImage": "true",
         }
+        files = {"verifyImage": ("verify.jpg", verify_image_bytes, "image/jpeg")}
         print(f"[create-session] POST {endpoint}")
-        print(f"[create-session] body: {body}")
+        print(f"[create-session] form fields: {form_data}")
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(endpoint, headers=face_headers, json=body)
+            r = await client.post(endpoint, headers=headers, data=form_data, files=files)
             print(f"[create-session] response status : {r.status_code}")
-            print(f"[create-session] response headers: {dict(r.headers)}")
             print(f"[create-session] response body   : {r.text}")
             r.raise_for_status()
             data = r.json()
@@ -197,7 +256,6 @@ async def verify_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
         mo = str(now.month).zfill(2)
 
         id_blob_path = "clients/" + yr + "/" + mo + "/" + document_type + "_id_" + ts + "_" + uid + ".jpg"
-        selfie_blob_path = "clients/" + yr + "/" + mo + "/selfie_" + ts + "_" + uid + ".jpg"
 
         id_image_url = _upload_base64_to_blob(
             id_b64, id_blob_path, "image/jpeg",
@@ -214,31 +272,42 @@ async def verify_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
                 status_code=500,
             )
 
-        result_endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/detectLivenessWithVerify/singleModal/sessions/" + azure_session_id
+        # Note: session results live under results.attempts[] in the real API —
+        # there is no top-level livenessResult/verifyResult, and Azure never
+        # returns an extracted selfie frame directly (no "extractedFace" field).
+        result_endpoint = face_endpoint + f"/face/{_LIVENESS_API_VERSION}/detectLivenessWithVerify-sessions/" + azure_session_id
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.get(result_endpoint, headers=face_headers)
             r.raise_for_status()
             azure_result = r.json()
 
-        liveness_result = azure_result.get("livenessResult", {}) or {}
-        verify_result = azure_result.get("verifyResult", {}) or {}
+        attempts = (azure_result.get("results") or {}).get("attempts") or []
+        if not attempts:
+            return JSONResponse(
+                content={
+                    "isVerified": False,
+                    "confidenceScore": 0.0,
+                    "idFrontImageBlobUrl": id_image_url,
+                    "clientSelfieBlobUrl": id_image_url,
+                    "error": "Liveness session has no completed attempts yet",
+                },
+                status_code=200,
+            )
 
-        liveness_decision = str(liveness_result.get("livenessDecision", "")).lower()
+        latest_attempt = attempts[-1]
+        attempt_result = latest_attempt.get("result") or {}
+        verify_result = attempt_result.get("verifyResult") or {}
+
+        liveness_decision = str(attempt_result.get("livenessDecision", "")).lower()
         is_live = liveness_decision == "realface"
         is_identical = bool(verify_result.get("isIdentical", False))
-        confidence = float(verify_result.get("confidence", 0.0) or 0.0)
+        confidence = float(verify_result.get("matchConfidence", 0.0) or 0.0)
 
-        extracted_face = verify_result.get("extractedFace")
-        selfie_url = ""
-        if isinstance(extracted_face, str) and extracted_face.strip():
-            selfie_url = _upload_base64_to_blob(
-                extracted_face, selfie_blob_path, "image/jpeg",
-                {"companyId": str(company_id), "documentType": "selfie"},
-            )
-        else:
-            # fallback so response schema remains intact
-            selfie_url = id_image_url
+        # Azure's liveness-with-verify API doesn't hand back an extracted
+        # selfie image — use the uploaded ID image as a stand-in so the
+        # response schema (and downstream storage) stays intact.
+        selfie_url = id_image_url
 
         is_verified = is_live and is_identical and confidence >= _CONFIDENCE_THRESHOLD
 

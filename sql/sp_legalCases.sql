@@ -147,7 +147,7 @@ BEGIN
                  FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS loan,
 
                 -- Borrower identity
-                (SELECT TOP 1 clientId, firstName, lastName, cellphone, email
+                (SELECT TOP 1 clientId, first_name, last_name, cellphone, email
                  FROM dbo.clients WHERE clientId = lc.borrowerClientId
                  FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS borrower,
 
