@@ -275,3 +275,47 @@ BEGIN
     WHERE pushNotificationId = @pushNotificationId AND companyId = @companyId
     FOR JSON AUTO, ROOT('pushNotifications');
 END;
+GO
+CREATE PROCEDURE dbo.sp_pushNotifications_activeUsers
+    @pjsonfile VARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @companyId INT;
+
+    SELECT @companyId = JSON_VALUE(value, '$.companyId')
+    FROM OPENJSON(@pjsonfile);
+
+    -- @companyId NULL -> every active user (targetType 'All').
+    -- @companyId set  -> active users in that company (targetType 'Company').
+    SELECT userId
+    FROM dbo.users
+    WHERE active = '1'
+      AND (@companyId IS NULL OR companyId = @companyId)
+    FOR JSON AUTO, ROOT('users');
+END;
+GO
+CREATE PROCEDURE dbo.sp_pushNotifications_recordDelivery
+    @pjsonfile VARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @pushNotificationId INT;
+    DECLARE @userId INT;
+    DECLARE @isSent BIT;
+
+    SELECT
+        @pushNotificationId = JSON_VALUE(value, '$.pushNotificationId'),
+        @userId = JSON_VALUE(value, '$.userId'),
+        @isSent = JSON_VALUE(value, '$.isSent')
+    FROM OPENJSON(@pjsonfile);
+
+    INSERT INTO dbo.NotificationDeliveries (pushNotificationId, userId, isSent, isRead, sentAt)
+    VALUES (
+        @pushNotificationId,
+        @userId,
+        @isSent,
+        0,
+        CASE WHEN @isSent = 1 THEN GETDATE() ELSE NULL END
+    );
+END;

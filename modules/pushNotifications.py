@@ -3,6 +3,36 @@ from databases import connection
 from modules.azure_notifications import send_azure_push, register_device_token
 import json
 
+# targetType values that can actually be resolved to a recipient list today.
+# 'Role' is exposed in the schema/UI but there is no user-role mapping
+# anywhere in the database, so it can't be resolved to anyone -- surface
+# that clearly instead of guessing. 'Company' IS resolvable via
+# users.companyId.
+_UNSUPPORTED_TARGET_TYPES = {"Role"}
+
+
+def _get_active_user_ids(cursor, company_id=None) -> list:
+    cursor.execute(
+        "EXEC [dbo].[sp_pushNotifications_activeUsers] @pjsonfile = %s",
+        (json.dumps({"companyId": company_id}),),
+    )
+    rows = cursor.fetchall()
+    json_result = "".join(row[0] for row in rows if row and row[0])
+    if not json_result:
+        return []
+    return [u["userId"] for u in json.loads(json_result).get("users", [])]
+
+
+def _record_delivery(cursor, push_notification_id: int, user_id: int, was_sent: bool) -> None:
+    cursor.execute(
+        "EXEC [dbo].[sp_pushNotifications_recordDelivery] @pjsonfile = %s",
+        (json.dumps({
+            "pushNotificationId": push_notification_id,
+            "userId": user_id,
+            "isSent": 1 if was_sent else 0,
+        }),),
+    )
+
 
 async def pushNotifications_sp(json_file: dict):
     conn = None
@@ -49,24 +79,61 @@ async def pushNotifications_sp(json_file: dict):
         if action == 1 and is_success:
             title = payload_item.get("title", "New Notification") if isinstance(payload_item, dict) else "New Notification"
             message = payload_item.get("message", "") if isinstance(payload_item, dict) else ""
+            target_type = (payload_item.get("targetType") or "User") if isinstance(payload_item, dict) else "User"
             target_user_id = payload_item.get("targetUserId") if isinstance(payload_item, dict) else None
+            target_company_id = payload_item.get("targetCompanyId") if isinstance(payload_item, dict) else None
+            push_notification_id = parsed_content.get("pushNotificationId") if isinstance(parsed_content, dict) else None
+            push_notification_id = int(push_notification_id) if push_notification_id else None
             print(
                 "[pushNotifications][module] action==1 and SP success, preparing Azure push:",
-                {"title": title, "message": message, "targetUserId": target_user_id}
+                {"title": title, "message": message, "targetType": target_type,
+                 "targetUserId": target_user_id, "targetCompanyId": target_company_id}
             )
-            try:
-                azure_result = await send_azure_push(title, message, target_user_id)
 
-                if isinstance(azure_result, dict):
-                    if azure_result.get("sent") is True:
-                        print("[pushNotifications][module] Azure push sent successfully.",
-                              {"results": azure_result.get("results")})
-                    else:
-                        print("[pushNotifications][module] Azure push skipped/unsent.",
-                              {"reason": azure_result.get("reason"),
-                               "results": azure_result.get("results")})
-            except Exception as azure_error:
-                print("[pushNotifications][module] Azure push failed:", str(azure_error))
+            if target_type in _UNSUPPORTED_TARGET_TYPES:
+                reason = (
+                    f"targetType '{target_type}' is not supported yet: there is no user-role "
+                    f"mapping in the database to resolve recipients from."
+                )
+                print("[pushNotifications][module] Push not sent:", reason)
+                parsed_content["pushSendSkipped"] = True
+                parsed_content["pushSendReason"] = reason
+            elif target_type == "Company" and not target_company_id:
+                reason = "targetType 'Company' requires targetCompanyId."
+                print("[pushNotifications][module] Push not sent:", reason)
+                parsed_content["pushSendSkipped"] = True
+                parsed_content["pushSendReason"] = reason
+            else:
+                if target_type == "All":
+                    recipient_ids = _get_active_user_ids(cursor)
+                elif target_type == "Company":
+                    recipient_ids = _get_active_user_ids(cursor, target_company_id)
+                else:
+                    recipient_ids = [target_user_id] if target_user_id else []
+
+                print("[pushNotifications][module] Resolved recipients:", recipient_ids)
+                sent_count = 0
+                for user_id in recipient_ids:
+                    try:
+                        azure_result = await send_azure_push(title, message, user_id)
+                        was_sent = bool(isinstance(azure_result, dict) and azure_result.get("sent") is True)
+                        if was_sent:
+                            sent_count += 1
+                            print("[pushNotifications][module] Azure push sent successfully.",
+                                  {"userId": user_id, "results": azure_result.get("results")})
+                        else:
+                            print("[pushNotifications][module] Azure push skipped/unsent.",
+                                  {"userId": user_id, "reason": azure_result.get("reason") if isinstance(azure_result, dict) else None})
+                    except Exception as azure_error:
+                        was_sent = False
+                        print("[pushNotifications][module] Azure push failed:", {"userId": user_id, "error": str(azure_error)})
+
+                    if push_notification_id:
+                        _record_delivery(cursor, push_notification_id, user_id, was_sent)
+
+                parsed_content["pushSendSkipped"] = False
+                parsed_content["pushRecipientCount"] = len(recipient_ids)
+                parsed_content["pushSentCount"] = sent_count
         elif action == 1:
             print(
                 "[pushNotifications][module] action==1 but SP status is not success; skipping Azure push.",
