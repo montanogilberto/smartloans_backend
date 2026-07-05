@@ -18,11 +18,12 @@ app = FastAPI()
 # In-memory store for email verification codes: { email: { code, expires } }
 _verification_codes: dict = {}
 
-# Gmail SMTP config (same credentials used by send_recovery_email)
+# Gmail SMTP config — credentials from environment variables
+# Set GMAIL_SENDER and GMAIL_APP_PASSWORD in Azure App Service → Configuration → App settings
 _SMTP_SERVER   = "smtp.gmail.com"
 _SMTP_PORT     = 587
-_SENDER_EMAIL  = "contreras.9999@gmail.com"
-_SENDER_PWD    = "kpkihuhxbzrkzpur"
+_SENDER_EMAIL  = os.environ.get("GMAIL_SENDER",       "contreras.9999@gmail.com")
+_SENDER_PWD    = os.environ.get("GMAIL_APP_PASSWORD", "")
 
 def users_sp(json_file: dict):
     conn = None
@@ -69,6 +70,12 @@ def users_sp(json_file: dict):
 
 
 def _send_email_otp(target: str, code: str):
+    if not _SENDER_PWD:
+        raise ValueError(
+            "GMAIL_APP_PASSWORD env var is not set. "
+            "Generate an App Password at https://myaccount.google.com/apppasswords "
+            "and add it to Azure App Service → Configuration → App settings."
+        )
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
     msg = MIMEMultipart()

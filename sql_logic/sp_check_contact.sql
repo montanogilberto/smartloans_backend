@@ -1,16 +1,14 @@
--- sp_check_contact v2
--- Finds a client by phone (cellphone) or email, then checks if they already
--- have a user account linked via email OR phone.
--- Also returns loan completion steps so the UI can show progress.
---
--- Run migration_users_phone.sql first (adds dbo.users.cellphone).
+-- sp_check_contact v3
+-- Finds a client by phone or email, checks for a linked user account,
+-- and returns loan completion steps.
+-- Requires: migration_users_phone.sql (dbo.users.cellphone column)
 
 CREATE OR ALTER PROC [dbo].[sp_check_contact]
     @contact NVARCHAR(100)
 AS
 SET NOCOUNT ON;
 
--- ── 1. Find the client record ──────────────────────────────────────────────
+-- ── 1. Find the client record ─────────────────────────────────────────────
 DECLARE
     @clientId   INT,
     @firstName  NVARCHAR(100),
@@ -32,82 +30,74 @@ FROM dbo.clients c
 WHERE c.cellphone = @contact
    OR c.email     = @contact;
 
--- No client found → return found: false
 IF @clientId IS NULL
 BEGIN
     SELECT '{"found":false}' AS result;
     RETURN;
 END
 
--- ── 2. Check if a user account is linked (by email OR phone) ─────────────
+-- ── 2. Check linked user account (by email OR phone) ─────────────────────
 DECLARE
-    @userId    INT,
-    @userName  NVARCHAR(100),
-    @hasAccount BIT = 0;
+    @userId     INT,
+    @userName   NVARCHAR(100),
+    @hasAccount INT = 0;
 
 SELECT TOP 1
     @userId   = u.userId,
     @userName = u.name
 FROM dbo.users u
-WHERE (u.email    = @email    AND @email    IS NOT NULL AND @email    <> '')
-   OR (u.cellphone = @cellphone AND @cellphone IS NOT NULL AND @cellphone <> '');
+WHERE (LEN(ISNULL(@email,'')) > 0     AND u.email     = @email)
+   OR (LEN(ISNULL(@cellphone,'')) > 0 AND u.cellphone = @cellphone);
 
-IF @userId IS NOT NULL
-    SET @hasAccount = 1;
+IF @userId IS NOT NULL SET @hasAccount = 1;
 
--- ── 3. Loan completion steps ───────────────────────────────────────────────
--- Step 1: general info (client exists)         → always 1
--- Step 2: QR saved to blob                     → qrBlobUrl not null
--- Step 3: payment account (Stripe)             → checked on frontend
--- Step 4: biometric verified                   → ClientFaceRecognitions.is_verified
--- Step 5: contract accepted                    → ClientFaceRecognitions.contract_accepted
--- Step 6: pagaré accepted                      → ClientFaceRecognitions.pagare_accepted (if exists)
-
+-- ── 3. Loan completion steps from ClientFaceRecognitions ──────────────────
+-- Note: ClientFaceRecognitions is keyed by companyId only (no clientId FK yet).
+-- We take the most recent record for this company as a best-effort.
 DECLARE
-    @isVerified       BIT = 0,
-    @contractAccepted BIT = 0,
-    @pagareAccepted   BIT = 0;
+    @isVerified       INT = 0,
+    @contractAccepted INT = 0,
+    @pagareAccepted   INT = 0;
 
 SELECT TOP 1
-    @isVerified       = ISNULL(cfr.is_verified, 0),
-    @contractAccepted = ISNULL(cfr.contract_accepted, 0),
-    @pagareAccepted   = ISNULL(cfr.pagare_accepted, 0)
+    @isVerified       = CAST(ISNULL(cfr.is_verified,       0) AS INT),
+    @contractAccepted = CAST(ISNULL(cfr.contract_accepted, 0) AS INT),
+    @pagareAccepted   = 0   -- pagare_accepted column may not exist yet
 FROM dbo.ClientFaceRecognitions cfr
 WHERE cfr.companyId = @companyId
-  AND cfr.clientId  = @clientId   -- add this FK if it doesn't exist yet
 ORDER BY cfr.created_At DESC;
 
 DECLARE @stepsCompleted INT =
-    1                                              -- general info
-  + (CASE WHEN @qrBlobUrl  IS NOT NULL THEN 1 ELSE 0 END)
-  + 0                                              -- Stripe: checked frontend
-  + (CASE WHEN @isVerified       = 1 THEN 1 ELSE 0 END)
-  + (CASE WHEN @contractAccepted = 1 THEN 1 ELSE 0 END)
-  + (CASE WHEN @pagareAccepted   = 1 THEN 1 ELSE 0 END);
+    1   -- Info (client exists)
+  + (CASE WHEN @qrBlobUrl IS NOT NULL AND LEN(@qrBlobUrl) > 0 THEN 1 ELSE 0 END)
+  + 0   -- Stripe: checked on frontend
+  + @isVerified
+  + @contractAccepted
+  + @pagareAccepted;
 
 DECLARE @completionPct INT = (@stepsCompleted * 100) / 6;
 
--- ── 4. Return JSON ────────────────────────────────────────────────────────
+-- ── 4. Build JSON response ────────────────────────────────────────────────
+-- INCLUDE_NULL_VALUES ensures all fields are present even when NULL
 SELECT (
     SELECT
-        1                  AS found,
-        @clientId          AS clientId,
-        @firstName         AS firstName,
-        @lastName          AS lastName,
-        @cellphone         AS cellphone,
-        @email             AS email,
-        @companyId         AS companyId,
-        @userId            AS userId,
-        @userName          AS userName,
-        CAST(@hasAccount AS INT) AS hasAccount,   -- 1 or 0, never NULL
-        @completionPct     AS completionPct,
-        @stepsCompleted    AS stepsCompleted,
-        -- Individual step flags for detailed display
-        1                  AS stepGeneralInfo,
-        CAST(CASE WHEN @qrBlobUrl IS NOT NULL THEN 1 ELSE 0 END AS INT) AS stepQr,
-        CAST(@isVerified       AS INT) AS stepBiometric,
-        CAST(@contractAccepted AS INT) AS stepContract,
-        CAST(@pagareAccepted   AS INT) AS stepPagare
-    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        1               AS found,
+        @clientId       AS clientId,
+        @firstName      AS firstName,
+        @lastName       AS lastName,
+        @cellphone      AS cellphone,
+        @email          AS email,
+        @companyId      AS companyId,
+        @userId         AS userId,
+        @userName       AS userName,
+        @hasAccount     AS hasAccount,
+        @completionPct  AS completionPct,
+        @stepsCompleted AS stepsCompleted,
+        1               AS stepGeneralInfo,
+        CASE WHEN @qrBlobUrl IS NOT NULL AND LEN(@qrBlobUrl) > 0 THEN 1 ELSE 0 END AS stepQr,
+        @isVerified       AS stepBiometric,
+        @contractAccepted AS stepContract,
+        @pagareAccepted   AS stepPagare
+    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
 ) AS result;
 GO

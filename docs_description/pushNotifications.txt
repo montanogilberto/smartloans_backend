@@ -1,5 +1,16 @@
 Performs INSERT, UPDATE, or DELETE on the pushNotifications table via sp_pushNotifications.
 Stored procedure: EXEC [dbo].[sp_pushNotifications] @pjsonfile = '<json>'
 
+On action=1 (insert), the Azure push is sent based on targetType:
+  - "User": sent to targetUserId's tag (user_<id>) only.
+  - "All": sent to every active user (one push per user, each recorded in NotificationDeliveries).
+  - "Company": sent to every active user where users.companyId = targetCompanyId (one push
+    per user, each recorded in NotificationDeliveries). Requires targetCompanyId.
+  - "Role": NOT sent -- there is no user-role mapping anywhere in the database to resolve
+    recipients from. The response includes pushSendSkipped=true and a pushSendReason
+    explaining why. The notification row is still created/updated normally either way.
+On a successful "User"/"All"/"Company" send, the response also includes pushSendSkipped=false,
+pushRecipientCount, and pushSentCount.
+
 Example:
 curl -X POST "https://smartloansbackend.azurewebsites.net/pushNotifications"   -H "Content-Type: application/json"   -d '{"action":1,"companyId":1,"title":"Welcome!","message":"This is your first notification.","notificationType":"Info","priority":"Normal","targetType":"User","targetUserId":123,"isRead":false,"isSent":false}'
