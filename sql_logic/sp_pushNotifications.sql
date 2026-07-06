@@ -281,10 +281,11 @@ CREATE PROCEDURE dbo.sp_pushNotifications_activeUsers
 AS
 BEGIN
     SET NOCOUNT ON;
-    DECLARE @companyId INT;
-
-    SELECT @companyId = JSON_VALUE(value, '$.companyId')
-    FROM OPENJSON(@pjsonfile);
+    -- @pjsonfile is a flat object (e.g. {"companyId": 5} or {"companyId": null}),
+    -- not an array, so JSON_VALUE reads straight off @pjsonfile -- OPENJSON
+    -- without an array path returns one row per key with a scalar `value`,
+    -- which JSON_VALUE(value, '$.key') can't re-parse.
+    DECLARE @companyId INT = JSON_VALUE(@pjsonfile, '$.companyId');
 
     -- @companyId NULL -> every active user (targetType 'All').
     -- @companyId set  -> active users in that company (targetType 'Company').
@@ -300,15 +301,11 @@ CREATE PROCEDURE dbo.sp_pushNotifications_recordDelivery
 AS
 BEGIN
     SET NOCOUNT ON;
-    DECLARE @pushNotificationId INT;
-    DECLARE @userId INT;
-    DECLARE @isSent BIT;
-
-    SELECT
-        @pushNotificationId = JSON_VALUE(value, '$.pushNotificationId'),
-        @userId = JSON_VALUE(value, '$.userId'),
-        @isSent = JSON_VALUE(value, '$.isSent')
-    FROM OPENJSON(@pjsonfile);
+    -- See sp_pushNotifications_activeUsers: @pjsonfile is a flat object, so
+    -- JSON_VALUE reads straight off it instead of going through OPENJSON.
+    DECLARE @pushNotificationId INT = JSON_VALUE(@pjsonfile, '$.pushNotificationId');
+    DECLARE @userId INT = JSON_VALUE(@pjsonfile, '$.userId');
+    DECLARE @isSent BIT = JSON_VALUE(@pjsonfile, '$.isSent');
 
     INSERT INTO dbo.NotificationDeliveries (pushNotificationId, userId, isSent, isRead, sentAt)
     VALUES (
