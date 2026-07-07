@@ -4,11 +4,11 @@ from databases import connection
 import json
 
 app = FastAPI()
-conn = connection()
 
 def all_commands_sp():
-
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_commands_all]")
 
@@ -24,3 +24,6 @@ def all_commands_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()

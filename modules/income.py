@@ -4,10 +4,11 @@ from databases import connection
 import json
 
 app = FastAPI()
-conn = connection()
 
 def income_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_income @pjsonfile = %s", (json.dumps(json_file),))
 
@@ -29,11 +30,15 @@ def income_sp(json_file: dict):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def all_income_sp():
-
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_income_all]")
 
@@ -49,3 +54,6 @@ def all_income_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()

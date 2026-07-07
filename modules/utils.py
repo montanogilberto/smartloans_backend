@@ -4,10 +4,11 @@ from databases import connection
 import json
 
 app = FastAPI()
-conn = connection()
 
 def select_all_tables(table_name: str):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_select_all_tables @table_name = %s", table_name)
 
@@ -20,10 +21,15 @@ def select_all_tables(table_name: str):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def select_one_row(jsonfile: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_select_one_row @pjsonfile = %s", (json.dumps(jsonfile)))
 
@@ -36,10 +42,15 @@ def select_one_row(jsonfile: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def select_elements_with_one_filter(jsonfile: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_select_with_one_field_filter @pjsonfile = %s", (json.dumps(jsonfile)))
 
@@ -52,11 +63,15 @@ def select_elements_with_one_filter(jsonfile: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def select_info_tables():
-
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_database_info_tables]")
 
@@ -72,3 +87,6 @@ def select_info_tables():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()

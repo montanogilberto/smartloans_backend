@@ -2,20 +2,25 @@ from fastapi.responses import JSONResponse
 from databases import connection
 import json
 
-conn = connection()
-
 def clientDashboards_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_clientDashboards] @pjsonfile = %s", (json.dumps(json_file),))
         json_result = cursor.fetchall()
         return JSONResponse(content=json_result[0][0], status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def all_clientDashboards_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_clientDashboards_all] @pjsonfile = %s", (json.dumps(json_file),))
         rows = cursor.fetchall()
@@ -24,3 +29,6 @@ def all_clientDashboards_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()

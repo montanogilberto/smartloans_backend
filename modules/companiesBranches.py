@@ -4,10 +4,11 @@ from databases import connection
 import json
 
 app = FastAPI()
-conn = connection()
 
 def companiesBranches_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_companiesBranches @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -20,11 +21,15 @@ def companiesBranches_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def all_companiesBranches_sp():
-
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_companiesBranches_all]")
 
@@ -40,10 +45,15 @@ def all_companiesBranches_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def by_company_companiesBranches_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_companiesBranch_by_company @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -56,9 +66,14 @@ def by_company_companiesBranches_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 def one_companiesBranches_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_companiesBranches_one @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -71,3 +86,6 @@ def one_companiesBranches_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()

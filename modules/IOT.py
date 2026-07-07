@@ -4,10 +4,11 @@ from databases import connection
 import json
 
 app = FastAPI()
-conn = connection()
 
 def led_status_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
 
         # Execute stored procedure with JSON input
@@ -25,11 +26,15 @@ def led_status_sp(json_file: dict):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def all_tankWaters_sp():
-
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_tankWater_all]")
 
@@ -45,10 +50,15 @@ def all_tankWaters_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def tankWaters_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
 
         # Execute stored procedure with JSON input
@@ -66,4 +76,6 @@ def tankWaters_sp(json_file: dict):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
-
+    finally:
+        if conn:
+            conn.close()
