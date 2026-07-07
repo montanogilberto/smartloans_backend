@@ -8,9 +8,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Database connection
-conn = connection()
-
 def log_message_to_database(phone_number, message_body, response_body, direction, status, action):
     """
     Log incoming or outgoing WhatsApp messages to the database using a stored procedure.
@@ -39,7 +36,9 @@ def log_message_to_database(phone_number, message_body, response_body, direction
     # Convert request data to JSON string
     json_request = json.dumps(request_data)
 
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         logger.info("[log_message_to_database] executing stored procedure sp_whatsapp_messages")
         cursor.execute("EXEC sp_whatsapp_messages @pjsonfile = %s", (json_request,))
@@ -72,3 +71,6 @@ def log_message_to_database(phone_number, message_body, response_body, direction
         logger.exception("[log_message_to_database] error: %s", str(e))
         # Return the error message
         return f"Error logging message to database: {str(e)}"
+    finally:
+        if conn:
+            conn.close()

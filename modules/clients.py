@@ -6,7 +6,6 @@ import json, base64, uuid, os
 from datetime import datetime
 
 app = FastAPI()
-conn = connection()
 
 _CLIENTS_CONTAINER = os.getenv("CLIENTS_CONTAINER_NAME", "clients")
 
@@ -30,7 +29,9 @@ def _upload_bytes_to_blob(raw_bytes: bytes, blob_path: str, content_type: str, m
 
 def clients_sp(json_file: dict):
     print(json_file)
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_clients] @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -45,11 +46,15 @@ def clients_sp(json_file: dict):
         return JSONResponse(content=json_result[0][1], status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def all_clients_sp():
-
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_clients_all]")
 
@@ -65,9 +70,14 @@ def all_clients_sp():
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 def one_clients_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_clients_one @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -80,10 +90,14 @@ def one_clients_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 async def upload_client_qr_sp(json_file: dict):
     """Upload QR PNG to Azure Blob Storage and persist the URL in dbo.clients."""
+    db_conn = None
     try:
         data       = (json_file.get("clients") or [{}])[0]
         client_id  = data.get("clientId")
@@ -118,3 +132,6 @@ async def upload_client_qr_sp(json_file: dict):
         return JSONResponse(content={"qrBlobUrl": qr_url}, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if db_conn:
+            db_conn.close()

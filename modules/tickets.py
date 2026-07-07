@@ -4,26 +4,33 @@ from databases import connection
 import json
 
 app = FastAPI()
-conn = connection()
 
 
 def execute_sp_json(sp_sql: str, params=()):
-    cursor = conn.cursor()
-    cursor.execute(sp_sql, params)
+    conn = None
+    try:
+        conn = connection()
+        cursor = conn.cursor()
+        cursor.execute(sp_sql, params)
 
-    rows = cursor.fetchall()
-    if not rows:
-        return None
+        rows = cursor.fetchall()
+        if not rows:
+            return None
 
-    json_text = "".join((row[0] or "") for row in rows).strip()
-    if not json_text:
-        return None
+        json_text = "".join((row[0] or "") for row in rows).strip()
+        if not json_text:
+            return None
 
-    return json.loads(json_text)
+        return json.loads(json_text)
+    finally:
+        if conn:
+            conn.close()
 
 
 def one_tickets_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_tickets_one @pjsonfile = %s", (json.dumps(json_file),))
 
@@ -36,10 +43,15 @@ def one_tickets_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def one_ticket_tracking_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_ticket_tracking @pjsonfile = %s", (json.dumps(json_file),))
 
@@ -72,10 +84,15 @@ def one_ticket_tracking_sp(json_file: dict):
         return JSONResponse(content={"success": True, "rawResult": str(raw_result)}, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def ticket_redirect_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_ticket_redirect @pjsonfile = %s", (json.dumps(json_file),))
 
@@ -85,3 +102,6 @@ def ticket_redirect_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()

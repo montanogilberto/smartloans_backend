@@ -4,11 +4,12 @@ from databases import connection
 import json
 
 app = FastAPI()
-conn = connection()
 
 def unifiedProducts_sp(json_file: dict):
     print(json_file)
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_unifiedProducts] @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -23,5 +24,6 @@ def unifiedProducts_sp(json_file: dict):
         return JSONResponse(content=json_result[0][1], status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
+    finally:
+        if conn:
+            conn.close()

@@ -4,10 +4,11 @@ from databases import connection
 import json
 
 app = FastAPI()
-conn = connection()
 
 def exchange_rate_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_exchangeRates] @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -22,10 +23,15 @@ def exchange_rate_sp(json_file: dict):
         return JSONResponse(content=json_result[0][1], status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def exchange_rate_by_day_sp(json_file: dict):
+    conn = None
     try:
+        conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_exchangeRates_by_day] @pjsonfile = %s", (json.dumps(json_file)))
 
@@ -38,4 +44,6 @@ def exchange_rate_by_day_sp(json_file: dict):
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
-
+    finally:
+        if conn:
+            conn.close()
