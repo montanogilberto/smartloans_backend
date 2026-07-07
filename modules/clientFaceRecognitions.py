@@ -15,7 +15,12 @@ def clientFaceRecognitions_sp(json_file: dict):
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_clientFaceRecognitions] @pjsonfile = %s", (json.dumps(json_file),))
         row = cursor.fetchone()
-        json_result = row[0] if row else '{"message": "ok"}'
+        # row can exist but hold a NULL/empty column (e.g. the SP's FOR JSON
+        # SELECT matched no rows) — guard against that the same way `row`
+        # itself is guarded, otherwise json.loads('') throws a confusing
+        # "Expecting value: line 1 column 1 (char 0)" that hides the real
+        # cause (SP found nothing to return).
+        json_result = row[0] if row and row[0] else '{"message": "ok"}'
         return JSONResponse(content=json.loads(json_result), status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
