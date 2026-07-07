@@ -4,18 +4,24 @@
 
 This module provides CRUD operations and connector workflows for client face recognition.
 
+Liveness detection and face matching (selfie vs. ID photo) run entirely
+client-side in the frontend via `@vladmandic/face-api` (a face-api.js fork).
+The backend's role is limited to persisting captures/results and storing
+images/contract PDFs in Azure Blob Storage — it no longer calls any face
+detection/verification API.
+
 It includes:
 
 1. **CRUD endpoints** backed by SQL Server stored procedures.
-2. **Biometric verification connector** that:
-   - uploads ID and selfie images to Azure Blob Storage,
-   - runs Azure Face API detect/verify,
-   - returns verification outcome and blob URLs.
-3. **Contract connector** that optionally uploads a contract PDF and persists verification/contract data through the CRUD SP.
+2. **Image upload connector** that persists a single ID/selfie capture to
+   Azure Blob Storage as soon as it's taken.
+3. **Contract connector** that optionally uploads a contract PDF and persists
+   verification/contract data through the CRUD SP.
 
 Primary implementation files:
 - `routes_/clientFaceRecognition.py`
 - `modules/clientFaceRecognitions.py`
+- Frontend liveness/match logic: `src/utils/faceLiveness.ts`, `src/components/FaceLivenessCapture.tsx`
 - Existing short docs:
   - `docs_description/clientFaceRecognitions.txt`
   - `docs_description/clientFaceRecognitions_all.txt`
@@ -28,8 +34,8 @@ Primary implementation files:
 Defined in `routes_/clientFaceRecognition.py`.
 
 ### 1) POST `/clientFaceRecognitions`
-**Summary:** `clientFaceRecognitions CRUD`  
-**Handler:** `clientFaceRecognitions_sp(json_file)`  
+**Summary:** `clientFaceRecognitions CRUD`
+**Handler:** `clientFaceRecognitions_sp(json_file)`
 **Purpose:** Insert, update, or delete record(s) through stored procedure.
 
 Stored procedure used:
@@ -38,8 +44,8 @@ Stored procedure used:
 ---
 
 ### 2) POST `/all_clientFaceRecognitions`
-**Summary:** `all clientFaceRecognitions`  
-**Handler:** `all_clientFaceRecognitions_sp(json_file)`  
+**Summary:** `all clientFaceRecognitions`
+**Handler:** `all_clientFaceRecognitions_sp(json_file)`
 **Purpose:** Fetch all records (typically filtered by company).
 
 Stored procedure used:
@@ -48,8 +54,8 @@ Stored procedure used:
 ---
 
 ### 3) POST `/one_clientFaceRecognitions`
-**Summary:** `one clientFaceRecognition`  
-**Handler:** `one_clientFaceRecognitions_sp(json_file)`  
+**Summary:** `one clientFaceRecognition`
+**Handler:** `one_clientFaceRecognitions_sp(json_file)`
 **Purpose:** Fetch one record by primary key.
 
 Stored procedure used:
@@ -62,8 +68,8 @@ Stored procedure used:
 **Tags:** `connector`
 **Handler:** `upload_id_image_connector(payload)` (async)
 **Purpose:** Persists a single captured image (front/back/selfie) to blob storage
-immediately, decoupled from the full verify+liveness flow, so a capture isn't
-lost if the user doesn't finish the wizard. Returns only `{ blobUrl }` — no
+immediately, decoupled from the wizard's completion, so a capture isn't
+lost if the user doesn't finish. Returns only `{ blobUrl }` — no
 database writes; the frontend upserts the `ClientFaceRecognitions` row itself
 via the existing CRUD endpoint.
 
@@ -85,18 +91,10 @@ Blob naming: `clients/<YYYY>/<MM>/<side>_<clientId>_<timestamp>_<uid>.jpg`
 
 ---
 
-### 5) POST `/api/clientFaceRecognition/verify`
-**Summary:** `Biometric verify ClientFaceRecognition`  
-**Tags:** `connector`  
-**Handler:** `verify_clientFaceRecognition_connector(payload)` (async)  
-**Purpose:** End-to-end biometric verification (upload + face detect + face verify).
-
----
-
-### 6) POST `/api/clientFaceRecognition/contract`
-**Summary:** `Submit contract ClientFaceRecognition`  
-**Tags:** `connector`  
-**Handler:** `contract_clientFaceRecognition_connector(payload)` (async)  
+### 5) POST `/api/clientFaceRecognition/contract`
+**Summary:** `Submit contract ClientFaceRecognition`
+**Tags:** `connector`
+**Handler:** `contract_clientFaceRecognition_connector(payload)` (async)
 **Purpose:** Optional contract upload + persistence via CRUD SP.
 
 ---
@@ -159,124 +157,30 @@ Example:
 
 ---
 
-## Connector: Create Session (`/api/clientFaceRecognition/create-session`)
+## Client-side liveness + face match (replaces Azure Face Liveness)
 
-Implemented in `create_azure_liveness_session`.
+Previously this module proxied Azure's "Liveness With Verify" API
+(`/api/clientFaceRecognition/create-session` + `/api/clientFaceRecognition/verify`).
+That gated, per-check-billed integration has been replaced entirely by a
+self-hosted flow using `@vladmandic/face-api` running in the browser/WebView:
 
-### Purpose
-Creates an Azure "Liveness With Verify" session and returns credentials/token
-data for the frontend liveness capture flow. **Azure requires the reference
-(ID) image at session-creation time** — it cannot be attached later — so the
-caller must send the already-captured front ID image in this call.
+1. Frontend loads face-api.js model weights from `public/models/face-api`
+   (`src/utils/faceLiveness.ts`, `loadFaceApiModels`).
+2. `FaceLivenessCapture` opens the front camera, picks a random challenge
+   (blink / turn-left / turn-right / smile), and waits for it to be detected
+   from live video frames.
+3. On success it captures a selfie frame and computes its face descriptor.
+4. The page (`ClientFaceRecognitionPage.tsx` / `ClientsPage.tsx`) also computes
+   a descriptor from the already-captured ID front photo
+   (`getFaceDescriptorFromImage`), then compares the two via
+   `compareFaceDescriptors` (Euclidean distance, threshold `0.6`).
+5. The selfie is uploaded via `/api/clientFaceRecognition/upload-image`
+   (`side: "selfie"`), and `confidenceScore`/`isVerified` are persisted via the
+   existing CRUD endpoint (`upsertClientFaceRecognition`).
 
-### Azure call
-- `POST {AZURE_FACE_API_ENDPOINT}/face/{AZURE_FACE_LIVENESS_API_VERSION}/detectLivenessWithVerify-sessions`
-- **multipart/form-data**, not JSON.
-
-### Request body (to this backend endpoint)
-```json
-{ "idFrontImageBase64": "<base64 image or data-uri>" }
-```
-
-### Form fields sent to Azure
-```
-livenessOperationMode: "PassiveActive"
-deviceCorrelationId:   "<uuid>"
-enableSessionImage:    "true"
-verifyImage:           <file, from idFrontImageBase64>
-```
-
-### Response from backend
-```json
-{
-  "sessionId": "<azure-session-id>",
-  "authToken": "<short-lived-token>",
-  "raw": { "...azure full payload..." }
-}
-```
-
-### Known external blocker
-Azure Face Liveness Detection is a gated feature (Face Recognition Limited
-Access — https://aka.ms/facerecognition). If the configured
-`AZURE_FACE_API_ENDPOINT` resource hasn't been approved for it, Azure returns
-`403 UnsupportedFeature`. This is an approval/account issue, not a code bug —
-confirm the resource has been granted access before assuming a code problem.
-
----
-
-## Connector: Verification Flow (`/api/clientFaceRecognition/verify`)
-
-Implemented in `verify_clientFaceRecognition_connector`.
-
-### Input payload (expected)
-Typical fields used by code:
-```json
-{
-  "companyId": 1,
-  "documentType": "INE",
-  "idFrontImageBase64": "<base64 image or data-uri>",
-  "azureSessionId": "<session-id-from-create-session>"
-}
-```
-
-### Processing steps
-1. Build blob paths under `clients/<YYYY>/<MM>/...`.
-2. Upload `idFrontImageBase64` as JPEG to Azure Blob.
-3. `GET {AZURE_FACE_API_ENDPOINT}/face/{AZURE_FACE_LIVENESS_API_VERSION}/detectLivenessWithVerify-sessions/{azureSessionId}`.
-4. Read the **latest** entry in `results.attempts[]`:
-   - `attempts[-1].result.livenessDecision`
-   - `attempts[-1].result.verifyResult.isIdentical`
-   - `attempts[-1].result.verifyResult.matchConfidence`
-5. Azure's liveness-with-verify API does not return an extracted selfie frame
-   (no `extractedFace` field exists) — `clientSelfieBlobUrl` is set to the
-   uploaded ID image URL as a stand-in.
-6. Compute:
-   - `is_live = livenessDecision == "realface"`
-   - `confidenceScore = matchConfidence`
-   - `isVerified = is_live && isIdentical && confidenceScore >= 0.6`
-7. If `results.attempts[]` is empty (session not completed yet), returns
-   `isVerified: false` with an explanatory `error` rather than raising.
-
-### Success response
-```json
-{
-  "isVerified": true,
-  "confidenceScore": 0.98,
-  "idFrontImageBlobUrl": "https://.../clients/.../doc_id_....jpg",
-  "clientSelfieBlobUrl": "https://.../clients/.../selfie_....jpg"
-}
-```
-
-### No-face cases (handled as HTTP 200)
-If no face in ID:
-```json
-{
-  "isVerified": false,
-  "confidenceScore": 0.0,
-  "error": "No face detected in ID document",
-  "idFrontImageBlobUrl": "https://...",
-  "clientSelfieBlobUrl": "https://..."
-}
-```
-
-If no face in selfie:
-```json
-{
-  "isVerified": false,
-  "confidenceScore": 0.0,
-  "error": "No face detected in selfie",
-  "idFrontImageBlobUrl": "https://...",
-  "clientSelfieBlobUrl": "https://..."
-}
-```
-
-### Error handling
-Unexpected exceptions return:
-- HTTP `500`
-- Body:
-```json
-{ "error": "<exception message>" }
-```
+No backend call is made for the liveness check or the face match itself —
+the backend only ever receives the final computed result plus the images to
+store. There is no external vendor, no approval gate, and no per-check cost.
 
 ---
 
@@ -331,15 +235,11 @@ Implemented in `contract_clientFaceRecognition_connector`.
 
 Used by `modules/clientFaceRecognitions.py`:
 
-- `AZURE_FACE_API_ENDPOINT`  
-  Base endpoint for Azure Face API (trailing slash trimmed).
-- `AZURE_FACE_API_KEY`  
-  Subscription key for Face API.
-- `AZURE_STORAGE_CONNECTION_STRING`  
+- `AZURE_STORAGE_CONNECTION_STRING`
   Required to instantiate `BlobServiceClient`.
-- `CLIENTS_CONTAINER_NAME`  
+- `CLIENTS_CONTAINER_NAME`
   Blob container name, default: `"clients"`.
-- `AZURE_STORAGE_ACCOUNT_URL_FALLBACK`  
+- `AZURE_STORAGE_ACCOUNT_URL_FALLBACK`
   Optional fallback for building blob public URL when SDK service URL is unavailable.
 
 ---
@@ -355,22 +255,13 @@ Used by `modules/clientFaceRecognitions.py`:
    - Upload images/PDFs with metadata.
    - Uses `azure.storage.blob` (`BlobServiceClient`, `ContentSettings`).
 
-3. **Azure Face API**
-   - `POST /face/v1.0/detect` (for each image URL)
-   - `POST /face/v1.0/verify` (faceId comparison)
-
-4. **HTTP client**
-   - `httpx.AsyncClient(timeout=30.0)`
-
 ---
 
 ## Blob Naming Conventions
 
 Current patterns in code:
-- ID image:
-  - `clients/<YYYY>/<MM>/<documentType>_id_<timestamp>_<uid>.jpg`
-- Selfie image:
-  - `clients/<YYYY>/<MM>/selfie_<timestamp>_<uid>.jpg`
+- ID/selfie image (uploaded via `upload-image` connector):
+  - `clients/<YYYY>/<MM>/<side>_<clientId>_<timestamp>_<uid>.jpg`
 - Contract PDF:
   - `clients/<YYYY>/<MM>/contract_<timestamp>_<uid>.pdf`
 
@@ -380,11 +271,11 @@ Current patterns in code:
 
 ## Confidence Logic
 
-Threshold constant:
-- `_CONFIDENCE_THRESHOLD = 0.6`
-
-Final verification flag:
-- `isVerified = isIdentical && confidence >= 0.6`
+Computed entirely client-side in `src/utils/faceLiveness.ts`:
+- `compareFaceDescriptors` — Euclidean distance between the ID and selfie
+  face descriptors; match threshold `0.6` (face-api.js's own recommended cutoff).
+- `distanceToConfidence` — maps that distance onto a `0-1` confidence figure
+  for display/storage, replacing what used to be Azure's `matchConfidence`.
 
 ---
 
@@ -411,25 +302,11 @@ curl -X POST "https://smartloansbackend.azurewebsites.net/one_clientFaceRecognit
   -d '{"companyId":1,"clientFaceRecognitionId":1}'
 ```
 
-## Create-session connector
-```bash
-curl -X POST "https://smartloansbackend.azurewebsites.net/api/clientFaceRecognition/create-session" \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
-
 ## Upload single image connector
 ```bash
 curl -X POST "https://smartloansbackend.azurewebsites.net/api/clientFaceRecognition/upload-image" \
   -H "Content-Type: application/json" \
   -d '{"companyId":1,"clientId":123,"side":"front","imageBase64":"<base64>"}'
-```
-
-## Verify connector
-```bash
-curl -X POST "https://smartloansbackend.azurewebsites.net/api/clientFaceRecognition/verify" \
-  -H "Content-Type: application/json" \
-  -d '{"companyId":1,"documentType":"INE","idFrontImageBase64":"<base64>","azureSessionId":"<session-id>"}'
 ```
 
 ## Contract connector
