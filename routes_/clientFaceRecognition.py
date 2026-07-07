@@ -1,9 +1,7 @@
 from fastapi import APIRouter
 from modules.clientFaceRecognitions import (
     clientFaceRecognitions_sp, all_clientFaceRecognitions_sp, one_clientFaceRecognitions_sp,
-    verify_clientFaceRecognition_connector,
     contract_clientFaceRecognition_connector,
-    create_azure_liveness_session,
     upload_id_image_connector,
 )
 
@@ -32,19 +30,9 @@ def one_clientFaceRecognitions(json: dict):
 
 
 # --- connector routes (async) ---
-@router.post("/api/clientFaceRecognition/create-session", summary="Create Azure Liveness Session", tags=["connector"])
-async def create_liveness_session(json: dict):
-    return await create_azure_liveness_session(json)
-
-
 @router.post("/api/clientFaceRecognition/upload-image", summary="Upload a single ID/selfie image", tags=["connector"])
 async def upload_id_image(json: dict):
     return await upload_id_image_connector(json)
-
-
-@router.post("/api/clientFaceRecognition/verify", summary="Biometric verify ClientFaceRecognition", tags=["connector"])
-async def verify_clientFaceRecognition(json: dict):
-    return await verify_clientFaceRecognition_connector(json)
 
 
 @router.post("/api/clientFaceRecognition/contract", summary="Submit contract ClientFaceRecognition", tags=["connector"])
