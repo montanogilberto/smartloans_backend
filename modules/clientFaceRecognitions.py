@@ -9,19 +9,28 @@ from datetime import datetime
 
 
 def clientFaceRecognitions_sp(json_file: dict):
+    """
+    sp_clientFaceRecognitions' Finish: block returns three flat scalar
+    columns (value, msg, error) — NOT a single JSON-blob column like most
+    other SPs in this codebase. `value` holds the affected row's
+    clientFaceRecognitionId (as text) on insert/update, which the frontend
+    needs back to keep updating the same row across capture steps.
+    """
     conn = None
     try:
         conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_clientFaceRecognitions] @pjsonfile = %s", (json.dumps(json_file),))
         row = cursor.fetchone()
-        # row can exist but hold a NULL/empty column (e.g. the SP's FOR JSON
-        # SELECT matched no rows) — guard against that the same way `row`
-        # itself is guarded, otherwise json.loads('') throws a confusing
-        # "Expecting value: line 1 column 1 (char 0)" that hides the real
-        # cause (SP found nothing to return).
-        json_result = row[0] if row and row[0] else '{"message": "ok"}'
-        return JSONResponse(content=json.loads(json_result), status_code=200)
+        if not row:
+            return JSONResponse(content={"message": "ok"}, status_code=200)
+
+        value, msg, error = row[0], row[1], row[2]
+        client_face_recognition_id = int(value) if value not in (None, "") else None
+        content = {"msg": msg, "error": bool(error)}
+        if client_face_recognition_id is not None:
+            content["clientFaceRecognitionId"] = client_face_recognition_id
+        return JSONResponse(content=content, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
     finally:
@@ -139,38 +148,62 @@ async def upload_id_image_connector(payload: dict) -> JSONResponse:
 
 async def contract_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
     """
-    Optionally uploads a base64 contract PDF to blob storage (clients container),
-    then persists the final verification + contract record via the standard CRUD SP.
+    Optionally uploads base64 contract/pagaré PDFs to blob storage (clients
+    container), then persists the final verification + contract record via
+    the standard CRUD SP.
+
+    When clientFaceRecognitionId is provided (the row already created by the
+    front/back/selfie capture steps), this UPDATEs that row instead of
+    INSERTing a new one — otherwise every contract submission left an
+    orphaned duplicate row with no clientId and no back-image/pagaré data.
     """
     try:
-        contract_url = payload.get("contractPdfBlobUrl", "")
+        now = datetime.utcnow()
+        ts  = now.strftime("%Y%m%d%H%M%S")
 
-        # Upload contract PDF if caller sent base64 instead of a URL
+        contract_url = payload.get("contractPdfBlobUrl", "")
         contract_b64 = payload.get("contractPdfBase64", "")
         if contract_b64 and not contract_url:
-            company_id = payload.get("companyId", "0")
-            now        = datetime.utcnow()
-            ts         = now.strftime("%Y%m%d%H%M%S")
-            uid        = str(uuid.uuid4())[:8]
-            blob_path  = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + "/contract_" + ts + "_" + uid + ".pdf"
+            uid = str(uuid.uuid4())[:8]
+            blob_path = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + "/contract_" + ts + "_" + uid + ".pdf"
             contract_url = _upload_base64_to_blob(
                 contract_b64, blob_path, "application/pdf",
-                {"companyId": str(company_id), "type": "contract"},
+                {"companyId": str(payload.get("companyId", "0")), "type": "contract"},
             )
 
-        json_file = {
-            "clientFaceRecognitions": [{
-                "action":              1,
-                "companyId":           payload.get("companyId"),
-                "documentType":        payload.get("documentType"),
-                "idFrontImageBlobUrl": payload.get("idFrontImageBlobUrl"),
-                "clientSelfieBlobUrl": payload.get("clientSelfieBlobUrl"),
-                "confidenceScore":     payload.get("confidenceScore", 0.0),
-                "isVerified":          payload.get("isVerified", False),
-                "contractAccepted":    payload.get("contractAccepted", False),
-                "acceptedAt":          payload.get("acceptedAt"),
-            }]
+        pagare_url = payload.get("pagarePdfBlobUrl", "")
+        pagare_b64 = payload.get("pagarePdfBase64", "")
+        if pagare_b64 and not pagare_url:
+            uid = str(uuid.uuid4())[:8]
+            blob_path = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + "/pagare_" + ts + "_" + uid + ".pdf"
+            pagare_url = _upload_base64_to_blob(
+                pagare_b64, blob_path, "application/pdf",
+                {"companyId": str(payload.get("companyId", "0")), "type": "pagare"},
+            )
+
+        client_face_recognition_id = payload.get("clientFaceRecognitionId")
+        record = {
+            "action":              2 if client_face_recognition_id else 1,
+            "companyId":           payload.get("companyId"),
+            "clientId":            payload.get("clientId"),
+            "documentType":        payload.get("documentType"),
+            "idFrontImageBlobUrl": payload.get("idFrontImageBlobUrl"),
+            "idBackImageBlobUrl":  payload.get("idBackImageBlobUrl"),
+            "clientSelfieBlobUrl": payload.get("clientSelfieBlobUrl"),
+            "confidenceScore":     payload.get("confidenceScore", 0.0),
+            "isVerified":          payload.get("isVerified", False),
+            "contractAccepted":    payload.get("contractAccepted", False),
+            "contractPdfBlobUrl":  contract_url,
+            "contractAcceptedAt":  payload.get("contractAcceptedAt"),
+            "pagareAccepted":      payload.get("pagareAccepted", False),
+            "pagarePdfBlobUrl":    pagare_url,
+            "hasPhysicalPagare":   payload.get("hasPhysicalPagare", False),
+            "userId":              payload.get("userId"),
         }
+        if client_face_recognition_id:
+            record["clientFaceRecognitionId"] = client_face_recognition_id
+
+        json_file = {"clientFaceRecognitions": [record]}
         return clientFaceRecognitions_sp(json_file)   # reuse CRUD SP for persistence
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
