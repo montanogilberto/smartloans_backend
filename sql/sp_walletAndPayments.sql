@@ -152,6 +152,22 @@ BEGIN
                     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
         END
 
+        ELSE IF @action = 'release'
+        BEGIN
+            -- Undo a prior 'reserve' when the disbursement it was held for
+            -- fails, without touching totalDisbursed (no money actually moved).
+            UPDATE [dbo].[clientWallets]
+            SET availableBalance = availableBalance + LEAST(@amountMXN, reservedBalance),
+                reservedBalance  = GREATEST(0, reservedBalance - @amountMXN),
+                updatedAt        = GETUTCDATE()
+            WHERE clientId=@clientId AND companyId=@companyId
+
+            SELECT (SELECT availableBalance, reservedBalance
+                    FROM [dbo].[clientWallets]
+                    WHERE clientId=@clientId AND companyId=@companyId
+                    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
+        END
+
         ELSE IF @action = 'list'
         BEGIN
             SELECT ISNULL(

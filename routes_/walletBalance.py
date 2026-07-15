@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.walletBalance import get_wallet, credit_wallet, debit_wallet, reserve_wallet, get_all_wallets
+from modules.walletBalance import get_wallet, credit_wallet, debit_wallet, reserve_wallet, release_wallet, get_all_wallets
 
 router = APIRouter(prefix="/wallet", tags=["Wallet Balance"])
 
@@ -67,3 +67,18 @@ Body: { "clientId": int, "companyId": int, "amountMXN": float }
 )
 async def reserve(json: dict):
     return await reserve_wallet(json)
+
+
+@router.post(
+    "/release",
+    summary="Release a reservation when disbursement fails",
+    description="""
+Moves amountMXN from reservedBalance back to availableBalance without
+touching totalDisbursed. Called when a /stripe/disburse call fails after
+funds were already reserved for it.
+
+Body: { "clientId": int, "companyId": int, "amountMXN": float }
+""",
+)
+async def release(json: dict):
+    return await release_wallet(json)

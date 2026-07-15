@@ -6,17 +6,30 @@
 -- ── Table: stripeConnectedAccounts ─────────────────────────
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'stripeConnectedAccounts')
 CREATE TABLE [dbo].[stripeConnectedAccounts] (
-    id                  INT IDENTITY PRIMARY KEY,
-    clientId            INT NOT NULL,
-    companyId           INT NOT NULL,
-    connectedAccountId  NVARCHAR(100) NOT NULL,   -- Stripe acct_xxx
-    chargesEnabled      BIT NOT NULL DEFAULT 0,
-    payoutsEnabled      BIT NOT NULL DEFAULT 0,
-    detailsSubmitted    BIT NOT NULL DEFAULT 0,
-    created_At          DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
-    updated_at          DATETIME2 NULL,
+    id                       INT IDENTITY PRIMARY KEY,
+    clientId                 INT NOT NULL,
+    companyId                INT NOT NULL,
+    connectedAccountId       NVARCHAR(100) NOT NULL,   -- Stripe acct_xxx
+    chargesEnabled           BIT NOT NULL DEFAULT 0,
+    payoutsEnabled           BIT NOT NULL DEFAULT 0,
+    detailsSubmitted         BIT NOT NULL DEFAULT 0,
+    hasExternalAccount       BIT NOT NULL DEFAULT 0,   -- bank account/debit card actually on file
+    externalAccountLast4     NVARCHAR(4) NULL,
+    externalAccountType      NVARCHAR(20) NULL,        -- bank_account | card
+    externalAccountBankName  NVARCHAR(100) NULL,
+    created_At               DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    updated_at               DATETIME2 NULL,
     CONSTRAINT UQ_stripeAccounts_client UNIQUE (clientId, companyId)
 )
+GO
+
+-- Backfill for pre-existing databases (no-op if the table was just created above)
+IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.stripeConnectedAccounts') AND name = 'hasExternalAccount')
+ALTER TABLE [dbo].[stripeConnectedAccounts] ADD
+    hasExternalAccount       BIT NOT NULL DEFAULT 0,
+    externalAccountLast4     NVARCHAR(4) NULL,
+    externalAccountType      NVARCHAR(20) NULL,
+    externalAccountBankName  NVARCHAR(100) NULL
 GO
 
 -- ── Table: stripeTransactions ───────────────────────────────
@@ -36,10 +49,16 @@ CREATE TABLE [dbo].[stripeTransactions] (
     -- pending | processing | succeeded | failed | refunded | requires_action
     stripePaymentIntentId   NVARCHAR(100) NULL,
     stripeTransferId        NVARCHAR(100) NULL,
+    stripePayoutId          NVARCHAR(100) NULL,
     failureReason           NVARCHAR(500) NULL,
     created_At              DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
     updated_at              DATETIME2 NULL,
 )
+GO
+
+-- Backfill for pre-existing databases (no-op if the table was just created above)
+IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.stripeTransactions') AND name = 'stripePayoutId')
+ALTER TABLE [dbo].[stripeTransactions] ADD stripePayoutId NVARCHAR(100) NULL
 GO
 
 -- ============================================================
@@ -55,13 +74,17 @@ AS
 BEGIN
     SET NOCOUNT ON;
     BEGIN TRY
-        DECLARE @action             NVARCHAR(10)  = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].action')
-        DECLARE @clientId           INT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].clientId')
-        DECLARE @companyId          INT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].companyId')
-        DECLARE @connectedAccountId NVARCHAR(100) = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].connectedAccountId')
-        DECLARE @chargesEnabled     BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].chargesEnabled')
-        DECLARE @payoutsEnabled     BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].payoutsEnabled')
-        DECLARE @detailsSubmitted   BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].detailsSubmitted')
+        DECLARE @action                  NVARCHAR(10)  = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].action')
+        DECLARE @clientId                INT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].clientId')
+        DECLARE @companyId               INT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].companyId')
+        DECLARE @connectedAccountId      NVARCHAR(100) = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].connectedAccountId')
+        DECLARE @chargesEnabled          BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].chargesEnabled')
+        DECLARE @payoutsEnabled          BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].payoutsEnabled')
+        DECLARE @detailsSubmitted        BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].detailsSubmitted')
+        DECLARE @hasExternalAccount      BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].hasExternalAccount')
+        DECLARE @externalAccountLast4    NVARCHAR(4)   = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].externalAccountLast4')
+        DECLARE @externalAccountType     NVARCHAR(20)  = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].externalAccountType')
+        DECLARE @externalAccountBankName NVARCHAR(100) = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].externalAccountBankName')
 
         IF @action = 'upsert'
         BEGIN
@@ -69,15 +92,21 @@ BEGIN
             USING (SELECT @clientId AS clientId, @companyId AS companyId) AS source
                 ON target.clientId = source.clientId AND target.companyId = source.companyId
             WHEN MATCHED THEN
-                UPDATE SET connectedAccountId = ISNULL(@connectedAccountId, target.connectedAccountId),
-                           chargesEnabled     = ISNULL(@chargesEnabled,     target.chargesEnabled),
-                           payoutsEnabled     = ISNULL(@payoutsEnabled,     target.payoutsEnabled),
-                           detailsSubmitted   = ISNULL(@detailsSubmitted,   target.detailsSubmitted),
-                           updated_at         = GETUTCDATE()
+                UPDATE SET connectedAccountId      = ISNULL(@connectedAccountId,      target.connectedAccountId),
+                           chargesEnabled          = ISNULL(@chargesEnabled,          target.chargesEnabled),
+                           payoutsEnabled          = ISNULL(@payoutsEnabled,          target.payoutsEnabled),
+                           detailsSubmitted        = ISNULL(@detailsSubmitted,        target.detailsSubmitted),
+                           hasExternalAccount      = ISNULL(@hasExternalAccount,      target.hasExternalAccount),
+                           externalAccountLast4    = ISNULL(@externalAccountLast4,    target.externalAccountLast4),
+                           externalAccountType     = ISNULL(@externalAccountType,     target.externalAccountType),
+                           externalAccountBankName = ISNULL(@externalAccountBankName, target.externalAccountBankName),
+                           updated_at              = GETUTCDATE()
             WHEN NOT MATCHED THEN
-                INSERT (clientId, companyId, connectedAccountId, chargesEnabled, payoutsEnabled, detailsSubmitted)
+                INSERT (clientId, companyId, connectedAccountId, chargesEnabled, payoutsEnabled, detailsSubmitted,
+                        hasExternalAccount, externalAccountLast4, externalAccountType, externalAccountBankName)
                 VALUES (@clientId, @companyId, @connectedAccountId,
-                        ISNULL(@chargesEnabled, 0), ISNULL(@payoutsEnabled, 0), ISNULL(@detailsSubmitted, 0));
+                        ISNULL(@chargesEnabled, 0), ISNULL(@payoutsEnabled, 0), ISNULL(@detailsSubmitted, 0),
+                        ISNULL(@hasExternalAccount, 0), @externalAccountLast4, @externalAccountType, @externalAccountBankName);
 
             SELECT (SELECT TOP 1 * FROM [dbo].[stripeConnectedAccounts]
                     WHERE clientId = @clientId AND companyId = @companyId
@@ -89,6 +118,7 @@ BEGIN
             SELECT ISNULL(
                 (SELECT TOP 1 connectedAccountId, clientId, companyId,
                         chargesEnabled, payoutsEnabled, detailsSubmitted,
+                        hasExternalAccount, externalAccountLast4, externalAccountType, externalAccountBankName,
                         CONVERT(NVARCHAR, created_At, 127) AS created_At
                  FROM [dbo].[stripeConnectedAccounts]
                  WHERE clientId = @clientId AND companyId = @companyId
@@ -128,6 +158,7 @@ BEGIN
         DECLARE @status                 NVARCHAR(20)  = ISNULL(JSON_VALUE(@pjsonfile, '$.stripeTransactions[0].status'), 'pending')
         DECLARE @stripePaymentIntentId  NVARCHAR(100) = JSON_VALUE(@pjsonfile, '$.stripeTransactions[0].stripePaymentIntentId')
         DECLARE @stripeTransferId       NVARCHAR(100) = JSON_VALUE(@pjsonfile, '$.stripeTransactions[0].stripeTransferId')
+        DECLARE @stripePayoutId         NVARCHAR(100) = JSON_VALUE(@pjsonfile, '$.stripeTransactions[0].stripePayoutId')
         DECLARE @failureReason          NVARCHAR(500) = JSON_VALUE(@pjsonfile, '$.stripeTransactions[0].failureReason')
         DECLARE @clientId               INT           = JSON_VALUE(@pjsonfile, '$.stripeTransactions[0].clientId')
 
@@ -135,12 +166,12 @@ BEGIN
         BEGIN
             INSERT INTO [dbo].[stripeTransactions]
                 (companyId, loanId, proposalId, fromClientId, toClientId, amount, currency,
-                 paymentType, status, stripePaymentIntentId, stripeTransferId, failureReason)
+                 paymentType, status, stripePaymentIntentId, stripeTransferId, stripePayoutId, failureReason)
             VALUES
                 (@companyId, @loanId, @proposalId, @fromClientId, @toClientId, @amount, @currency,
-                 @paymentType, @status, @stripePaymentIntentId, @stripeTransferId, @failureReason)
+                 @paymentType, @status, @stripePaymentIntentId, @stripeTransferId, @stripePayoutId, @failureReason)
 
-            SELECT (SELECT transactionId, status, stripePaymentIntentId, amount, currency
+            SELECT (SELECT transactionId, status, stripePaymentIntentId, stripePayoutId, amount, currency
                     FROM [dbo].[stripeTransactions]
                     WHERE transactionId = SCOPE_IDENTITY()
                     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
@@ -167,7 +198,7 @@ BEGIN
                 (SELECT transactionId, companyId, loanId, proposalId,
                         fromClientId, toClientId, amount, currency,
                         paymentType, status,
-                        stripePaymentIntentId, stripeTransferId, failureReason,
+                        stripePaymentIntentId, stripeTransferId, stripePayoutId, failureReason,
                         CONVERT(NVARCHAR, created_At, 127) AS created_At,
                         CONVERT(NVARCHAR, updated_at, 127) AS updated_at
                  FROM [dbo].[stripeTransactions]

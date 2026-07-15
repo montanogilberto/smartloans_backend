@@ -22,6 +22,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from databases import connection
 from datetime import datetime
+from modules.walletBalance import debit_wallet
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -68,6 +69,22 @@ def _sp_transaction(payload: dict):
     finally:
         if conn:
             conn.close()
+
+def _external_account_info(acct):
+    """
+    Extract bank-account/debit-card payout info from a Stripe Account object.
+    Caller must have retrieved `acct` with expand=["external_accounts"].
+    """
+    ext = getattr(acct, "external_accounts", None)
+    data = getattr(ext, "data", []) if ext else []
+    if not data:
+        return False, None, None, None
+    first = data[0]
+    ext_type = getattr(first, "object", None)  # "bank_account" | "card"
+    last4 = getattr(first, "last4", None)
+    bank_name = getattr(first, "bank_name", None) if ext_type == "bank_account" else getattr(first, "brand", None)
+    return True, last4, ext_type, bank_name
+
 
 def _sp_transactions_list(company_id: int, filters: dict = None):
     """List transactions from SQL."""
@@ -153,6 +170,7 @@ async def create_connected_account(payload: dict):
                 "chargesEnabled": False,
                 "payoutsEnabled": False,
                 "detailsSubmitted": False,
+                "hasExternalAccount": False,
             })
 
             return JSONResponse({
@@ -163,19 +181,38 @@ async def create_connected_account(payload: dict):
                     "chargesEnabled": False,
                     "payoutsEnabled": False,
                     "detailsSubmitted": False,
+                    "hasExternalAccount": False,
+                    "externalAccountLast4": None,
+                    "externalAccountType": None,
+                    "externalAccountBankName": None,
                 }
             }, status_code=200)
 
         # Account exists — refresh status from Stripe
         print(f"[stripe][create_connected_account] retrieving existing Stripe account acct_id={acct_id}")
-        acct = stripe.Account.retrieve(acct_id)
+        acct = stripe.Account.retrieve(acct_id, expand=["external_accounts"])
         _charges   = getattr(acct, "charges_enabled", False)
         _payouts   = getattr(acct, "payouts_enabled", False)
         _submitted = getattr(acct, "details_submitted", False)
+        _has_ext, _ext_last4, _ext_type, _ext_bank = _external_account_info(acct)
         print(
             "[stripe][create_connected_account] stripe retrieve success "
-            f"charges_enabled={_charges} payouts_enabled={_payouts} details_submitted={_submitted}"
+            f"charges_enabled={_charges} payouts_enabled={_payouts} details_submitted={_submitted} "
+            f"hasExternalAccount={_has_ext}"
         )
+        _sp_connected_accounts({
+            "action": "upsert",
+            "clientId": client_id,
+            "companyId": company_id,
+            "connectedAccountId": acct_id,
+            "chargesEnabled": _charges,
+            "payoutsEnabled": _payouts,
+            "detailsSubmitted": _submitted,
+            "hasExternalAccount": _has_ext,
+            "externalAccountLast4": _ext_last4,
+            "externalAccountType": _ext_type,
+            "externalAccountBankName": _ext_bank,
+        })
         return JSONResponse({
             "account": {
                 "connectedAccountId": acct_id,
@@ -184,6 +221,10 @@ async def create_connected_account(payload: dict):
                 "chargesEnabled": _charges,
                 "payoutsEnabled": _payouts,
                 "detailsSubmitted": _submitted,
+                "hasExternalAccount": _has_ext,
+                "externalAccountLast4": _ext_last4,
+                "externalAccountType": _ext_type,
+                "externalAccountBankName": _ext_bank,
             }
         }, status_code=200)
 
@@ -231,15 +272,16 @@ async def get_connected_account_status(payload: dict):
             return JSONResponse({"account": None}, status_code=200)
 
         print(f"[stripe][get_connected_account_status] retrieving Stripe account acct_id={acct_id}")
-        acct = stripe.Account.retrieve(acct_id)
+        acct = stripe.Account.retrieve(acct_id, expand=["external_accounts"])
         charges_enabled   = getattr(acct, "charges_enabled", False)
         payouts_enabled   = getattr(acct, "payouts_enabled", False)
         details_submitted = getattr(acct, "details_submitted", False)
+        has_ext, ext_last4, ext_type, ext_bank = _external_account_info(acct)
 
         print(
             "[stripe][get_connected_account_status] stripe retrieve success "
             f"charges_enabled={charges_enabled} payouts_enabled={payouts_enabled} "
-            f"details_submitted={details_submitted}"
+            f"details_submitted={details_submitted} hasExternalAccount={has_ext}"
         )
 
         # Update SQL with latest status
@@ -252,6 +294,10 @@ async def get_connected_account_status(payload: dict):
             "chargesEnabled": charges_enabled,
             "payoutsEnabled": payouts_enabled,
             "detailsSubmitted": details_submitted,
+            "hasExternalAccount": has_ext,
+            "externalAccountLast4": ext_last4,
+            "externalAccountType": ext_type,
+            "externalAccountBankName": ext_bank,
         })
 
         return JSONResponse({
@@ -262,6 +308,10 @@ async def get_connected_account_status(payload: dict):
                 "chargesEnabled": charges_enabled,
                 "payoutsEnabled": payouts_enabled,
                 "detailsSubmitted": details_submitted,
+                "hasExternalAccount": has_ext,
+                "externalAccountLast4": ext_last4,
+                "externalAccountType": ext_type,
+                "externalAccountBankName": ext_bank,
             }
         }, status_code=200)
 
@@ -300,7 +350,13 @@ async def create_account_session(payload: dict):
         session = stripe.AccountSession.create(
             account=acct_id,
             components={
-                "account_onboarding": {"enabled": True},
+                # external_account_collection already defaults to True — set
+                # explicitly since the whole point of this step is capturing
+                # the client's bank account/debit card for payouts.
+                "account_onboarding": {
+                    "enabled": True,
+                    "features": {"external_account_collection": True},
+                },
             },
         )
 
@@ -533,6 +589,79 @@ async def disburse_loan(payload: dict):
             "status": "succeeded",
             "transactionId": tx.get("transactionId", 0),
             "stripeTransferId": transfer["id"],
+            "amount": amount_centavos,
+            "currency": "mxn",
+        }, status_code=200)
+
+    except stripe.StripeError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+# ── Withdrawal ───────────────────────────────────────────────────────────────
+
+async def withdraw_to_bank(payload: dict):
+    """
+    On-demand payout of a client's available wallet balance to their linked
+    bank account/debit card. Connected accounts stay on Stripe's default
+    automatic payout schedule (a borrower's loan disbursement should reach
+    their bank promptly, not sit until a manual pull) — this just lets a
+    client trigger an extra payout of whatever's currently on their
+    Connected Account balance right now, instead of waiting for the next
+    automatic cycle.
+    """
+    client_id  = payload.get("clientId")
+    company_id = payload.get("companyId")
+    amount_mxn = float(payload.get("amount", 0))
+    amount_centavos = int(amount_mxn * 100)
+
+    if not client_id or not company_id or amount_mxn <= 0:
+        return JSONResponse({"error": "clientId, companyId y un monto positivo son requeridos"}, status_code=400)
+
+    try:
+        existing = _sp_connected_accounts({"action": "get", "clientId": client_id, "companyId": company_id})
+        acct_id = existing.get("connectedAccountId") if isinstance(existing, dict) else None
+        has_ext = existing.get("hasExternalAccount") if isinstance(existing, dict) else False
+
+        if not acct_id or not has_ext:
+            return JSONResponse({"error": "El cliente no tiene una cuenta bancaria o tarjeta vinculada."}, status_code=400)
+
+        # Debit the SQL ledger first — has its own insufficient-balance guard,
+        # so a bad withdrawal request never reaches Stripe at all.
+        debit_res = await debit_wallet({
+            "clientId": client_id, "companyId": company_id,
+            "amountMXN": amount_mxn, "type": "withdrawal",
+        })
+        debit_body = json.loads(debit_res.body)
+        if debit_body.get("error"):
+            return JSONResponse({"error": debit_body["error"]}, status_code=400)
+
+        if not stripe.api_key or stripe.api_key.startswith("sk_test_YOUR"):
+            payout_id = f"po_mock_{int(datetime.utcnow().timestamp())}"
+        else:
+            payout = stripe.Payout.create(
+                amount=amount_centavos,
+                currency="mxn",
+                stripe_account=acct_id,
+            )
+            payout_id = payout["id"]
+
+        tx = _sp_transaction({
+            "action": "insert",
+            "companyId": company_id,
+            "fromClientId": client_id,
+            "toClientId": client_id,
+            "amount": amount_centavos,
+            "currency": "mxn",
+            "paymentType": "wallet_withdrawal",
+            "status": "succeeded",
+            "stripePayoutId": payout_id,
+        })
+
+        return JSONResponse({
+            "status": "succeeded",
+            "transactionId": tx.get("transactionId", 0),
+            "stripePayoutId": payout_id,
             "amount": amount_centavos,
             "currency": "mxn",
         }, status_code=200)

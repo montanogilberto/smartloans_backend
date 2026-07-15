@@ -7,6 +7,7 @@ from modules.stripe_payments import (
     create_payment_intent,
     confirm_payment_intent,
     disburse_loan,
+    withdraw_to_bank,
     list_transactions,
     handle_webhook,
 )
@@ -134,6 +135,25 @@ Returns: { "status": str, "transactionId": int, "stripeTransferId": str }
 )
 async def disburse(json: dict):
     return await disburse_loan(json)
+
+
+# ── Withdrawal ─────────────────────────────────────────────────────────────
+
+@router.post(
+    "/withdraw",
+    summary="On-demand payout of a client's wallet balance to their bank account",
+    description="""
+Debits the client's SQL wallet ledger, then triggers a Stripe Payout from
+their Connected Account balance to their linked bank account/debit card.
+Works alongside Stripe's own automatic payout schedule — this just lets a
+client pull what's currently available right now.
+
+Body: { "clientId": int, "companyId": int, "amount": float (MXN) }
+Returns: { "status": str, "transactionId": int, "stripePayoutId": str }
+""",
+)
+async def withdraw(json: dict):
+    return await withdraw_to_bank(json)
 
 
 # ── Transactions ──────────────────────────────────────────────────────────────

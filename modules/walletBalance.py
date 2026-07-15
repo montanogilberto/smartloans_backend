@@ -143,6 +143,30 @@ async def reserve_wallet(payload: dict):
     return JSONResponse({"wallet": result}, status_code=200)
 
 
+async def release_wallet(payload: dict):
+    """
+    Undo a prior reserve() when the disbursement it was held for fails.
+    Moves amount from reservedBalance back to availableBalance without
+    touching totalDisbursed, since no money actually moved.
+    """
+    client_id  = payload.get("clientId")
+    company_id = payload.get("companyId")
+    amount_mxn = float(payload.get("amountMXN", 0))
+
+    result = _sp_wallet({
+        "action": "release",
+        "clientId": int(client_id),
+        "companyId": int(company_id),
+        "amountMXN": amount_mxn,
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    })
+
+    if result.get("error"):
+        return JSONResponse({"error": result["error"]}, status_code=400)
+
+    return JSONResponse({"wallet": result}, status_code=200)
+
+
 async def get_all_wallets(payload: dict):
     """List all wallets for a company (admin view)."""
     company_id = payload.get("companyId")
