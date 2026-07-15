@@ -45,6 +45,68 @@ MAX_POLL_ATTEMPTS = 30  # ~30s cap so a stuck request can't hang the worker
 CURP_REGEX = re.compile(r"[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d")
 CLAVE_ELECTOR_REGEX = re.compile(r"[A-Z]{6}\d{9,12}")
 
+# ── Best-effort CURP computation ─────────────────────────────────────────────
+# Confirmed via direct testing against real captures (both front and back,
+# fresh OCR calls) that CURP as printed is never readable — same watermark
+# issue as Domicilio/Clave de Elector. But 14 of its 18 characters are
+# mechanically derivable from data the MRZ DOES give us reliably (name,
+# birthdate, sex) per the public RENAPO algorithm ("Instructivo Normativo
+# para la Asignación de la CURP"). The other 4 — state of birth (positions
+# 12-13) and the homoclave/check digit (17-18) — need data this pipeline
+# doesn't have (state of birth isn't in the MRZ; homoclave requires a RENAPO
+# database lookup) and are left as "??" placeholders. Like every other
+# extracted field, this is shown as an editable suggestion, never persisted
+# as authoritative — an imperfect match against RENAPO's actual inconvenient-
+# word substitution table (rare, and only affects the first 4 characters)
+# just means staff correct it by hand same as any other OCR field.
+CURP_VOWELS = set("AEIOU")
+
+CURP_INCONVENIENT_WORDS = {
+    "BUEI", "BUEY", "CACA", "CACO", "CAGA", "CAGO", "CAKA", "CAKO", "COGE", "COJA",
+    "COJE", "COJI", "COJO", "CULO", "FETO", "GUEY", "JOTO", "KACA", "KACO", "KAGA",
+    "KAGO", "KAKA", "KAKO", "KOGE", "KOJO", "KULO", "MAME", "MAMO", "MEAR", "MEAS",
+    "MEON", "MION", "MOCO", "MOKO", "MULA", "MULO", "NACA", "NACO", "PEDA", "PEDO",
+    "PENE", "PIPI", "PITO", "POPO", "PUTA", "PUTO", "QULO", "RATA", "RUIN", "SENO",
+    "TETA", "VACA", "VAGA", "VAGO", "VAKA", "VUEI", "VUEY", "WUEY", "WEY",
+}
+
+
+def _first_internal_vowel(word: str) -> str:
+    for ch in word[1:]:
+        if ch in CURP_VOWELS:
+            return ch
+    return "X"
+
+
+def _first_internal_consonant(word: str) -> str:
+    for ch in word[1:]:
+        if ch.isalpha() and ch not in CURP_VOWELS:
+            return ch
+    return "X"
+
+
+def compute_curp_best_effort(
+    apellido_paterno: str, apellido_materno: str, nombre_propio: str,
+    yy: str, mm: str, dd: str, sexo: str
+) -> str:
+    if not apellido_paterno or not nombre_propio or not sexo or sexo not in ("H", "M"):
+        return ""
+
+    p1 = apellido_paterno[0]
+    p2 = _first_internal_vowel(apellido_paterno)
+    p3 = apellido_materno[0] if apellido_materno else "X"
+    p4 = nombre_propio[0]
+
+    prefix = p1 + p2 + p3 + p4
+    if prefix in CURP_INCONVENIENT_WORDS:
+        p2 = "X"
+
+    p14 = _first_internal_consonant(apellido_paterno)
+    p15 = _first_internal_consonant(apellido_materno) if apellido_materno else "X"
+    p16 = _first_internal_consonant(nombre_propio)
+
+    return f"{p1}{p2}{p3}{p4}{yy}{mm}{dd}{sexo}??{p14}{p15}{p16}??"
+
 
 def _strip_data_url_prefix(image_base64: str) -> str:
     if image_base64.startswith("data:"):
@@ -112,10 +174,19 @@ def parse_mrz(raw_text: str) -> dict:
     guaranteed correct on every OCR error; the caller shows these as
     editable fields, never authoritative data.
 
-    Mexican INE uses 'H'/'M' (Hombre/Mujer) in the sex position rather
-    than the ICAO-standard 'M'/'F'."""
+    The MRZ sex position follows the ICAO 9303 standard ('M'/'F'), NOT the
+    Spanish Hombre/Mujer letters printed on the card's front — confirmed
+    against a real capture where a male cardholder's MRZ read literal 'M'
+    (ICAO Male), not 'H'. Mapped to CURP's H/M convention below."""
     pool = _mrz_char_pool(raw_text)
-    result = {"nombre": "", "fechaNacimiento": ""}
+    # The underscore-prefixed keys are internal-only (used for CURP
+    # best-effort computation below), not part of the public fields shape
+    # returned to the frontend.
+    result = {
+        "nombre": "", "fechaNacimiento": "",
+        "_apellidoPaterno": "", "_apellidoMaterno": "", "_nombrePropio": "",
+        "_yy": "", "_mm": "", "_dd": "", "_sexo": "",
+    }
     if len(pool) < 20:
         return result
 
@@ -130,21 +201,48 @@ def parse_mrz(raw_text: str) -> dict:
     # those neighborhoods fail the letters-and-< requirement.
     name_match = re.search(r"((?:[A-Z]|<(?!<))+)<<((?:[A-Z]|<(?!<))+)", pool)
     if name_match:
-        surname = name_match.group(1).replace("<", " ").strip()
-        given = name_match.group(2).replace("<", " ").strip()
+        surname_raw = name_match.group(1)
+        given_raw = name_match.group(2)
+        surname = surname_raw.replace("<", " ").strip()
+        given = given_raw.replace("<", " ").strip()
         if surname or given:
             result["nombre"] = f"{surname} {given}".strip()
 
-    # Birthdate + sex: TD1 line 2 is 6-digit YYMMDD + 1 check digit + H/M/F,
-    # found anywhere in the pool regardless of which physical line it ended
-    # up on after OCR.
-    date_match = re.search(r"(\d{6})\d[HMF]", pool)
+        # A single '<' (not "<<") inside the surname block separates
+        # apellido paterno from materno, same convention as the "<<" that
+        # separates the whole surname block from the given-name block.
+        surname_parts = [p for p in surname_raw.split("<") if p]
+        given_parts = [p for p in given_raw.split("<") if p]
+        result["_apellidoPaterno"] = surname_parts[0] if surname_parts else ""
+        result["_apellidoMaterno"] = surname_parts[1] if len(surname_parts) > 1 else ""
+        propio = given_parts[0] if given_parts else ""
+        # RENAPO rule: when the first given name is a common compound
+        # prefix (María/José, or their abbreviations), CURP position 4
+        # uses the SECOND given name instead — e.g. "MARIA GUADALUPE" uses
+        # G, not M.
+        if len(given_parts) > 1 and given_parts[0] in ("MARIA", "JOSE", "MA", "J"):
+            propio = given_parts[1]
+        result["_nombrePropio"] = propio
+
+    # Birthdate + sex: TD1 line 2 is 6-digit YYMMDD + 1 check digit + M/F
+    # (ICAO standard), found anywhere in the pool regardless of which
+    # physical line it ended up on after OCR. Also tolerates a literal 'H'
+    # in case some capture ever surfaces the Spanish letter instead.
+    date_match = re.search(r"(\d{6})\d([MFH])", pool)
     if date_match:
         yy, mm, dd = date_match.group(1)[0:2], date_match.group(1)[2:4], date_match.group(1)[4:6]
+        icao_sex = date_match.group(2)
         try:
             if 1 <= int(mm) <= 12 and 1 <= int(dd) <= 31:
                 century = "19" if int(yy) > 30 else "20"
                 result["fechaNacimiento"] = f"{dd}/{mm}/{century}{yy}"
+                result["_yy"], result["_mm"], result["_dd"] = yy, mm, dd
+                # Map to CURP's H(ombre)/M(ujer) convention: ICAO 'M' means
+                # Male → CURP 'H'; ICAO 'F' means Female → CURP 'M'.
+                if icao_sex == "M" or icao_sex == "H":
+                    result["_sexo"] = "H"
+                elif icao_sex == "F":
+                    result["_sexo"] = "M"
         except ValueError:
             pass
 
@@ -179,10 +277,15 @@ async def extract_id_text_and_fields(payload: dict) -> dict:
     mrz_fields = parse_mrz(raw_text)
     regex_fields = _regex_fallback(raw_text)
 
+    curp = regex_fields["curp"] or compute_curp_best_effort(
+        mrz_fields["_apellidoPaterno"], mrz_fields["_apellidoMaterno"], mrz_fields["_nombrePropio"],
+        mrz_fields["_yy"], mrz_fields["_mm"], mrz_fields["_dd"], mrz_fields["_sexo"],
+    )
+
     fields = {
         "nombre": mrz_fields["nombre"],
         "domicilio": "",
-        "curp": regex_fields["curp"],
+        "curp": curp,
         "claveElector": regex_fields["claveElector"],
         "fechaNacimiento": mrz_fields["fechaNacimiento"],
     }
