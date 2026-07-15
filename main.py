@@ -19,7 +19,7 @@ from routes_ import (
     creditScore, walletBalance, automatedPayments, signatureUpload,
     manufacturing, rewards, loanChat, clientDashboards,
     digitalContracts, legalCases, disbursement,
-    document_intelligence,
+    document_intelligence, geocoding,
 )
 
 app = FastAPI(
@@ -152,6 +152,7 @@ app.include_router(digitalContracts.router)
 app.include_router(legalCases.router)
 app.include_router(disbursement.router)
 app.include_router(document_intelligence.router)
+app.include_router(geocoding.router)
 
 # --------------------------------------------------
 # Local development only

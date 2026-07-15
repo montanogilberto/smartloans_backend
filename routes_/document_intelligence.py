@@ -11,11 +11,13 @@ router = APIRouter(prefix="/ocr", tags=["Document Intelligence"])
     description="""
 Sends a captured ID photo (front or back, called once per side) to Azure AI
 Document Intelligence for OCR, then decodes the machine-readable zone (MRZ)
-if present. Domicilio, CURP, and Clave de Elector are not reliably
-extractable from the front of an INE (confirmed via testing — the printed
-fields sit on an anti-copy watermark pattern that defeats OCR regardless of
-image quality) and are returned empty for the caller to treat as
-manual-entry fields.
+if present. Domicilio and Clave de Elector are not reliably extractable from
+the front of an INE (confirmed via testing — the printed fields sit on an
+anti-copy watermark pattern that defeats OCR regardless of image quality)
+and are returned empty for the caller to treat as manual-entry fields. CURP
+is a best-effort computation (RENAPO algorithm) from the name/birthdate/sex
+the MRZ does give reliably — 14 of its 18 characters, with the other 4
+(state of birth, homoclave) marked "??" for manual completion.
 
 Body: { "imageBase64": str }
 Returns: { "rawText": str, "fields": { nombre, domicilio, curp, claveElector, fechaNacimiento } }
