@@ -1,5 +1,7 @@
+import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -153,6 +155,43 @@ app.include_router(legalCases.router)
 app.include_router(disbursement.router)
 app.include_router(document_intelligence.router)
 app.include_router(geocoding.router)
+
+# --------------------------------------------------
+# Daily automated-repayment job
+# Charges every due loan installment (off-session, saved card) once a day.
+# Requires Azure App Service's "Always On" setting enabled — otherwise the
+# process idles between requests and this scheduler stops running silently.
+# --------------------------------------------------
+from modules.companies import all_companies_sp
+from modules.automatedPayments import charge_due_installments
+
+scheduler = AsyncIOScheduler()
+
+
+async def _run_daily_charge_due():
+    try:
+        companies_response = all_companies_sp()
+        companies = json.loads(companies_response.body).get("companies", [])
+    except Exception as e:
+        print(f"[scheduler] charge-due: failed to list companies: {e}")
+        return
+
+    for company in companies:
+        company_id = company.get("companyId")
+        if not company_id:
+            continue
+        try:
+            await charge_due_installments({"companyId": company_id})
+            print(f"[scheduler] charge-due: ran for companyId={company_id}")
+        except Exception as e:
+            print(f"[scheduler] charge-due: failed for companyId={company_id}: {e}")
+
+
+@app.on_event("startup")
+async def start_scheduler():
+    # 07:00 UTC ≈ early morning in Mexico (UTC-6/-5) — off-peak for billing.
+    scheduler.add_job(_run_daily_charge_due, "cron", hour=7, minute=0, id="daily_charge_due")
+    scheduler.start()
 
 # --------------------------------------------------
 # Local development only

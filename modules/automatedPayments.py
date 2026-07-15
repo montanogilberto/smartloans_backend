@@ -24,6 +24,8 @@ from fastapi.responses import JSONResponse
 from databases import connection
 from datetime import datetime, timezone, date
 from dateutil.relativedelta import relativedelta
+from modules.stripe_payments import _sp_connected_accounts
+from modules.walletBalance import credit_wallet
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 MAX_RETRY_ATTEMPTS = 3
@@ -385,7 +387,39 @@ async def charge_due_installments(payload: dict):
                 "attemptCount":          attempts + 1,
             })
             charged += 1
-            details.append({"installmentId": inst_id, "result": "charged", "intentId": intent["id"]})
+            transfer_note = None
+            try:
+                # Move the collected repayment from the platform's balance to
+                # the lender's Connected Account — mirrors disburse_loan()'s
+                # transfer-to-recipient pattern. Kept in its own try/except:
+                # the borrower's charge already succeeded, so a lender-side
+                # transfer hiccup shouldn't flip this installment to failed.
+                lender_acct = _sp_connected_accounts({"action": "get", "clientId": lender_id, "companyId": company_id})
+                lender_acct_id = lender_acct.get("connectedAccountId") if isinstance(lender_acct, dict) else None
+                if lender_acct_id:
+                    transfer = stripe.Transfer.create(
+                        amount=int(amount_mxn * 100),
+                        currency="mxn",
+                        destination=lender_acct_id,
+                        metadata={
+                            "installmentId": str(inst_id),
+                            "loanId":        str(item.get("loanId")),
+                            "companyId":     str(company_id),
+                            "lenderId":      str(lender_id),
+                            "type":          "loan_repayment",
+                        },
+                    )
+                    await credit_wallet({
+                        "clientId": lender_id, "companyId": company_id,
+                        "amountMXN": amount_mxn, "type": "repayment_received",
+                    })
+                    transfer_note = transfer["id"]
+                else:
+                    transfer_note = "no_lender_connected_account"
+            except Exception as e:
+                print(f"[automatedPayments] charge_due_installments: transfer-to-lender failed for installmentId={inst_id}: {e}")
+                transfer_note = f"transfer_error: {e}"
+            details.append({"installmentId": inst_id, "result": "charged", "intentId": intent["id"], "lenderTransfer": transfer_note})
 
         except stripe.error.CardError as e:
             # Card declined — increment attempt, will retry tomorrow
