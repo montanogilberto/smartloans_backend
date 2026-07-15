@@ -3,6 +3,7 @@ from modules.clientFaceRecognitions import (
     clientFaceRecognitions_sp, all_clientFaceRecognitions_sp, one_clientFaceRecognitions_sp,
     contract_clientFaceRecognition_connector,
     upload_id_image_connector,
+    upload_presence_capture_connector,
 )
 
 
@@ -38,3 +39,8 @@ async def upload_id_image(json: dict):
 @router.post("/api/clientFaceRecognition/contract", summary="Submit contract ClientFaceRecognition", tags=["connector"])
 async def contract_clientFaceRecognition(json: dict):
     return await contract_clientFaceRecognition_connector(json)
+
+
+@router.post("/api/clientFaceRecognition/upload-presence", summary="Upload a presence (video) capture", tags=["connector"])
+async def upload_presence_capture(json: dict):
+    return await upload_presence_capture_connector(json)

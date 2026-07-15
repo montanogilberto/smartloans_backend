@@ -279,6 +279,41 @@ async def get_connected_account_status(payload: dict):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+async def create_account_session(payload: dict):
+    """
+    Create a Stripe Account Session so the client's KYC onboarding renders
+    embedded inside the app (Connect embedded components) instead of
+    redirecting to a Stripe-hosted URL in an external browser tab. Stripe
+    still owns all compliance/validation logic — this just changes where
+    the UI is displayed.
+    """
+    client_id  = payload.get("clientId")
+    company_id = payload.get("companyId")
+
+    try:
+        existing = _sp_connected_accounts({"action": "get", "clientId": client_id, "companyId": company_id})
+        acct_id = existing.get("connectedAccountId") if isinstance(existing, dict) else None
+
+        if not acct_id:
+            return JSONResponse({"error": "No connected account found. Create one first."}, status_code=404)
+
+        session = stripe.AccountSession.create(
+            account=acct_id,
+            components={
+                "account_onboarding": {"enabled": True},
+            },
+        )
+
+        return JSONResponse({"clientSecret": session["client_secret"]}, status_code=200)
+
+    except stripe.StripeError as e:
+        print(f"[stripe][create_account_session] Stripe error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        print(f"[stripe][create_account_session] Error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 async def get_onboarding_link(payload: dict):
     """Generate a Stripe Express onboarding URL for KYC completion."""
     client_id   = payload.get("clientId")

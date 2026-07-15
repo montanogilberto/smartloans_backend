@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request
 from modules.stripe_payments import (
     create_connected_account,
     get_connected_account_status,
+    create_account_session,
     get_onboarding_link,
     create_payment_intent,
     confirm_payment_intent,
@@ -42,6 +43,22 @@ Returns: { "account": ConnectedAccount | null }
 )
 async def connected_account_status(json: dict):
     return await get_connected_account_status(json)
+
+
+@router.post(
+    "/account-session",
+    summary="Create a Stripe Account Session for embedded onboarding",
+    description="""
+Returns a client_secret used to initialize Stripe Connect embedded components
+(@stripe/connect-js) so the client completes KYC (ID, selfie, CLABE) inside
+the app itself instead of an external browser redirect.
+
+Body: { "clientId": int, "companyId": int }
+Returns: { "clientSecret": str }
+""",
+)
+async def account_session(json: dict):
+    return await create_account_session(json)
 
 
 @router.post(

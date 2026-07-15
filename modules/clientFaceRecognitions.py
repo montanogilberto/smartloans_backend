@@ -146,6 +146,42 @@ async def upload_id_image_connector(payload: dict) -> JSONResponse:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+async def upload_presence_capture_connector(payload: dict) -> JSONResponse:
+    """
+    Uploads a short "presence" video (recorded alongside GPS coordinates for
+    address/location verification evidence — OCR can't reliably read a
+    printed address off an INE, see idOcr.ts/document_intelligence.py) to
+    Azure Blob Storage. Same shape as upload_id_image_connector: this only
+    uploads the bytes and returns the URL; the frontend persists it (plus
+    the GPS fields, which never touch this endpoint) via the normal
+    clientFaceRecognitions_sp update call, same two-step pattern already
+    used for ID images.
+    Returns: { blobUrl }
+    """
+    try:
+        company_id = payload.get("companyId", "0")
+        client_id  = payload.get("clientId", "0")
+        video_b64  = payload.get("videoBase64", "")
+
+        if not video_b64:
+            return JSONResponse(content={"error": "videoBase64 is required"}, status_code=400)
+
+        now = datetime.utcnow()
+        ts  = now.strftime("%Y%m%d%H%M%S")
+        uid = str(uuid.uuid4())[:8]
+        blob_path = "clients/presence/" + str(now.year) + "/" + str(now.month).zfill(2) + \
+            "/presence_" + str(client_id) + "_" + ts + "_" + uid + ".mp4"
+
+        blob_url = _upload_base64_to_blob(
+            video_b64, blob_path, "video/mp4",
+            {"companyId": str(company_id), "clientId": str(client_id)},
+        )
+
+        return JSONResponse(content={"blobUrl": blob_url}, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 async def contract_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
     """
     Optionally uploads base64 contract/pagaré PDFs to blob storage (clients
@@ -181,6 +217,50 @@ async def contract_clientFaceRecognition_connector(payload: dict) -> JSONRespons
                 {"companyId": str(payload.get("companyId", "0")), "type": "pagare"},
             )
 
+        # Signature match: crop from the front ID photo (client-side, only
+        # for documentType === 'INE' — see signatureCrop.ts) vs. the
+        # signature captured on-screen at this same step. Both optional —
+        # if either is missing, no comparison is attempted and the
+        # existing manual-review flow (staff visually checking the
+        # captures) is the only fallback, same as every other field this
+        # OCR/vision pipeline can't guarantee.
+        id_signature_url = payload.get("idSignatureCropBlobUrl", "")
+        id_signature_b64 = payload.get("idSignatureCropBase64", "")
+        if id_signature_b64 and not id_signature_url:
+            uid = str(uuid.uuid4())[:8]
+            blob_path = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + "/id_signature_" + ts + "_" + uid + ".png"
+            id_signature_url = _upload_base64_to_blob(
+                id_signature_b64, blob_path, "image/png",
+                {"companyId": str(payload.get("companyId", "0")), "type": "id_signature_crop"},
+            )
+
+        contract_signature_url = payload.get("contractSignatureBlobUrl", "")
+        contract_signature_b64 = payload.get("contractSignatureBase64", "")
+        if contract_signature_b64 and not contract_signature_url:
+            uid = str(uuid.uuid4())[:8]
+            blob_path = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + "/contract_signature_" + ts + "_" + uid + ".png"
+            contract_signature_url = _upload_base64_to_blob(
+                contract_signature_b64, blob_path, "image/png",
+                {"companyId": str(payload.get("companyId", "0")), "type": "contract_signature"},
+            )
+
+        match_result = None
+        if id_signature_b64 and contract_signature_b64:
+            try:
+                from modules.signatureMatching import compare_signatures
+                id_sig_bytes = base64.b64decode(
+                    id_signature_b64.split(",", 1)[1] if "," in id_signature_b64 else id_signature_b64
+                )
+                contract_sig_bytes = base64.b64decode(
+                    contract_signature_b64.split(",", 1)[1] if "," in contract_signature_b64 else contract_signature_b64
+                )
+                match_result = compare_signatures(id_sig_bytes, contract_sig_bytes)
+            except Exception as e:
+                # Advisory data only — a comparison failure shouldn't block
+                # contract submission, the signatures are still saved above.
+                print(f"[clientFaceRecognitions] signature comparison failed: {e}")
+                match_result = None
+
         client_face_recognition_id = payload.get("clientFaceRecognitionId")
         record = {
             "action":              2 if client_face_recognition_id else 1,
@@ -198,12 +278,28 @@ async def contract_clientFaceRecognition_connector(payload: dict) -> JSONRespons
             "pagareAccepted":      payload.get("pagareAccepted", False),
             "pagarePdfBlobUrl":    pagare_url,
             "hasPhysicalPagare":   payload.get("hasPhysicalPagare", False),
+            "idSignatureCropBlobUrl":  id_signature_url,
+            "contractSignatureBlobUrl": contract_signature_url,
             "userId":              payload.get("userId"),
         }
+        if match_result and match_result.get("reason") == "ok":
+            record["signatureMatchScore"]  = match_result["matchScore"]
+            record["signatureMatchPassed"] = match_result["matchPassed"]
+            record["signatureMatchedAt"]   = now.isoformat()
         if client_face_recognition_id:
             record["clientFaceRecognitionId"] = client_face_recognition_id
 
         json_file = {"clientFaceRecognitions": [record]}
-        return clientFaceRecognitions_sp(json_file)   # reuse CRUD SP for persistence
+        sp_response = clientFaceRecognitions_sp(json_file)   # reuse CRUD SP for persistence
+
+        if match_result is not None:
+            # Surface the match result in this same response so the
+            # frontend can show it without a second round trip — advisory
+            # only, doesn't affect whether the SP call above succeeded.
+            content = json.loads(sp_response.body)
+            content["signatureMatch"] = match_result
+            return JSONResponse(content=content, status_code=sp_response.status_code)
+
+        return sp_response
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
