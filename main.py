@@ -21,7 +21,7 @@ from routes_ import (
     creditScore, walletBalance, automatedPayments, signatureUpload,
     manufacturing, rewards, loanChat, clientDashboards,
     digitalContracts, legalCases, disbursement,
-    document_intelligence, geocoding,
+    document_intelligence, geocoding, onboardingReminders,
 )
 
 app = FastAPI(
@@ -155,6 +155,7 @@ app.include_router(legalCases.router)
 app.include_router(disbursement.router)
 app.include_router(document_intelligence.router)
 app.include_router(geocoding.router)
+app.include_router(onboardingReminders.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job
@@ -164,22 +165,23 @@ app.include_router(geocoding.router)
 # --------------------------------------------------
 from modules.companies import all_companies_sp
 from modules.automatedPayments import charge_due_installments
+from modules.onboardingReminders import check_onboarding_completeness
 
 scheduler = AsyncIOScheduler()
 
 
-async def _run_daily_charge_due():
+async def _list_company_ids():
     try:
         companies_response = all_companies_sp()
         companies = json.loads(companies_response.body).get("companies", [])
+        return [c.get("companyId") for c in companies if c.get("companyId")]
     except Exception as e:
-        print(f"[scheduler] charge-due: failed to list companies: {e}")
-        return
+        print(f"[scheduler] failed to list companies: {e}")
+        return []
 
-    for company in companies:
-        company_id = company.get("companyId")
-        if not company_id:
-            continue
+
+async def _run_daily_charge_due():
+    for company_id in await _list_company_ids():
         try:
             await charge_due_installments({"companyId": company_id})
             print(f"[scheduler] charge-due: ran for companyId={company_id}")
@@ -187,10 +189,22 @@ async def _run_daily_charge_due():
             print(f"[scheduler] charge-due: failed for companyId={company_id}: {e}")
 
 
+async def _run_daily_onboarding_reminders():
+    for company_id in await _list_company_ids():
+        try:
+            await check_onboarding_completeness({"companyId": company_id})
+            print(f"[scheduler] onboarding-reminders: ran for companyId={company_id}")
+        except Exception as e:
+            print(f"[scheduler] onboarding-reminders: failed for companyId={company_id}: {e}")
+
+
 @app.on_event("startup")
 async def start_scheduler():
     # 07:00 UTC ≈ early morning in Mexico (UTC-6/-5) — off-peak for billing.
     scheduler.add_job(_run_daily_charge_due, "cron", hour=7, minute=0, id="daily_charge_due")
+    # 15:00 UTC ≈ mid-morning in Mexico — a time a client is likely to see
+    # and act on the notification, unlike the pre-dawn billing run above.
+    scheduler.add_job(_run_daily_onboarding_reminders, "cron", hour=15, minute=0, id="daily_onboarding_reminders")
     scheduler.start()
 
 # --------------------------------------------------
