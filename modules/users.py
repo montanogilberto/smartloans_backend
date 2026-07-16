@@ -204,7 +204,10 @@ def check_contact_sp(json_file: dict):
 
         conn   = connection()
         cursor = conn.cursor()
-        cursor.execute("EXEC sp_check_contact @contact = %s", (contact,))
+        cursor.execute(
+            "EXEC [dbo].[sp_checkContact] @pjsonfile = %s",
+            (json.dumps({"checkContact": [{"contact": contact}]}),)
+        )
         row = cursor.fetchone()
         logger.info("[check_contact_sp] raw row: %s", row)
 
@@ -212,6 +215,11 @@ def check_contact_sp(json_file: dict):
             return JSONResponse(content={"found": False}, status_code=200)
 
         data = json.loads(row[0])
+        if "error" in data:
+            logger.error("[check_contact_sp] SP error: %s", data["error"])
+            return JSONResponse(content={"error": data["error"]}, status_code=500)
+        if data.get("found") is False:
+            return JSONResponse(content={"found": False}, status_code=200)
         data["found"] = True
         logger.info("[check_contact_sp] RESULT: %s", data)
         return JSONResponse(content=data, status_code=200)
