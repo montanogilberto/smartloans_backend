@@ -237,6 +237,67 @@ def check_contact_sp(json_file: dict):
             pass
 
 
+def _generate_username_candidates(base: str) -> list:
+    """base itself, then numbered suffixes, then a random-suffix fallback."""
+    candidates = [base]
+    candidates += [f"{base}{i}" for i in range(1, 6)]
+    candidates += [f"{base}{''.join(random.choices(string.digits, k=3))}" for _ in range(2)]
+    logger.info("[check_username_sp] candidates=%s", candidates)
+    return candidates
+
+
+def check_username_sp(json_file: dict):
+    """
+    Checks if a desired username is available, and if not, suggests
+    alternatives (numbered/random suffixes) that ARE available.
+    Returns: { available: bool, suggestions: [str, ...] }
+    """
+    conn   = None
+    cursor = None
+    try:
+        username = (json_file.get("username") or "").strip()
+        logger.info("[check_username_sp] username=%s", username)
+        if not username:
+            return JSONResponse(content={"error": "username is required"}, status_code=400)
+
+        candidates = _generate_username_candidates(username)
+
+        conn   = connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC [dbo].[sp_checkUsername] @pjsonfile = %s",
+            (json.dumps({"checkUsername": [{"usernames": candidates}]}),)
+        )
+        row = cursor.fetchone()
+        logger.info("[check_username_sp] raw row: %s", row)
+
+        data = json.loads(row[0]) if row and row[0] else {}
+        if "error" in data:
+            logger.error("[check_username_sp] SP error: %s", data["error"])
+            return JSONResponse(content={"error": data["error"]}, status_code=500)
+
+        taken = {t["name"] for t in data.get("taken", [])}
+        logger.info("[check_username_sp] taken=%s", taken)
+
+        available = username not in taken
+        suggestions = [c for c in candidates[1:] if c not in taken][:3]
+        result = {"available": available, "suggestions": suggestions}
+        logger.info("[check_username_sp] RESULT: %s", result)
+        return JSONResponse(content=result, status_code=200)
+    except Exception as e:
+        logger.exception("[check_username_sp] EXCEPTION: %s", e)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        try:
+            if cursor: cursor.close()
+        except Exception:
+            pass
+        try:
+            if conn: conn.close()
+        except Exception:
+            pass
+
+
 def all_users_sp():
     conn = None
     cursor = None
