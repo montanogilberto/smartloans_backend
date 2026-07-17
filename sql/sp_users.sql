@@ -5,15 +5,19 @@ CREATE OR ALTER PROC [dbo].[sp_users] (@pjsonfile VARCHAR(MAX))
 AS
 SET NOCOUNT ON
 
-DECLARE @email      VARCHAR(100)
-       ,@cellphone  VARCHAR(20)
-       ,@user_id    INT
-       ,@action     INT
-       ,@companyId  INT
-       ,@branchId   INT
-       ,@roleCode   VARCHAR(50)
-       ,@roleId     INT
-       ,@Error      VARCHAR(500) = ''
+DECLARE @email            VARCHAR(100)
+       ,@cellphone        VARCHAR(20)
+       ,@user_id          INT
+       ,@action           INT
+       ,@companyId        INT
+       ,@branchId         INT
+       ,@roleCode         VARCHAR(50)
+       ,@roleId           INT
+       ,@clientId         INT
+       ,@appProfile       VARCHAR(20)
+       ,@enabledModules   NVARCHAR(MAX)
+       ,@identityVerified BIT
+       ,@Error            VARCHAR(500) = ''
 
 DECLARE @Outputmessage VARCHAR(MAX) = '{
   "result": [{ "value": "", "msg": "", "error": "" }]
@@ -25,8 +29,10 @@ SET @action = (SELECT JSON_VALUE(value, '$.action') FROM OPENJSON(@pjsonfile, '$
 IF @action = 1
 BEGIN
     BEGIN TRY
-        DECLARE @newName VARCHAR(100) =
+        DECLARE @newName  VARCHAR(100) =
             (SELECT JSON_VALUE(value, '$.name') FROM OPENJSON(@pjsonfile, '$.users'))
+        DECLARE @newEmail VARCHAR(100) =
+            NULLIF((SELECT JSON_VALUE(value, '$.email') FROM OPENJSON(@pjsonfile, '$.users')), '')
 
         -- Username must be unique — belt-and-suspenders alongside the
         -- dedicated /check_username lookup the frontend calls before submit.
@@ -35,16 +41,30 @@ BEGIN
             SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].error', '1')
             SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg',   'El nombre de usuario ya existe.')
         END
+        -- Email must be unique too — checkContact only catches this when a
+        -- dbo.clients row also exists for that email (e.g. POS-only or
+        -- email-only "loans" accounts have no client row, so it wouldn't
+        -- have been caught upstream).
+        ELSE IF @newEmail IS NOT NULL AND EXISTS (SELECT 1 FROM dbo.users WHERE email = @newEmail)
+        BEGIN
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].error', '1')
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg',   'El email ya está registrado.')
+        END
         ELSE
         BEGIN
             BEGIN TRAN
-                INSERT INTO [dbo].[users] ([name], email, cellphone, [password], created_at)
+                -- clientId links this login to an existing dbo.clients row
+                -- (set when an already-known client — found via checkContact,
+                -- no account yet — is claiming their account) so the two
+                -- records aren't left disconnected.
+                INSERT INTO [dbo].[users] ([name], email, cellphone, [password], created_at, clientId)
                 SELECT
                     JSON_VALUE(value, '$.name')      AS [name],
                     NULLIF(JSON_VALUE(value, '$.email'), '')      AS email,
                     NULLIF(JSON_VALUE(value, '$.cellphone'), '')  AS cellphone,
                     JSON_VALUE(value, '$.password')  AS [password],
-                    GETDATE()
+                    GETDATE(),
+                    TRY_CONVERT(INT, JSON_VALUE(value, '$.clientId'))  AS clientId
                 FROM OPENJSON(@pjsonfile, '$.users')
             COMMIT TRAN
 
@@ -66,18 +86,35 @@ IF @action = 2
 BEGIN
     BEGIN TRY
         SELECT
-            @user_id   = JSON_VALUE(value, '$.user_id'),
-            @email     = NULLIF(JSON_VALUE(value, '$.email'), ''),
-            @cellphone = NULLIF(JSON_VALUE(value, '$.cellphone'), ''),
-            @companyId = NULLIF(JSON_VALUE(value, '$.companyId'), ''),
-            @branchId  = NULLIF(JSON_VALUE(value, '$.branchId'), ''),
-            @roleCode  = NULLIF(JSON_VALUE(value, '$.roleCode'), '')
+            @user_id          = JSON_VALUE(value, '$.user_id'),
+            @email            = NULLIF(JSON_VALUE(value, '$.email'), ''),
+            @cellphone        = NULLIF(JSON_VALUE(value, '$.cellphone'), ''),
+            @companyId        = NULLIF(JSON_VALUE(value, '$.companyId'), ''),
+            @branchId         = NULLIF(JSON_VALUE(value, '$.branchId'), ''),
+            @roleCode         = NULLIF(JSON_VALUE(value, '$.roleCode'), ''),
+            @clientId         = TRY_CONVERT(INT, JSON_VALUE(value, '$.clientId')),
+            -- Registration wizard steps 2 & 3 (Perfil / Verificar) — previously
+            -- sent by the frontend but silently dropped, so a returning
+            -- contact could never resume partway. See sp_checkContact v5.
+            @appProfile       = NULLIF(JSON_VALUE(value, '$.appProfile'), ''),
+            @enabledModules   = JSON_QUERY(value, '$.enabledModules'),
+            @identityVerified = TRY_CONVERT(BIT, JSON_VALUE(value, '$.identityVerified'))
         FROM OPENJSON(@pjsonfile, '$.users')
 
         BEGIN TRAN
+            -- clientId mirrors the INSERT path: link/re-link this login to a
+            -- dbo.clients row after creation, not just at signup time.
+            -- identityVerified only ever moves 0→1 here — an update call
+            -- that doesn't touch verification (e.g. saving Perfil) sends no
+            -- identityVerified, so @identityVerified is NULL and the
+            -- existing value is left alone rather than reset to 0.
             UPDATE [dbo].[users] SET
-                email     = ISNULL(@email,     email),
-                cellphone = ISNULL(@cellphone, cellphone),
+                email            = ISNULL(@email,     email),
+                cellphone        = ISNULL(@cellphone, cellphone),
+                clientId         = ISNULL(@clientId,  clientId),
+                appProfile       = ISNULL(@appProfile,     appProfile),
+                enabledModules   = ISNULL(@enabledModules, enabledModules),
+                identityVerified = CASE WHEN @identityVerified = 1 THEN 1 ELSE identityVerified END,
                 [name]    = ISNULL(NULLIF(JSON_VALUE((SELECT value FROM OPENJSON(@pjsonfile,'$.users')), '$.name'), ''), [name]),
                 [password]= ISNULL(NULLIF(JSON_VALUE((SELECT value FROM OPENJSON(@pjsonfile,'$.users')), '$.password'), ''), [password])
             WHERE [userId] = @user_id

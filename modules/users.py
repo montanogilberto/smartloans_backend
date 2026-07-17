@@ -19,43 +19,44 @@ app = FastAPI()
 _verification_codes: dict = {}
 
 # Gmail SMTP config — credentials from environment variables
-# Set GMAIL_SENDER and GMAIL_APP_PASSWORD in Azure App Service → Configuration → App settings
+# Set GMAIL_SENDER and GMAIL_APP_PASSWORD in Azure App Service → Configuration → App settings.
+# Both must point to the SAME Google account — the App Password only works for
+# the account it was generated on; a mismatched GMAIL_SENDER produces a Gmail
+# 535 "Username and Password not accepted" that looks like a bad password but
+# isn't. No silent default here on purpose, so a missing/wrong GMAIL_SENDER
+# fails with a clear message instead of that confusing 535.
 _SMTP_SERVER   = "smtp.gmail.com"
 _SMTP_PORT     = 587
-_SENDER_EMAIL  = os.environ.get("GMAIL_SENDER",       "contreras.9999@gmail.com")
+_SENDER_EMAIL  = os.environ.get("GMAIL_SENDER", "")
 _SENDER_PWD    = os.environ.get("GMAIL_APP_PASSWORD", "")
 
-def users_sp(json_file: dict):
+def _users_sp_raw(json_file: dict) -> dict:
+    """EXEC sp_users and return {userId, msg, error} — used by users_sp (route-
+    facing, wraps this in a JSONResponse) and by verify_code (persists
+    identityVerified without going through the HTTP layer)."""
     conn = None
     cursor = None
     try:
-        logger.info("[users_sp] INPUT: %s", json.dumps(json_file))
+        logger.info("[_users_sp_raw] INPUT: %s", json.dumps(json_file))
         conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_users @pjsonfile = %s", (json.dumps(json_file),))
 
         # SP returns columns: value, msg, error  (not a JSON string)
         row = cursor.fetchone()
-        logger.info("[users_sp] RAW ROW: %s", row)
+        logger.info("[_users_sp_raw] RAW ROW: %s", row)
 
         if row is None:
-            logger.warning("[users_sp] SP returned no rows")
-            return JSONResponse(content={"error": "No result from SP"}, status_code=500)
+            logger.warning("[_users_sp_raw] SP returned no rows")
+            return {"error": "No result from SP"}
 
         result = {
             "userId": row[0],   # SCOPE_IDENTITY() as string on action=1
             "msg":    row[1],
             "error":  row[2],
         }
-        logger.info("[users_sp] RESULT: %s", result)
-
-        if result.get("error") and result["error"] not in (None, "", "0"):
-            return JSONResponse(content=result, status_code=500)
-
-        return JSONResponse(content=result, status_code=200)
-    except Exception as e:
-        logger.exception("[users_sp] EXCEPTION: %s", e)
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        logger.info("[_users_sp_raw] RESULT: %s", result)
+        return result
     finally:
         try:
             if cursor:
@@ -69,24 +70,47 @@ def users_sp(json_file: dict):
             pass
 
 
+def users_sp(json_file: dict):
+    try:
+        result = _users_sp_raw(json_file)
+        if result.get("error") and result["error"] not in (None, "", "0"):
+            return JSONResponse(content=result, status_code=500)
+        return JSONResponse(content=result, status_code=200)
+    except Exception as e:
+        logger.exception("[users_sp] EXCEPTION: %s", e)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 def _send_email_otp(target: str, code: str):
+    _send_email(
+        target,
+        "Código de verificación — SmartLoans",
+        f"Tu código de verificación es:\n\n  {code}\n\n"
+        f"Ingresa este código en la pantalla de registro. Expira en 10 minutos.",
+    )
+
+
+def _send_email(target: str, subject: str, body: str):
+    """Send a plain-text email via the same Gmail SMTP config as the OTP
+    flow. Raises if GMAIL_SENDER/GMAIL_APP_PASSWORD aren't configured."""
+    if not _SENDER_EMAIL:
+        raise ValueError(
+            "GMAIL_SENDER env var is not set. Set it to the same Gmail address "
+            "the GMAIL_APP_PASSWORD was generated for, in Azure App Service → "
+            "Configuration → App settings."
+        )
     if not _SENDER_PWD:
         raise ValueError(
             "GMAIL_APP_PASSWORD env var is not set. "
             "Generate an App Password at https://myaccount.google.com/apppasswords "
-            "and add it to Azure App Service → Configuration → App settings."
+            f"for {_SENDER_EMAIL} and add it to Azure App Service → Configuration → App settings."
         )
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
     msg = MIMEMultipart()
     msg["From"]    = _SENDER_EMAIL
     msg["To"]      = target
-    msg["Subject"] = "Código de verificación — SmartLoans"
-    body = (
-        f"Tu código de verificación es:\n\n"
-        f"  {code}\n\n"
-        f"Ingresa este código en la pantalla de registro. Expira en 10 minutos."
-    )
+    msg["Subject"] = subject
     msg.attach(MIMEText(body, "plain", "utf-8"))
     ctx = ssl.create_default_context()
     with smtplib.SMTP(_SMTP_SERVER, _SMTP_PORT) as server:
@@ -114,6 +138,14 @@ def _normalize_phone(phone: str) -> str:
 
 def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False):
     """Send OTP via Twilio SMS or WhatsApp. Requires TWILIO_* env vars."""
+    _send_sms_message(phone, f"Tu código SmartLoans es: {code}. Expira en 10 min.", via_whatsapp=via_whatsapp)
+
+
+def _send_sms_message(phone: str, message: str, via_whatsapp: bool = False):
+    """Send a plain text message via Twilio SMS or WhatsApp. Requires
+    TWILIO_* env vars. Raises on failure (e.g. the number has no WhatsApp
+    account) — callers needing a push→WhatsApp→SMS fallback chain should
+    catch and try the next channel."""
     account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
     auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
     from_number = os.environ.get("TWILIO_FROM", "")
@@ -125,12 +157,12 @@ def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False):
         raise ValueError("twilio package not installed — run: pip install twilio")
 
     normalized = _normalize_phone(phone)
-    logger.info("[_send_sms_otp] raw=%s normalized=%s whatsapp=%s", phone, normalized, via_whatsapp)
+    logger.info("[_send_sms_message] raw=%s normalized=%s whatsapp=%s", phone, normalized, via_whatsapp)
 
     client = TwilioClient(account_sid, auth_token)
     to_num = f"whatsapp:{normalized}" if via_whatsapp else normalized
     fr_num = f"whatsapp:{from_number}" if via_whatsapp else from_number
-    client.messages.create(body=f"Tu código SmartLoans es: {code}. Expira en 10 min.", from_=fr_num, to=to_num)
+    client.messages.create(body=message, from_=fr_num, to=to_num)
 
 
 def send_verification_code(json_file: dict):
@@ -163,12 +195,20 @@ def send_verification_code(json_file: dict):
 
 
 def verify_code(json_file: dict):
-    """Validate OTP keyed by target (email or phone). Returns { valid: bool }."""
+    """Validate OTP keyed by target (email or phone). Returns { valid: bool }.
+
+    Optional userId — when present and the code checks out, persists
+    identityVerified=1 on dbo.users (registration wizard step "Verificar"),
+    so sp_checkContact can tell a returning contact they've already done
+    this step instead of asking again. Persistence failure doesn't fail the
+    verification itself — the OTP was still valid.
+    """
     try:
         target = json_file.get("target", "").strip()
         code   = str(json_file.get("code", "")).strip()
+        user_id = json_file.get("userId")
         entry  = _verification_codes.get(target)
-        logger.info("[verify_code] target=%s code=%s found=%s", target, code, bool(entry))
+        logger.info("[verify_code] target=%s code=%s found=%s userId=%s", target, code, bool(entry), user_id)
 
         if not entry:
             return JSONResponse(content={"valid": False, "error": "No hay código para este contacto"}, status_code=200)
@@ -180,6 +220,13 @@ def verify_code(json_file: dict):
 
         _verification_codes.pop(target, None)
         logger.info("[verify_code] verified OK for %s", target)
+
+        if user_id:
+            try:
+                _users_sp_raw({"users": [{"action": 2, "user_id": user_id, "identityVerified": 1}]})
+            except Exception as persist_err:
+                logger.exception("[verify_code] identityVerified persist failed for userId=%s: %s", user_id, persist_err)
+
         return JSONResponse(content={"valid": True}, status_code=200)
     except Exception as e:
         logger.exception("[verify_code] EXCEPTION: %s", e)

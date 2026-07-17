@@ -2,12 +2,28 @@ SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
 GO
--- sp_checkContact v3 — @pjsonfile convention
+-- sp_checkContact v5 — @pjsonfile convention
 -- Finds a client by phone (cellphone) or email, then checks if they already
 -- have a user account linked via email OR phone.
 -- Also returns loan completion steps (from ClientFaceRecognitions) so
 -- CreateAccount.tsx can show a known client their onboarding progress
 -- while they claim their login account.
+--
+-- v4: if no dbo.clients row matches, ALSO check dbo.users directly — a user
+-- account with no linked client (e.g. POS-only or email-only "loans" signups)
+-- was previously invisible to this check. Same fix already applied to the
+-- live scalar-param sp_check_contact/sp_checkContact; carried forward here
+-- so deploying this @pjsonfile version doesn't regress it.
+--
+-- v5: hasAccount used to be the only signal CreateAccount.tsx had for "this
+-- contact already has a login" — but a dbo.users row can exist while the
+-- registration wizard's Perfil/Verificar/Acceso steps are still unfinished
+-- (those steps didn't persist anywhere until now — see sp_users v2 and the
+-- appProfile/enabledModules/identityVerified columns added alongside this
+-- proc). Adds stepProfile/stepVerify/stepAccess + a consolidated
+-- regComplete flag, plus the saved appProfile/enabledModules/companyId/
+-- branchId/roleCode, so a returning contact can resume the wizard at the
+-- first incomplete step instead of always being sent to login.
 --
 -- Body: { "checkContact": [{ "contact": "phone-or-email" }] }
 -- Requires dbo.users.cellphone (already present in production).
@@ -47,10 +63,75 @@ BEGIN
     WHERE c.cellphone = @contact
        OR c.email     = @contact;
 
-    -- No client found → return found: false
+    -- No client found → check dbo.users directly before giving up. A user
+    -- account with no linked client still means "this contact is taken".
     IF @clientId IS NULL
     BEGIN
-        SELECT '{"found":false}' AS [jsonResult];
+        DECLARE @directUserId   INT,
+                @directUserName NVARCHAR(100);
+
+        SELECT TOP 1
+            @directUserId   = u.userId,
+            @directUserName = u.name
+        FROM dbo.users u
+        WHERE u.email = @contact
+           OR u.cellphone = @contact;
+
+        IF @directUserId IS NOT NULL
+        BEGIN
+            -- Registration wizard progress for this direct user account.
+            DECLARE
+                @dRegAppProfile     NVARCHAR(20),
+                @dRegEnabledModules NVARCHAR(MAX),
+                @dRegVerified       BIT,
+                @dRegHasAccess      BIT = 0,
+                @dRegCompanyId      INT,
+                @dRegBranchId       INT,
+                @dRegRoleCode       VARCHAR(50);
+
+            SELECT
+                @dRegAppProfile     = appProfile,
+                @dRegEnabledModules = enabledModules,
+                @dRegVerified       = identityVerified
+            FROM dbo.users
+            WHERE userId = @directUserId;
+
+            SELECT TOP 1
+                @dRegHasAccess = 1,
+                @dRegCompanyId = companyId,
+                @dRegBranchId  = branchId,
+                @dRegRoleCode  = roleName
+            FROM dbo.userCompanies
+            WHERE userId = @directUserId;
+
+            DECLARE @dRegComplete BIT =
+                CASE WHEN @dRegAppProfile IS NOT NULL
+                      AND ISNULL(@dRegVerified, 0)  = 1
+                      AND ISNULL(@dRegHasAccess, 0) = 1
+                     THEN 1 ELSE 0 END;
+
+            SELECT (
+                SELECT
+                    1                AS found,
+                    @directUserId    AS userId,
+                    @directUserName  AS userName,
+                    1                AS hasAccount,
+                    CAST(CASE WHEN @dRegAppProfile IS NULL THEN 0 ELSE 1 END AS INT) AS stepProfile,
+                    CAST(ISNULL(@dRegVerified, 0)  AS INT) AS stepVerify,
+                    CAST(ISNULL(@dRegHasAccess, 0) AS INT) AS stepAccess,
+                    CAST(@dRegComplete             AS INT) AS regComplete,
+                    @dRegAppProfile                        AS appProfile,
+                    JSON_QUERY(ISNULL(@dRegEnabledModules, '[]')) AS enabledModules,
+                    @dRegCompanyId                         AS companyId,
+                    @dRegBranchId                          AS branchId,
+                    @dRegRoleCode                          AS roleCode
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ) AS [jsonResult];
+        END
+        ELSE
+        BEGIN
+            SELECT '{"found":false}' AS [jsonResult];
+        END
         RETURN;
     END
 
@@ -69,6 +150,41 @@ BEGIN
 
     IF @userId IS NOT NULL
         SET @hasAccount = 1;
+
+    -- ── 2b. Registration wizard progress (Perfil/Verificar/Acceso) ──────
+    DECLARE
+        @regAppProfile     NVARCHAR(20),
+        @regEnabledModules NVARCHAR(MAX),
+        @regVerified       BIT,
+        @regHasAccess      BIT = 0,
+        @regCompanyId      INT,
+        @regBranchId       INT,
+        @regRoleCode       VARCHAR(50);
+
+    IF @userId IS NOT NULL
+    BEGIN
+        SELECT
+            @regAppProfile     = appProfile,
+            @regEnabledModules = enabledModules,
+            @regVerified       = identityVerified
+        FROM dbo.users
+        WHERE userId = @userId;
+
+        SELECT TOP 1
+            @regHasAccess = 1,
+            @regCompanyId = companyId,
+            @regBranchId  = branchId,
+            @regRoleCode  = roleName
+        FROM dbo.userCompanies
+        WHERE userId = @userId;
+    END
+
+    DECLARE @regComplete BIT =
+        CASE WHEN @hasAccount = 1
+              AND @regAppProfile IS NOT NULL
+              AND ISNULL(@regVerified, 0)  = 1
+              AND ISNULL(@regHasAccess, 0) = 1
+             THEN 1 ELSE 0 END;
 
     -- ── 3. Loan completion steps ─────────────────────────────────────────
     -- Step 1: general info (client exists)         → always 1
@@ -122,7 +238,16 @@ BEGIN
             CAST(CASE WHEN @qrBlobUrl IS NOT NULL THEN 1 ELSE 0 END AS INT) AS stepQr,
             CAST(@isVerified       AS INT) AS stepBiometric,
             CAST(@contractAccepted AS INT) AS stepContract,
-            CAST(@pagareAccepted   AS INT) AS stepPagare
+            CAST(@pagareAccepted   AS INT) AS stepPagare,
+            -- Registration wizard progress (Cuenta/Perfil/Verificar/Acceso)
+            CAST(CASE WHEN @regAppProfile IS NULL THEN 0 ELSE 1 END AS INT) AS stepProfile,
+            CAST(ISNULL(@regVerified, 0)  AS INT) AS stepVerify,
+            CAST(ISNULL(@regHasAccess, 0) AS INT) AS stepAccess,
+            CAST(@regComplete             AS INT) AS regComplete,
+            @regAppProfile                        AS appProfile,
+            JSON_QUERY(ISNULL(@regEnabledModules, '[]')) AS enabledModules,
+            @regBranchId                           AS branchId,
+            @regRoleCode                           AS roleCode
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
     ) AS [jsonResult];
 
