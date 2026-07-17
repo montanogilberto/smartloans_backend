@@ -2,12 +2,18 @@ SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
 GO
--- sp_checkContact v3 — @pjsonfile convention
+-- sp_checkContact v4 — @pjsonfile convention
 -- Finds a client by phone (cellphone) or email, then checks if they already
 -- have a user account linked via email OR phone.
 -- Also returns loan completion steps (from ClientFaceRecognitions) so
 -- CreateAccount.tsx can show a known client their onboarding progress
 -- while they claim their login account.
+--
+-- v4: if no dbo.clients row matches, ALSO check dbo.users directly — a user
+-- account with no linked client (e.g. POS-only or email-only "loans" signups)
+-- was previously invisible to this check. Same fix already applied to the
+-- live scalar-param sp_check_contact/sp_checkContact; carried forward here
+-- so deploying this @pjsonfile version doesn't regress it.
 --
 -- Body: { "checkContact": [{ "contact": "phone-or-email" }] }
 -- Requires dbo.users.cellphone (already present in production).
@@ -47,10 +53,35 @@ BEGIN
     WHERE c.cellphone = @contact
        OR c.email     = @contact;
 
-    -- No client found → return found: false
+    -- No client found → check dbo.users directly before giving up. A user
+    -- account with no linked client still means "this contact is taken".
     IF @clientId IS NULL
     BEGIN
-        SELECT '{"found":false}' AS [jsonResult];
+        DECLARE @directUserId   INT,
+                @directUserName NVARCHAR(100);
+
+        SELECT TOP 1
+            @directUserId   = u.userId,
+            @directUserName = u.name
+        FROM dbo.users u
+        WHERE u.email = @contact
+           OR u.cellphone = @contact;
+
+        IF @directUserId IS NOT NULL
+        BEGIN
+            SELECT (
+                SELECT
+                    1                AS found,
+                    @directUserId    AS userId,
+                    @directUserName  AS userName,
+                    1                AS hasAccount
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ) AS [jsonResult];
+        END
+        ELSE
+        BEGIN
+            SELECT '{"found":false}' AS [jsonResult];
+        END
         RETURN;
     END
 

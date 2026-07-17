@@ -19,10 +19,15 @@ app = FastAPI()
 _verification_codes: dict = {}
 
 # Gmail SMTP config — credentials from environment variables
-# Set GMAIL_SENDER and GMAIL_APP_PASSWORD in Azure App Service → Configuration → App settings
+# Set GMAIL_SENDER and GMAIL_APP_PASSWORD in Azure App Service → Configuration → App settings.
+# Both must point to the SAME Google account — the App Password only works for
+# the account it was generated on; a mismatched GMAIL_SENDER produces a Gmail
+# 535 "Username and Password not accepted" that looks like a bad password but
+# isn't. No silent default here on purpose, so a missing/wrong GMAIL_SENDER
+# fails with a clear message instead of that confusing 535.
 _SMTP_SERVER   = "smtp.gmail.com"
 _SMTP_PORT     = 587
-_SENDER_EMAIL  = os.environ.get("GMAIL_SENDER",       "contreras.9999@gmail.com")
+_SENDER_EMAIL  = os.environ.get("GMAIL_SENDER", "")
 _SENDER_PWD    = os.environ.get("GMAIL_APP_PASSWORD", "")
 
 def users_sp(json_file: dict):
@@ -70,11 +75,17 @@ def users_sp(json_file: dict):
 
 
 def _send_email_otp(target: str, code: str):
+    if not _SENDER_EMAIL:
+        raise ValueError(
+            "GMAIL_SENDER env var is not set. Set it to the same Gmail address "
+            "the GMAIL_APP_PASSWORD was generated for, in Azure App Service → "
+            "Configuration → App settings."
+        )
     if not _SENDER_PWD:
         raise ValueError(
             "GMAIL_APP_PASSWORD env var is not set. "
             "Generate an App Password at https://myaccount.google.com/apppasswords "
-            "and add it to Azure App Service → Configuration → App settings."
+            f"for {_SENDER_EMAIL} and add it to Azure App Service → Configuration → App settings."
         )
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
