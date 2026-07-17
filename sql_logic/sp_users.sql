@@ -5,16 +5,19 @@ CREATE OR ALTER PROC [dbo].[sp_users] (@pjsonfile VARCHAR(MAX))
 AS
 SET NOCOUNT ON
 
-DECLARE @email      VARCHAR(100)
-       ,@cellphone  VARCHAR(20)
-       ,@user_id    INT
-       ,@action     INT
-       ,@companyId  INT
-       ,@branchId   INT
-       ,@roleCode   VARCHAR(50)
-       ,@roleId     INT
-       ,@clientId   INT
-       ,@Error      VARCHAR(500) = ''
+DECLARE @email            VARCHAR(100)
+       ,@cellphone        VARCHAR(20)
+       ,@user_id          INT
+       ,@action           INT
+       ,@companyId        INT
+       ,@branchId         INT
+       ,@roleCode         VARCHAR(50)
+       ,@roleId           INT
+       ,@clientId         INT
+       ,@appProfile       VARCHAR(20)
+       ,@enabledModules   NVARCHAR(MAX)
+       ,@identityVerified BIT
+       ,@Error            VARCHAR(500) = ''
 
 DECLARE @Outputmessage VARCHAR(MAX) = '{
   "result": [{ "value": "", "msg": "", "error": "" }]
@@ -83,22 +86,35 @@ IF @action = 2
 BEGIN
     BEGIN TRY
         SELECT
-            @user_id   = JSON_VALUE(value, '$.user_id'),
-            @email     = NULLIF(JSON_VALUE(value, '$.email'), ''),
-            @cellphone = NULLIF(JSON_VALUE(value, '$.cellphone'), ''),
-            @companyId = NULLIF(JSON_VALUE(value, '$.companyId'), ''),
-            @branchId  = NULLIF(JSON_VALUE(value, '$.branchId'), ''),
-            @roleCode  = NULLIF(JSON_VALUE(value, '$.roleCode'), ''),
-            @clientId  = TRY_CONVERT(INT, JSON_VALUE(value, '$.clientId'))
+            @user_id          = JSON_VALUE(value, '$.user_id'),
+            @email            = NULLIF(JSON_VALUE(value, '$.email'), ''),
+            @cellphone        = NULLIF(JSON_VALUE(value, '$.cellphone'), ''),
+            @companyId        = NULLIF(JSON_VALUE(value, '$.companyId'), ''),
+            @branchId         = NULLIF(JSON_VALUE(value, '$.branchId'), ''),
+            @roleCode         = NULLIF(JSON_VALUE(value, '$.roleCode'), ''),
+            @clientId         = TRY_CONVERT(INT, JSON_VALUE(value, '$.clientId')),
+            -- Registration wizard steps 2 & 3 (Perfil / Verificar) — previously
+            -- sent by the frontend but silently dropped, so a returning
+            -- contact could never resume partway. See sp_checkContact v5.
+            @appProfile       = NULLIF(JSON_VALUE(value, '$.appProfile'), ''),
+            @enabledModules   = JSON_QUERY(value, '$.enabledModules'),
+            @identityVerified = TRY_CONVERT(BIT, JSON_VALUE(value, '$.identityVerified'))
         FROM OPENJSON(@pjsonfile, '$.users')
 
         BEGIN TRAN
             -- clientId mirrors the INSERT path: link/re-link this login to a
             -- dbo.clients row after creation, not just at signup time.
+            -- identityVerified only ever moves 0→1 here — an update call
+            -- that doesn't touch verification (e.g. saving Perfil) sends no
+            -- identityVerified, so @identityVerified is NULL and the
+            -- existing value is left alone rather than reset to 0.
             UPDATE [dbo].[users] SET
-                email     = ISNULL(@email,     email),
-                cellphone = ISNULL(@cellphone, cellphone),
-                clientId  = ISNULL(@clientId,  clientId),
+                email            = ISNULL(@email,     email),
+                cellphone        = ISNULL(@cellphone, cellphone),
+                clientId         = ISNULL(@clientId,  clientId),
+                appProfile       = ISNULL(@appProfile,     appProfile),
+                enabledModules   = ISNULL(@enabledModules, enabledModules),
+                identityVerified = CASE WHEN @identityVerified = 1 THEN 1 ELSE identityVerified END,
                 [name]    = ISNULL(NULLIF(JSON_VALUE((SELECT value FROM OPENJSON(@pjsonfile,'$.users')), '$.name'), ''), [name]),
                 [password]= ISNULL(NULLIF(JSON_VALUE((SELECT value FROM OPENJSON(@pjsonfile,'$.users')), '$.password'), ''), [password])
             WHERE [userId] = @user_id

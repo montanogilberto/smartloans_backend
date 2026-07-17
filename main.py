@@ -21,7 +21,7 @@ from routes_ import (
     creditScore, walletBalance, automatedPayments, signatureUpload,
     manufacturing, rewards, loanChat, clientDashboards,
     digitalContracts, legalCases, disbursement,
-    document_intelligence, geocoding, onboardingReminders,
+    document_intelligence, geocoding, onboardingReminders, registrationReminders,
 )
 
 app = FastAPI(
@@ -156,6 +156,7 @@ app.include_router(disbursement.router)
 app.include_router(document_intelligence.router)
 app.include_router(geocoding.router)
 app.include_router(onboardingReminders.router)
+app.include_router(registrationReminders.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job
@@ -166,6 +167,7 @@ app.include_router(onboardingReminders.router)
 from modules.companies import all_companies_sp
 from modules.automatedPayments import charge_due_installments
 from modules.onboardingReminders import check_onboarding_completeness
+from modules.registrationReminders import check_registration_completeness
 
 scheduler = AsyncIOScheduler()
 
@@ -198,6 +200,16 @@ async def _run_daily_onboarding_reminders():
             print(f"[scheduler] onboarding-reminders: failed for companyId={company_id}: {e}")
 
 
+async def _run_daily_registration_reminders():
+    # Not company-scoped like the two jobs above — an incomplete
+    # registration may not have a company yet (that's the "Acceso" step).
+    try:
+        await check_registration_completeness({})
+        print("[scheduler] registration-reminders: ran")
+    except Exception as e:
+        print(f"[scheduler] registration-reminders: failed: {e}")
+
+
 @app.on_event("startup")
 async def start_scheduler():
     # 07:00 UTC ≈ early morning in Mexico (UTC-6/-5) — off-peak for billing.
@@ -205,6 +217,7 @@ async def start_scheduler():
     # 15:00 UTC ≈ mid-morning in Mexico — a time a client is likely to see
     # and act on the notification, unlike the pre-dawn billing run above.
     scheduler.add_job(_run_daily_onboarding_reminders, "cron", hour=15, minute=0, id="daily_onboarding_reminders")
+    scheduler.add_job(_run_daily_registration_reminders, "cron", hour=16, minute=0, id="daily_registration_reminders")
     scheduler.start()
 
 # --------------------------------------------------
