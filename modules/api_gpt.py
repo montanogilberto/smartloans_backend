@@ -1,3 +1,5 @@
+import os
+
 from openai import OpenAI
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -5,10 +7,10 @@ import json
 
 app = FastAPI()
 
-# Define your OpenAI API key
-api_key = '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'
-
 def gpt_sp(json_file: dict, module: str):
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY env var is not set.")
     print(json_file)
     print(module)
     try:
