@@ -24,7 +24,8 @@ import logging
 from databases import connection
 from fastapi.responses import JSONResponse
 from modules.pushNotifications import pushNotifications_sp
-from modules.users import _send_email, _send_sms_message
+from modules.users import _send_email, _normalize_phone
+from modules.ticket_notifications import send_sms, send_whatsapp
 
 logger = logging.getLogger("registrationReminders")
 
@@ -85,14 +86,16 @@ async def _notify_cellphone(user_id: int, company_id, cellphone: str, message: s
     except Exception as e:
         logger.warning("[registrationReminders] push attempt failed for userId=%s: %s", user_id, e)
 
+    normalized = _normalize_phone(cellphone)
+
     try:
-        _send_sms_message(cellphone, message, via_whatsapp=True)
+        send_whatsapp(normalized, message)
         return "whatsapp"
     except Exception as e:
         logger.warning("[registrationReminders] whatsapp attempt failed for userId=%s: %s", user_id, e)
 
     try:
-        _send_sms_message(cellphone, message, via_whatsapp=False)
+        send_sms(normalized, message)
         return "sms"
     except Exception as e:
         logger.warning("[registrationReminders] sms attempt failed for userId=%s: %s", user_id, e)
