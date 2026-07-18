@@ -137,32 +137,16 @@ def _normalize_phone(phone: str) -> str:
 
 
 def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False):
-    """Send OTP via Twilio SMS or WhatsApp. Requires TWILIO_* env vars."""
-    _send_sms_message(phone, f"Tu código SmartLoans es: {code}. Expira en 10 min.", via_whatsapp=via_whatsapp)
-
-
-def _send_sms_message(phone: str, message: str, via_whatsapp: bool = False):
-    """Send a plain text message via Twilio SMS or WhatsApp. Requires
-    TWILIO_* env vars. Raises on failure (e.g. the number has no WhatsApp
-    account) — callers needing a push→WhatsApp→SMS fallback chain should
-    catch and try the next channel."""
-    account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
-    auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
-    from_number = os.environ.get("TWILIO_FROM", "")
-    if not account_sid or not auth_token or not from_number:
-        raise ValueError("Twilio credentials not configured (set TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM)")
-    try:
-        from twilio.rest import Client as TwilioClient
-    except ImportError:
-        raise ValueError("twilio package not installed — run: pip install twilio")
-
+    """Send OTP via Twilio SMS or WhatsApp, reusing the same Twilio module
+    that sends ticket/income receipts (modules/ticket_notifications.py)."""
+    from modules.ticket_notifications import send_sms, send_whatsapp
     normalized = _normalize_phone(phone)
-    logger.info("[_send_sms_message] raw=%s normalized=%s whatsapp=%s", phone, normalized, via_whatsapp)
-
-    client = TwilioClient(account_sid, auth_token)
-    to_num = f"whatsapp:{normalized}" if via_whatsapp else normalized
-    fr_num = f"whatsapp:{from_number}" if via_whatsapp else from_number
-    client.messages.create(body=message, from_=fr_num, to=to_num)
+    message = f"Tu código SmartLoans es: {code}. Expira en 10 min."
+    logger.info("[_send_sms_otp] raw=%s normalized=%s whatsapp=%s", phone, normalized, via_whatsapp)
+    if via_whatsapp:
+        send_whatsapp(normalized, message)
+    else:
+        send_sms(normalized, message)
 
 
 def send_verification_code(json_file: dict):
