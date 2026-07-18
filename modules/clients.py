@@ -82,10 +82,12 @@ def one_clients_sp(json_file: dict):
         cursor.execute("EXEC sp_clients_one @pjsonfile = %s", (json.dumps(json_file)))
 
         # Fetch the result as a JSON string
-        json_result = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            return JSONResponse(content={"clients": []}, status_code=200)
 
         # Parse the JSON string to a Python dictionary
-        result = json.loads(json_result)
+        result = json.loads(row[0])
 
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
