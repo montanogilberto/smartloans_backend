@@ -160,9 +160,13 @@ async def create_connected_account(payload: dict):
             acct_id = acct["id"]
             print(f"[stripe][create_connected_account] stripe account created acct_id={acct_id}")
 
-            # Persist to SQL
+            # Persist to SQL — _sp_connected_accounts swallows DB errors and
+            # returns {} on failure, so we must confirm the row actually
+            # landed before reporting success. Otherwise the Stripe account
+            # exists but is unreachable (every later lookup finds nothing,
+            # and every retry mints another orphaned Stripe account).
             print("[stripe][create_connected_account] persisting new account status in SQL")
-            _sp_connected_accounts({
+            persisted = _sp_connected_accounts({
                 "action": "upsert",
                 "clientId": client_id,
                 "companyId": company_id,
@@ -172,6 +176,15 @@ async def create_connected_account(payload: dict):
                 "detailsSubmitted": False,
                 "hasExternalAccount": False,
             })
+            if not isinstance(persisted, dict) or persisted.get("connectedAccountId") != acct_id:
+                print(
+                    f"[stripe][create_connected_account] SQL persist FAILED to confirm "
+                    f"acct_id={acct_id} clientId={client_id} companyId={company_id} persisted={persisted}"
+                )
+                return JSONResponse(
+                    {"error": "Stripe account created but could not be saved. Please retry."},
+                    status_code=500,
+                )
 
             return JSONResponse({
                 "account": {
