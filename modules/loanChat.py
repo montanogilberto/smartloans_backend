@@ -1,7 +1,16 @@
 import json
+import os
+import httpx
 from fastapi.responses import JSONResponse
 from databases import connection
 from modules.azure_notifications import send_azure_push
+
+# Reserved dbo.clients row (clientType='lender') that borrowers chat with
+# for automated negotiation help — see modules/loanChat.py's send_message hook.
+AGENT_CLIENT_ID = int(os.environ.get("LOANCHAT_AGENT_CLIENT_ID", "0")) or None
+
+# LoanAgents_SmartLoans — independent ADK service, called over HTTP only.
+NEGOTIATION_AGENT_URL = os.environ.get("NEGOTIATION_AGENT_URL", "").rstrip("/")
 
 
 def _sp(payload: dict):
@@ -22,6 +31,28 @@ def _sp(payload: dict):
         try:
             if conn: conn.close()
         except Exception: pass
+
+
+async def _generate_agent_reply(conversation_id: int, borrower_id: int, company_id: int, user_message: str) -> str:
+    """Calls the LoanAgents_SmartLoans negotiation agent (an independent ADK
+    service — see https://github.com/montanogilberto/LoanAgents_SmartLoans)
+    over HTTP. Raises on failure — caller decides how to handle that."""
+    if not NEGOTIATION_AGENT_URL:
+        raise ValueError("NEGOTIATION_AGENT_URL env var is not set.")
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            f"{NEGOTIATION_AGENT_URL}/negotiate",
+            json={
+                "conversationId": conversation_id,
+                "borrowerId": borrower_id,
+                "companyId": company_id,
+                "message": user_message,
+                "speakerRole": "borrower",
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()["reply"]
 
 
 async def loanChat_sp(payload: dict):
@@ -65,5 +96,40 @@ async def loanChat_sp(payload: dict):
                 print(f"[loanChat] push sent → userId={target_user_id} title={title!r}")
             except Exception as e:
                 print(f"[loanChat] push failed: {e}")
+
+    # ── Negotiation agent auto-reply ───────────────────────────
+    # If the borrower just messaged the reserved "Asistente SmartLoans"
+    # lender, call the independent LoanAgents_SmartLoans ADK service and
+    # insert its reply — that service reads this borrower's own account
+    # data itself (see LoanAgents_SmartLoans/tools/backend_api.py).
+    if action == "send_message" and payload.get("senderRole") == "borrower" and AGENT_CLIENT_ID and isinstance(result, dict):
+        conv_id = result.get("conversationId") or payload.get("conversationId")
+        conversation = _sp({"action": "get_conversation", "conversationId": conv_id})
+        if isinstance(conversation, dict) and conversation.get("lenderId") == AGENT_CLIENT_ID:
+            borrower_id = conversation.get("borrowerId")
+            company_id = conversation.get("companyId")
+            borrower_user_id = conversation.get("borrowerUserId")
+            user_message = payload.get("body") or ""
+
+            try:
+                reply_text = await _generate_agent_reply(conv_id, borrower_id, company_id, user_message)
+            except Exception as e:
+                print(f"[loanChat] agent reply generation failed: {e}")
+                reply_text = "Lo siento, no puedo responder en este momento. Intenta de nuevo más tarde."
+
+            agent_result = _sp({
+                "action": "send_message",
+                "conversationId": conv_id,
+                "senderId": AGENT_CLIENT_ID,
+                "senderRole": "lender",
+                "msgType": "text",
+                "body": reply_text,
+            })
+
+            if borrower_user_id and isinstance(agent_result, dict) and "error" not in agent_result:
+                try:
+                    await send_azure_push("🤖 Asistente SmartLoans", reply_text, borrower_user_id)
+                except Exception as e:
+                    print(f"[loanChat] agent reply push failed: {e}")
 
     return JSONResponse(content=result, status_code=200)

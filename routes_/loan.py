@@ -1,5 +1,7 @@
+import json as json_module
+
 from fastapi import APIRouter
-from modules.loans import loans_sp, all_loans_sp, one_loans_sp
+from modules.loans import loans_sp, all_loans_sp, one_loans_sp, _notify_matching_lenders
 
 
 router = APIRouter()
@@ -7,8 +9,16 @@ router = APIRouter()
 with open("./docs_description/loans.txt", "r") as file:
     loans_docstring = file.read()
 @router.post("/loans", summary="loans CRUD", description=loans_docstring)
-def loans(json: dict):
-    return loans_sp(json)
+async def loans(json: dict):
+    response = loans_sp(json)
+
+    action = (json.get("loans") or [{}])[0].get("action")
+    if action == 1:
+        loan = json_module.loads(response.body)
+        if isinstance(loan, dict) and loan.get("loanId") and "error" not in loan:
+            await _notify_matching_lenders(loan)
+
+    return response
 
 
 with open("./docs_description/loans_all.txt", "r") as file:
