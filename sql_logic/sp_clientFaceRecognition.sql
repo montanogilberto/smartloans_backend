@@ -20,6 +20,17 @@ CREATE TABLE dbo.ClientFaceRecognitions (
     confidence_score             DECIMAL(5,4)        NOT NULL,
     is_verified                  BIT                 NOT NULL,
 
+    -- Identity fields extracted (and human-reviewed/corrected in the UI)
+    -- from the ID capture — carried through to the generated contract/
+    -- pagaré PDFs. All nullable: OCR/vision extraction on the front of an
+    -- INE is unreliable (anti-copy watermark), so these are frequently
+    -- blank and always editable, never authoritative on their own.
+    nombre                        NVARCHAR(255)       NULL,
+    domicilio                     NVARCHAR(500)       NULL,
+    curp                          NVARCHAR(18)        NULL,
+    clave_elector                 NVARCHAR(20)        NULL,
+    fecha_nacimiento              NVARCHAR(10)        NULL,
+
     -- Legal contract metadata
     contract_accepted            BIT                 NOT NULL,
     contract_pdf_blob_url        NVARCHAR(2048)       NULL,
@@ -109,6 +120,12 @@ BEGIN
         confidence_score             DECIMAL(5,4) NULL,
         is_verified                  BIT NULL,
 
+        nombre                       NVARCHAR(255) NULL,
+        domicilio                    NVARCHAR(500) NULL,
+        curp                         NVARCHAR(18) NULL,
+        clave_elector                NVARCHAR(20) NULL,
+        fecha_nacimiento             NVARCHAR(10) NULL,
+
         contract_accepted            BIT NULL,
         contract_pdf_blob_url        NVARCHAR(2048) NULL,
         contract_accepted_at         DATETIME2(7) NULL,
@@ -147,6 +164,11 @@ BEGIN
         client_selfie_blob_url,
         confidence_score,
         is_verified,
+        nombre,
+        domicilio,
+        curp,
+        clave_elector,
+        fecha_nacimiento,
         contract_accepted,
         contract_pdf_blob_url,
         contract_accepted_at,
@@ -178,6 +200,11 @@ BEGIN
         JSON_VALUE(value, '$.clientSelfieBlobUrl'),
         TRY_CONVERT(DECIMAL(5,4), JSON_VALUE(value, '$.confidenceScore')),
         TRY_CONVERT(BIT, JSON_VALUE(value, '$.isVerified')),
+        JSON_VALUE(value, '$.nombre'),
+        JSON_VALUE(value, '$.domicilio'),
+        JSON_VALUE(value, '$.curp'),
+        JSON_VALUE(value, '$.claveElector'),
+        JSON_VALUE(value, '$.fechaNacimiento'),
 
         TRY_CONVERT(BIT, JSON_VALUE(value, '$.contractAccepted')),
         JSON_VALUE(value, '$.contractPdfBlobUrl'),
@@ -219,6 +246,11 @@ BEGIN
                 client_selfie_blob_url,
                 confidence_score,
                 is_verified,
+                nombre,
+                domicilio,
+                curp,
+                clave_elector,
+                fecha_nacimiento,
                 contract_accepted,
                 contract_pdf_blob_url,
                 contract_accepted_at,
@@ -252,6 +284,11 @@ BEGIN
                 p.client_selfie_blob_url,
                 p.confidence_score,
                 p.is_verified,
+                p.nombre,
+                p.domicilio,
+                p.curp,
+                p.clave_elector,
+                p.fecha_nacimiento,
                 p.contract_accepted,
                 p.contract_pdf_blob_url,
                 p.contract_accepted_at,
@@ -302,6 +339,12 @@ BEGIN
                 cfr.client_selfie_blob_url     = COALESCE(p.client_selfie_blob_url, cfr.client_selfie_blob_url),
                 cfr.confidence_score           = COALESCE(p.confidence_score, cfr.confidence_score),
                 cfr.is_verified                = COALESCE(p.is_verified, cfr.is_verified),
+
+                cfr.nombre                     = COALESCE(p.nombre, cfr.nombre),
+                cfr.domicilio                  = COALESCE(p.domicilio, cfr.domicilio),
+                cfr.curp                       = COALESCE(p.curp, cfr.curp),
+                cfr.clave_elector              = COALESCE(p.clave_elector, cfr.clave_elector),
+                cfr.fecha_nacimiento           = COALESCE(p.fecha_nacimiento, cfr.fecha_nacimiento),
 
                 cfr.contract_accepted          = COALESCE(p.contract_accepted, cfr.contract_accepted),
                 cfr.contract_pdf_blob_url      = COALESCE(p.contract_pdf_blob_url, cfr.contract_pdf_blob_url),
@@ -389,6 +432,13 @@ BEGIN
         ISNULL([confidence_score], 0.0000)                 AS confidenceScore,
         ISNULL([is_verified], 0)                           AS isVerified,
 
+        -- Identity fields extracted from the ID (human-reviewed, may be blank)
+        ISNULL([nombre], '')                                AS nombre,
+        ISNULL([domicilio], '')                             AS domicilio,
+        ISNULL([curp], '')                                  AS curp,
+        ISNULL([clave_elector], '')                         AS claveElector,
+        ISNULL([fecha_nacimiento], '')                      AS fechaNacimiento,
+
         -- Legal Contract Metadata
         ISNULL([contract_accepted], 0)                     AS contractAccepted,
         ISNULL([contract_pdf_blob_url], '')                AS contractPdfBlobUrl,
@@ -455,6 +505,13 @@ BEGIN
         ISNULL([client_selfie_blob_url], '')               AS clientSelfieBlobUrl,
         ISNULL([confidence_score], 0.0000)                 AS confidenceScore,
         ISNULL([is_verified], 0)                           AS isVerified,
+
+        -- Identity fields extracted from the ID (human-reviewed, may be blank)
+        ISNULL([nombre], '')                                AS nombre,
+        ISNULL([domicilio], '')                             AS domicilio,
+        ISNULL([curp], '')                                  AS curp,
+        ISNULL([clave_elector], '')                         AS claveElector,
+        ISNULL([fecha_nacimiento], '')                      AS fechaNacimiento,
 
         -- Legal Contract Metadata
         ISNULL([contract_accepted], 0)                     AS contractAccepted,
