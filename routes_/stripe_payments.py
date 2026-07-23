@@ -2,6 +2,8 @@ from fastapi import APIRouter, Request
 from modules.stripe_payments import (
     create_connected_account,
     get_connected_account_status,
+    submit_connected_account_kyc,
+    attach_external_bank_account,
     create_account_session,
     get_onboarding_link,
     create_payment_intent,
@@ -44,6 +46,42 @@ Returns: { "account": ConnectedAccount | null }
 )
 async def connected_account_status(json: dict):
     return await get_connected_account_status(json)
+
+
+@router.post(
+    "/connected-accounts/kyc",
+    summary="Submit identity/tax for a Custom Connected Account (native, no redirect)",
+    description="""
+Attaches the client's identity, tax id (RFC/CURP), address and ToS acceptance to
+their Custom connected account via the Stripe API — collected with native in-app
+forms instead of the hosted onboarding flow.
+
+Body: { clientId, companyId, firstName, lastName, dobDay, dobMonth, dobYear,
+        email, phone?, taxId?, address{line1,city,state,postalCode,country}, acceptedTos }
+Returns: { account: ConnectedAccount }
+""",
+)
+async def connected_account_kyc(json: dict, request: Request):
+    # Stripe requires the end-user's IP to record ToS acceptance for Custom
+    # accounts; capture it server-side rather than trusting the client.
+    json["_ip"] = request.client.host if request.client else None
+    return await submit_connected_account_kyc(json)
+
+
+@router.post(
+    "/connected-accounts/bank",
+    summary="Attach a payout destination to a Custom Connected Account (native, no redirect)",
+    description="""
+Attaches an external account (CLABE bank account OR debit card) to the client's
+Custom connected account. The value is tokenized client-side with Stripe.js, so
+only the token (btok_ or tok_) reaches this endpoint — never the raw number.
+
+Body: { clientId, companyId, bankToken }
+Returns: { account: ConnectedAccount }
+""",
+)
+async def connected_account_bank(json: dict):
+    return await attach_external_bank_account(json)
 
 
 @router.post(
