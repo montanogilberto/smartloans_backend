@@ -704,7 +704,7 @@ async def handle_webhook(request: Request):
     Register in Stripe Dashboard → Developers → Webhooks:
       URL: https://smartloansbackend.azurewebsites.net/stripe/webhook
       Events: payment_intent.succeeded, payment_intent.payment_failed,
-              account.updated, transfer.created
+              account.updated
     """
     payload_bytes = await request.body()
     sig_header    = request.headers.get("stripe-signature", "")
@@ -735,10 +735,9 @@ async def handle_webhook(request: Request):
         })
         print(f"[stripe][webhook] PaymentIntent succeeded: {intent_id}")
 
-    elif event_type == "invoice.payment_failed":
-        invoice_id     = data_obj.get("id")
-        intent_id      = data_obj.get("payment_intent")
-        failure_reason = data_obj.get("last_finalization_error", {}).get("message", "invoice payment failed")
+    elif event_type == "payment_intent.payment_failed":
+        intent_id      = data_obj.get("id")
+        failure_reason = data_obj.get("last_payment_error", {}).get("message", "payment failed")
         metadata       = data_obj.get("metadata", {})
         _sp_transaction({
             "action": "update_status",
@@ -747,7 +746,7 @@ async def handle_webhook(request: Request):
             "failureReason": failure_reason,
             "companyId": metadata.get("companyId"),
         })
-        print(f"[stripe][webhook] Invoice payment failed: {invoice_id} — {failure_reason}")
+        print(f"[stripe][webhook] PaymentIntent failed: {intent_id} — {failure_reason}")
 
     elif event_type == "account.updated":
         acct_id           = data_obj.get("id")
