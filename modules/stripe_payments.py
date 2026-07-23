@@ -86,6 +86,41 @@ def _external_account_info(acct):
     return True, last4, ext_type, bank_name
 
 
+def _persist_and_serialize(acct, client_id: int, company_id: int) -> dict:
+    """Upsert the connected account's live status into SQL (via SP) and return
+    the ConnectedAccount shape the mobile app expects. `acct` must be retrieved
+    with expand=["external_accounts"]."""
+    charges   = getattr(acct, "charges_enabled", False)
+    payouts   = getattr(acct, "payouts_enabled", False)
+    submitted = getattr(acct, "details_submitted", False)
+    has_ext, ext_last4, ext_type, ext_bank = _external_account_info(acct)
+    _sp_connected_accounts({
+        "action": "upsert",
+        "clientId": client_id,
+        "companyId": company_id,
+        "connectedAccountId": acct["id"],
+        "chargesEnabled": charges,
+        "payoutsEnabled": payouts,
+        "detailsSubmitted": submitted,
+        "hasExternalAccount": has_ext,
+        "externalAccountLast4": ext_last4,
+        "externalAccountType": ext_type,
+        "externalAccountBankName": ext_bank,
+    })
+    return {
+        "connectedAccountId": acct["id"],
+        "clientId": client_id,
+        "companyId": company_id,
+        "chargesEnabled": charges,
+        "payoutsEnabled": payouts,
+        "detailsSubmitted": submitted,
+        "hasExternalAccount": has_ext,
+        "externalAccountLast4": ext_last4,
+        "externalAccountType": ext_type,
+        "externalAccountBankName": ext_bank,
+    }
+
+
 def _sp_transactions_list(company_id: int, filters: dict = None):
     """List transactions from SQL."""
     conn = None
@@ -144,14 +179,17 @@ async def create_connected_account(payload: dict):
         print(f"[stripe][create_connected_account] acct_id from DB={acct_id}")
 
         if not acct_id:
-            # Create a new Stripe Express account
-            print("[stripe][create_connected_account] creating new Stripe express account")
+            # Create a new Stripe **Custom** account — onboarded entirely through
+            # our own native forms + API (submit_connected_account_kyc /
+            # attach_external_bank_account), no connect.stripe.com redirect. Only
+            # `transfers` is requested: these accounts are payout recipients and
+            # card charges route through the platform via destination charges.
+            print("[stripe][create_connected_account] creating new Stripe custom account")
             acct = stripe.Account.create(
-                type="express",
+                type="custom",
                 country="MX",
                 email=email,
                 capabilities={
-                    "card_payments": {"requested": True},
                     "transfers": {"requested": True},
                 },
                 business_type="individual",
@@ -339,6 +377,110 @@ async def get_connected_account_status(payload: dict):
             f"[stripe][get_connected_account_status] Error type={type(e).__name__} "
             f"clientId={client_id} companyId={company_id} acct_id={acct_id} error={repr(e)}"
         )
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Native (redirect-free) onboarding ────────────────────────────────────────
+# Replace the hosted /account-session and /onboarding-link flows for Custom
+# accounts. The app collects KYC/bank data with native forms and submits it
+# here; the user never leaves the app.
+
+def _lookup_account_id(client_id, company_id):
+    existing = _sp_connected_accounts({"action": "get", "clientId": client_id, "companyId": company_id})
+    if not isinstance(existing, dict):
+        return None
+    return existing.get("connectedAccountId")
+
+
+async def submit_connected_account_kyc(payload: dict):
+    """Attach identity/tax info + ToS acceptance to a client's Custom account.
+
+    Body: clientId, companyId, firstName, lastName, dobDay/Month/Year, email,
+          phone?, taxId?, address{line1,city,state,postalCode,country}, acceptedTos,
+          _ip (injected by the route — Stripe requires it for ToS acceptance).
+    """
+    client_id  = payload.get("clientId")
+    company_id = payload.get("companyId")
+    if not client_id or not company_id:
+        return JSONResponse({"error": "clientId and companyId required"}, status_code=400)
+
+    acct_id = _lookup_account_id(client_id, company_id)
+    if not acct_id:
+        return JSONResponse({"error": "No connected account found. Create one first."}, status_code=404)
+
+    addr = payload.get("address") or {}
+    individual = {
+        "first_name": payload.get("firstName"),
+        "last_name":  payload.get("lastName"),
+        "email":      payload.get("email"),
+        "dob": {
+            "day":   payload.get("dobDay"),
+            "month": payload.get("dobMonth"),
+            "year":  payload.get("dobYear"),
+        },
+        "address": {
+            "line1":       addr.get("line1"),
+            "city":        addr.get("city"),
+            "state":       addr.get("state"),
+            "postal_code": addr.get("postalCode"),
+            "country":     addr.get("country", "MX"),
+        },
+    }
+    if payload.get("phone"):
+        individual["phone"] = payload["phone"]
+    if payload.get("taxId"):
+        individual["id_number"] = payload["taxId"]
+
+    modify_kwargs = {"individual": individual, "business_type": "individual"}
+    if payload.get("acceptedTos"):
+        modify_kwargs["tos_acceptance"] = {
+            "date": int(datetime.utcnow().timestamp()),
+            "ip":   payload.get("_ip") or "0.0.0.0",
+        }
+
+    try:
+        stripe.Account.modify(acct_id, **modify_kwargs)
+        acct = stripe.Account.retrieve(acct_id, expand=["external_accounts"])
+        return JSONResponse({"account": _persist_and_serialize(acct, client_id, company_id)}, status_code=200)
+    except stripe.StripeError as e:
+        print(f"[stripe][submit_kyc] Stripe error acct_id={acct_id} error={e}")
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        print(f"[stripe][submit_kyc] Error acct_id={acct_id} error={repr(e)}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def attach_external_bank_account(payload: dict):
+    """Attach a payout destination to a client's Custom account.
+
+    `bankToken` is a Stripe.js token created client-side — EITHER a bank_account
+    token (btok_, from a CLABE) OR a debit-card token (tok_, from reusing the
+    CardElement). Stripe accepts both as external accounts (card = instant payout).
+    Body: clientId, companyId, bankToken.
+    """
+    client_id  = payload.get("clientId")
+    company_id = payload.get("companyId")
+    bank_token = payload.get("bankToken")
+    if not client_id or not company_id or not bank_token:
+        return JSONResponse({"error": "clientId, companyId and bankToken required"}, status_code=400)
+
+    acct_id = _lookup_account_id(client_id, company_id)
+    if not acct_id:
+        return JSONResponse({"error": "No connected account found. Create one first."}, status_code=404)
+
+    try:
+        stripe.Account.create_external_account(
+            acct_id,
+            external_account=bank_token,
+            default_for_currency=True,
+        )
+        acct = stripe.Account.retrieve(acct_id, expand=["external_accounts"])
+        return JSONResponse({"account": _persist_and_serialize(acct, client_id, company_id)}, status_code=200)
+    except stripe.StripeError as e:
+        print(f"[stripe][attach_bank] Stripe error acct_id={acct_id} error={e}")
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        print(f"[stripe][attach_bank] Error acct_id={acct_id} error={repr(e)}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
