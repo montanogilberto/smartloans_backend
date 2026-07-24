@@ -1,5 +1,10 @@
 from fastapi import APIRouter
-from modules.creditScore import compute_credit_score, get_credit_score, get_credit_score_history
+from modules.creditScore import (
+    compute_credit_score,
+    get_credit_score,
+    get_credit_score_history,
+    compute_available_credit,
+)
 
 router = APIRouter(prefix="/credit-score", tags=["Credit Score"])
 
@@ -49,3 +54,23 @@ Returns: { "history": [{ score, label, computedAt }] }
 )
 async def score_history(json: dict):
     return await get_credit_score_history(json)
+
+
+@router.post(
+    "/available-credit",
+    summary="Compute available credit limit (Crédito disponible)",
+    description="""
+Deterministic peso credit limit derived from the client's credit score + KYC
+signals + loan history. No LLM — a credit limit must be auditable and
+reproducible.
+
+Gating: no credit until biometric verification AND contract acceptance.
+First-time verified clients with no history get the promotional starter limit;
+clients with history get a score-tiered limit minus their outstanding balance.
+
+Body: { "clientId": int, "companyId": int }
+Returns: { "availableCredit": number, "breakdown": { tier, kycEligible, isFirstTime, baseLimit, outstandingBalance, reason, score, ... } }
+""",
+)
+async def available_credit(json: dict):
+    return await compute_available_credit(json)
