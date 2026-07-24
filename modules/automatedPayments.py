@@ -19,6 +19,7 @@ Tables required:
 
 import os
 import json
+import traceback
 import stripe
 from fastapi.responses import JSONResponse
 from databases import connection
@@ -138,30 +139,42 @@ async def save_payment_method(payload: dict):
 
     try:
         si = stripe.SetupIntent.retrieve(setup_intent_id)
-        pm_id = si.get("payment_method")
+
+        # Use attribute access, not dict .get(): Stripe response objects are
+        # version-sensitive about the dict interface, and the previous
+        # si.get(...)/pm.get(...) path was failing with an opaque error (the
+        # 500 body was just "get"). payment_method may be an id string OR, if
+        # the SetupIntent was expanded, a full object — handle both.
+        pm_field = getattr(si, "payment_method", None)
+        pm_id = getattr(pm_field, "id", None) or pm_field
         if not pm_id:
             return JSONResponse({"error": "SetupIntent has no payment method attached"}, status_code=400)
 
         pm = stripe.PaymentMethod.retrieve(pm_id)
-        card = pm.get("card", {})
+        card = getattr(pm, "card", None)
 
         result = _sp_saved_methods({
             "action": "upsert",
             "clientId": client_id,
             "companyId": company_id,
             "stripePaymentMethodId": pm_id,
-            "last4":       card.get("last4", ""),
-            "brand":       card.get("brand", ""),
-            "expiryMonth": card.get("exp_month"),
-            "expiryYear":  card.get("exp_year"),
+            "last4":       getattr(card, "last4", "") if card else "",
+            "brand":       getattr(card, "brand", "") if card else "",
+            "expiryMonth": getattr(card, "exp_month", None) if card else None,
+            "expiryYear":  getattr(card, "exp_year", None) if card else None,
         })
 
         return JSONResponse({"paymentMethod": result}, status_code=200)
 
     except stripe.StripeError as e:
+        print(f"[automatedPayments] save_method Stripe error: {type(e).__name__}: {e}")
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        # Log the real cause (type + repr + traceback). The old handler
+        # returned a bare str(e), which surfaced on-device as the useless
+        # message "get" with nothing to trace it to.
+        print(f"[automatedPayments] save_method FAILED: {type(e).__name__}: {e!r}\n{traceback.format_exc()}")
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500)
 
 
 async def get_saved_method(payload: dict):

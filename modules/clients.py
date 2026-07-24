@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from databases import connection
 from azure.storage.blob import BlobServiceClient, ContentSettings
+from modules.clientFaceRecognitions import client_blob_path
 import json, base64, uuid, os
 from datetime import datetime
 
@@ -117,7 +118,11 @@ async def upload_client_qr_sp(json_file: dict):
 
         now = datetime.utcnow()
         uid = str(uuid.uuid4())[:8]
-        blob_path = f"clients/{now.year}/{str(now.month).zfill(2)}/qr_{client_id}_{uid}.png"
+        # Grouped under the client alongside their other assets — same layout
+        # as the expediente uploads (see client_blob_path in
+        # clientFaceRecognitions.py). 'qr' isn't part of the expediente, but
+        # splitting one client's files across two schemes defeats the point.
+        blob_path = client_blob_path(client_id, "qr", f"qr_{now.strftime('%Y%m%d%H%M%S')}_{uid}.png")
 
         qr_url = _upload_bytes_to_blob(raw_bytes, blob_path, "image/png", {
             "clientId":  str(client_id),

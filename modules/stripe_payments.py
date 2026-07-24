@@ -145,7 +145,12 @@ def _sp_transactions_list(company_id: int, filters: dict = None):
 # ── Connected Accounts ───────────────────────────────────────────────────────
 
 async def create_connected_account(payload: dict):
-    """Create or retrieve a Stripe Express Connected Account for a client."""
+    """Create or retrieve a Stripe **Custom** connected account for a client.
+
+    Custom, not Express: onboarding happens through our own native forms via
+    submit_connected_account_kyc, which only a Custom account permits. Accounts
+    predating that switch are Express and get replaced here — see below.
+    """
     client_id  = payload.get("clientId")
     company_id = payload.get("companyId")
     email      = payload.get("email", f"client{client_id}@posgmo.mx")
@@ -242,6 +247,64 @@ async def create_connected_account(payload: dict):
         # Account exists — refresh status from Stripe
         print(f"[stripe][create_connected_account] retrieving existing Stripe account acct_id={acct_id}")
         acct = stripe.Account.retrieve(acct_id, expand=["external_accounts"])
+
+        # Accounts created before the native-onboarding switch are Express.
+        # Stripe only lets a platform set business_type / individual /
+        # tos_acceptance on **Custom** accounts — on Express it collects those
+        # through its own hosted flow — so submit_connected_account_kyc against
+        # one fails with:
+        #   oauth_not_supported: This application does not have the required
+        #   permissions for the parameters 'business_type', 'individual',
+        #   'tos_acceptance' on account 'acct_...'
+        # and the client can never finish onboarding in the app. Stripe cannot
+        # convert an account's type, so the only remedy is a fresh account.
+        # Without this check the stale id is reused forever and every KYC
+        # submission 400s with an error that says nothing about the real cause.
+        acct_type = getattr(acct, "type", None)
+        if acct_type != "custom":
+            _stale_submitted = getattr(acct, "details_submitted", False)
+            _stale_has_ext, _, _, _ = _external_account_info(acct)
+            if _stale_submitted or _stale_has_ext:
+                # The old account carries real onboarding data or a bank
+                # account. Replacing it here would silently strand that, so
+                # report it and let it be handled deliberately.
+                print(
+                    "[stripe][create_connected_account] REFUSING to replace non-custom account "
+                    f"acct_id={acct_id} type={acct_type} — it has onboarding data "
+                    f"(details_submitted={_stale_submitted} hasExternalAccount={_stale_has_ext}). "
+                    "Native KYC cannot work against it; migrate this client manually."
+                )
+                return JSONResponse({
+                    "error": (
+                        f"Connected account {acct_id} is a '{acct_type}' account with existing "
+                        "onboarding data. Native KYC requires a Custom account and Stripe cannot "
+                        "convert account types; this client needs manual migration."
+                    )
+                }, status_code=409)
+
+            print(
+                f"[stripe][create_connected_account] stale non-custom account acct_id={acct_id} "
+                f"type={acct_type} with no onboarding data — replacing with a new custom account"
+            )
+            acct = stripe.Account.create(
+                type="custom",
+                country="MX",
+                email=email,
+                capabilities={
+                    "transfers": {"requested": True},
+                },
+                business_type="individual",
+                metadata={
+                    "clientId": str(client_id),
+                    "companyId": str(company_id),
+                    "replaces": acct_id,
+                },
+            )
+            acct_id = acct["id"]
+            print(
+                f"[stripe][create_connected_account] replacement custom account created acct_id={acct_id}"
+            )
+
         _charges   = getattr(acct, "charges_enabled", False)
         _payouts   = getattr(acct, "payouts_enabled", False)
         _submitted = getattr(acct, "details_submitted", False)
@@ -443,6 +506,25 @@ async def submit_connected_account_kyc(payload: dict):
         acct = stripe.Account.retrieve(acct_id, expand=["external_accounts"])
         return JSONResponse({"account": _persist_and_serialize(acct, client_id, company_id)}, status_code=200)
     except stripe.StripeError as e:
+        # oauth_not_supported here means the account is not Custom (almost
+        # always an Express account created before the native-onboarding
+        # switch). Stripe's own message names the rejected parameters but not
+        # the cause, which sent a real debugging session looking at
+        # permissions and API keys instead of the account type. See the
+        # replacement logic in create_connected_account.
+        if getattr(e, "code", None) == "oauth_not_supported":
+            print(
+                f"[stripe][submit_kyc] acct_id={acct_id} rejected platform-set KYC fields — this "
+                "is not a Custom account, so Stripe will not let the platform set "
+                "business_type/individual/tos_acceptance. Call /stripe/connected-accounts first "
+                "to have it replaced with a Custom account."
+            )
+            return JSONResponse({
+                "error": (
+                    f"Connected account {acct_id} is not a Custom account, so native KYC cannot be "
+                    "submitted against it. Re-run account creation to provision a Custom account."
+                )
+            }, status_code=409)
         print(f"[stripe][submit_kyc] Stripe error acct_id={acct_id} error={e}")
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
