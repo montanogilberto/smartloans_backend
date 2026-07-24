@@ -206,6 +206,149 @@ def _score_label(score: int) -> str:
     return "Muy bajo"
 
 
+# ── Available credit (the peso limit shown as "Crédito disponible") ───────────
+#
+# DELIBERATELY DETERMINISTIC — no LLM. A credit limit is a regulated, auditable
+# number: it must be reproducible and explainable, not model output. The score
+# above already folds in the KYC/document signals (isVerified / pagaré /
+# contract bonuses) and the full loan history; this only converts that score
+# into a peso limit and applies the first-time promotion.
+#
+# All amounts in MXN. These are POLICY, not code — tune freely:
+PROMO_FIRST_TIME_MXN   = 3000     # starter limit for a verified client with no
+                                  # loan history yet ("promoción primera vez")
+COMPANY_MAX_CREDIT_MXN = 50000    # hard ceiling regardless of score
+CREDIT_ROUNDING_MXN    = 100      # round limits to friendly increments
+
+# Proof of income — a credit limit must be capped by ABILITY TO REPAY, not just
+# willingness (score). The limit can never exceed a multiple of verified monthly
+# income, and without verified income the client is held to a low ceiling
+# because repayment capacity is unproven.
+INCOME_CREDIT_MULTIPLIER = 3      # limit ≤ 3× verified monthly income (DTI proxy)
+NO_INCOME_MAX_MXN        = PROMO_FIRST_TIME_MXN  # cap when income is unverified
+
+# Buró de Crédito — Mexico's real credit bureau. When a bureau pull is present
+# it reflects the applicant's NATIONAL credit history (every lender), which is
+# far more meaningful than our in-platform score, so it takes over as the
+# scoring input and a serious bureau delinquency is a hard decline.
+BURO_MIN_SCORE = 550              # below this on the bureau → decline
+
+# Score (300–850) → base limit. First threshold met wins.
+SCORE_LIMIT_TIERS = [
+    (740, 20000, "TIER_A"),   # Excelente
+    (670, 10000, "TIER_B"),   # Bueno
+    (580,  5000, "TIER_C"),   # Regular
+    (0,       0, "TIER_D"),   # Bajo → no credit offered
+]
+
+
+def _limit_from_score(score: int) -> tuple[int, str]:
+    for threshold, limit, tier in SCORE_LIMIT_TIERS:
+        if score >= threshold:
+            return limit, tier
+    return 0, "TIER_D"
+
+
+def _compute_available_credit(score: int, data: dict) -> tuple[int, dict]:
+    """Pure function: (score, aggregated data) -> (availableCredit_MXN, breakdown).
+
+    Unit-testable, no DB, no LLM. `data` is the same aggregated dict
+    _compute_score consumes, so this needs no extra inputs. Policy lives in the
+    module constants above.
+    """
+    is_verified       = bool(data.get("isVerified"))
+    contract_accepted = bool(data.get("contractAccepted"))
+    outstanding       = float(data.get("outstandingBalance", 0) or 0)
+
+    # Proof of income (from an uploaded/verified comprobante — see the SP that
+    # feeds this dict). income_verified gates the larger limits.
+    monthly_income    = float(data.get("monthlyIncome", 0) or 0)
+    income_verified   = bool(data.get("incomeVerified"))
+
+    # Buró de Crédito pull (optional — present only once the bureau integration
+    # has run for this client with their consent). buro_score is on the same
+    # 300–850 scale; buro_delinquent flags a serious past-due/default on file.
+    buro_score        = data.get("buroScore")
+    buro_delinquent   = bool(data.get("buroDelinquent"))
+    has_buro          = buro_score is not None
+    buro_score        = int(buro_score) if has_buro else None
+
+    # A borrower "has history" if they've ever had a loan or made a payment.
+    has_history = (
+        int(data.get("totalPayments", 0)) > 0
+        or int(data.get("paidLoans", 0)) > 0
+        or int(data.get("activeLoans", 0)) > 0
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    def result(available: int, tier: str, reason: str, *, eligible: bool = True) -> tuple[int, dict]:
+        return available, {
+            "availableCredit": available,
+            "tier": tier,
+            "kycEligible": eligible,
+            "isFirstTime": not has_history,
+            "incomeVerified": income_verified,
+            "monthlyIncome": monthly_income,
+            "buroScore": buro_score,
+            "buroDelinquent": buro_delinquent,
+            "internalScore": score,
+            "outstandingBalance": outstanding,
+            "companyMax": COMPANY_MAX_CREDIT_MXN,
+            "reason": reason,
+            "score": buro_score if has_buro else score,
+            "computedAt": now,
+        }
+
+    # 1. KYC gate — no verified identity + accepted contract, no credit at all.
+    if not (is_verified and contract_accepted):
+        return result(0, "INELIGIBLE",
+                      "KYC incompleto: se requiere verificación biométrica y contrato aceptado.",
+                      eligible=False)
+
+    # 2. Buró de Crédito hard gate — a serious bureau delinquency, or a bureau
+    #    score below the floor, is an automatic decline no matter how good the
+    #    in-platform behaviour looks.
+    if has_buro and (buro_delinquent or buro_score < BURO_MIN_SCORE):
+        why = "morosidad reportada en Buró de Crédito" if buro_delinquent \
+              else f"score de Buró {buro_score} por debajo del mínimo {BURO_MIN_SCORE}"
+        return result(0, "BURO_DECLINED", f"Rechazado por {why}.")
+
+    # 3. Choose the scoring input: the real bureau score dominates the tiny
+    #    in-platform score when a pull exists.
+    effective_score = buro_score if has_buro else score
+    score_source = "Buró de Crédito" if has_buro else "score interno"
+
+    # 4. First-time promotion vs. score-based tier.
+    if not has_history and not has_buro:
+        base, tier = PROMO_FIRST_TIME_MXN, "PROMO_FIRST_TIME"
+        reason = "Promoción primera vez: verificación completa, sin historial aún."
+    else:
+        base, tier = _limit_from_score(effective_score)
+        reason = f"Límite por {score_source} {effective_score} ({tier})."
+
+    # 5. Ability-to-repay cap — never lend more than a multiple of verified
+    #    income; without a verified income, hold to the low ceiling.
+    if income_verified and monthly_income > 0:
+        income_cap = int(monthly_income * INCOME_CREDIT_MULTIPLIER)
+        if income_cap < base:
+            base = income_cap
+            tier = f"{tier}_INCOME_CAPPED"
+            reason += f" Limitado por ingreso verificado (×{INCOME_CREDIT_MULTIPLIER})."
+    else:
+        if base > NO_INCOME_MAX_MXN:
+            base = NO_INCOME_MAX_MXN
+            tier = f"{tier}_NO_INCOME"
+            reason += " Sin comprobante de ingresos verificado — límite reducido."
+
+    # 6. Subtract what's already outstanding, clamp to the ceiling, round.
+    available = base - outstanding
+    available = max(0, min(COMPANY_MAX_CREDIT_MXN, available))
+    available = int(available // CREDIT_ROUNDING_MXN * CREDIT_ROUNDING_MXN)
+
+    return result(available, tier, reason)
+
+
 # ── Public handlers ──────────────────────────────────────────────────────────
 
 async def compute_credit_score(payload: dict):
@@ -223,6 +366,35 @@ async def compute_credit_score(payload: dict):
     score, breakdown = _compute_score(data)
     _save_score(int(client_id), int(company_id), score, breakdown)
     return JSONResponse({"creditScore": breakdown}, status_code=200)
+
+
+async def compute_available_credit(payload: dict):
+    """
+    POST /credit-score/available-credit
+    Computes the client's available credit limit (MXN) — the "Crédito
+    disponible" shown on the dashboard — from their credit score + KYC signals
+    + loan history. Deterministic; policy lives in the module constants.
+
+    Returns { availableCredit, breakdown }. NOTE: persisting the amount onto
+    clientDashboards.availableCredit is a DB write and must go through the
+    posgmo-factory pipeline (sp_clientDashboards) — this handler computes and
+    returns it so the dashboard can display it immediately, and so the value is
+    always freshly derived rather than trusting a possibly-stale stored number.
+    """
+    client_id  = payload.get("clientId")
+    company_id = payload.get("companyId")
+    if not client_id or not company_id:
+        return JSONResponse({"error": "clientId and companyId required"}, status_code=400)
+
+    data = _fetch_score_data(int(client_id), int(company_id))
+    score, _ = _compute_score(data)
+    available, breakdown = _compute_available_credit(score, data)
+    print(
+        f"[creditScore] available-credit clientId={client_id} companyId={company_id} "
+        f"score={score} tier={breakdown['tier']} kycEligible={breakdown['kycEligible']} "
+        f"firstTime={breakdown['isFirstTime']} available={available}"
+    )
+    return JSONResponse({"availableCredit": available, "breakdown": breakdown}, status_code=200)
 
 
 async def get_credit_score(payload: dict):
