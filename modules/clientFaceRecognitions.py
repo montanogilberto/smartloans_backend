@@ -112,6 +112,45 @@ def _upload_base64_to_blob(b64_data: str, blob_path: str, content_type: str, met
     return _upload_to_blob(base64.b64decode(b64_data), blob_path, content_type, metadata)
 
 
+# Asset folders under a client's prefix. Kept as constants so a typo can't
+# quietly scatter a client's files across two spellings of the same folder.
+FACE_POSES = ("front", "up", "down", "left", "right")
+# Sides accepted by the image upload endpoint. 'front'/'back' are the document
+# scans; 'selfie' is the final capture; 'selfie_<pose>' are the five liveness
+# positions.
+_VALID_UPLOAD_SIDES = {"front", "back", "selfie"} | {f"selfie_{p}" for p in FACE_POSES}
+
+BLOB_FOLDER_IDS        = "ids"
+BLOB_FOLDER_SELFIES    = "selfies"
+BLOB_FOLDER_PRESENCE   = "presence"
+BLOB_FOLDER_CONTRACTS  = "contracts"
+BLOB_FOLDER_PAGARES    = "pagares"
+BLOB_FOLDER_SIGNATURES = "signatures"
+
+
+def client_blob_path(client_id, folder: str, filename: str) -> str:
+    """Build a blob path grouped by client:  {clientId}/{folder}/{filename}
+
+    The container is already named 'clients', so the path does NOT repeat it —
+    the resulting URL is  .../clients/2116/ids/front_20260723_ab12cd34.jpg
+
+    This replaces a date-partitioned layout ('clients/2026/07/front_2116_...'),
+    which had two problems. Everything for one client was scattered across a
+    folder per month, so answering "show me this client's expediente" meant
+    walking every month they were ever active. Worse, contracts, pagarés and
+    signatures carried NO client id at all — 'contract_20260723232906_60a02250.pdf'
+    could only be attributed to a client by looking up its URL in SQL, which
+    makes the blob store useless on its own for audit or export.
+
+    NOTE: existing blobs are NOT moved. Their full URLs are already stored in
+    ClientFaceRecognitions, so old records keep resolving exactly as before;
+    only new uploads land in this layout. Anything that walks the container
+    expecting one scheme has to tolerate both.
+    """
+    safe_client = str(client_id or "unknown").strip() or "unknown"
+    return f"{safe_client}/{folder}/{filename}"
+
+
 async def upload_id_image_connector(payload: dict) -> JSONResponse:
     """
     Uploads a single ID/selfie image to Azure Blob Storage on its own, decoupled
@@ -125,16 +164,25 @@ async def upload_id_image_connector(payload: dict) -> JSONResponse:
         side       = payload.get("side", "")
         image_b64  = payload.get("imageBase64", "")
 
-        if side not in ("front", "back", "selfie"):
-            return JSONResponse(content={"error": "side must be 'front', 'back', or 'selfie'"}, status_code=400)
+        # 'selfie_<pose>' are the five head positions captured during the
+        # liveness challenge (front/up/down/left/right). They are stored
+        # alongside the main selfie because they are all biometric captures of
+        # the person, not document scans.
+        if side not in _VALID_UPLOAD_SIDES:
+            return JSONResponse(
+                content={"error": f"side must be one of: {', '.join(sorted(_VALID_UPLOAD_SIDES))}"},
+                status_code=400,
+            )
         if not image_b64:
             return JSONResponse(content={"error": "imageBase64 is required"}, status_code=400)
 
         now = datetime.utcnow()
         ts  = now.strftime("%Y%m%d%H%M%S")
         uid = str(uuid.uuid4())[:8]
-        blob_path = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + \
-            "/" + side + "_" + str(client_id) + "_" + ts + "_" + uid + ".jpg"
+        # Selfies live apart from the ID captures: the selfie is biometric
+        # evidence of the person, the front/back scans are the document.
+        folder = BLOB_FOLDER_IDS if side in ("front", "back") else BLOB_FOLDER_SELFIES
+        blob_path = client_blob_path(client_id, folder, f"{side}_{ts}_{uid}.jpg")
 
         blob_url = _upload_base64_to_blob(
             image_b64, blob_path, "image/jpeg",
@@ -169,8 +217,7 @@ async def upload_presence_capture_connector(payload: dict) -> JSONResponse:
         now = datetime.utcnow()
         ts  = now.strftime("%Y%m%d%H%M%S")
         uid = str(uuid.uuid4())[:8]
-        blob_path = "clients/presence/" + str(now.year) + "/" + str(now.month).zfill(2) + \
-            "/presence_" + str(client_id) + "_" + ts + "_" + uid + ".mp4"
+        blob_path = client_blob_path(client_id, BLOB_FOLDER_PRESENCE, f"presence_{ts}_{uid}.mp4")
 
         blob_url = _upload_base64_to_blob(
             video_b64, blob_path, "video/mp4",
@@ -196,25 +243,30 @@ async def contract_clientFaceRecognition_connector(payload: dict) -> JSONRespons
     try:
         now = datetime.utcnow()
         ts  = now.strftime("%Y%m%d%H%M%S")
+        # These four assets previously had no client id anywhere in their path
+        # or metadata, so a file in blob storage could not be traced back to a
+        # person without a SQL lookup. Both now carry it.
+        client_id  = payload.get("clientId", "0")
+        company_id = str(payload.get("companyId", "0"))
 
         contract_url = payload.get("contractPdfBlobUrl", "")
         contract_b64 = payload.get("contractPdfBase64", "")
         if contract_b64 and not contract_url:
             uid = str(uuid.uuid4())[:8]
-            blob_path = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + "/contract_" + ts + "_" + uid + ".pdf"
+            blob_path = client_blob_path(client_id, BLOB_FOLDER_CONTRACTS, f"contract_{ts}_{uid}.pdf")
             contract_url = _upload_base64_to_blob(
                 contract_b64, blob_path, "application/pdf",
-                {"companyId": str(payload.get("companyId", "0")), "type": "contract"},
+                {"companyId": company_id, "clientId": str(client_id), "type": "contract"},
             )
 
         pagare_url = payload.get("pagarePdfBlobUrl", "")
         pagare_b64 = payload.get("pagarePdfBase64", "")
         if pagare_b64 and not pagare_url:
             uid = str(uuid.uuid4())[:8]
-            blob_path = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + "/pagare_" + ts + "_" + uid + ".pdf"
+            blob_path = client_blob_path(client_id, BLOB_FOLDER_PAGARES, f"pagare_{ts}_{uid}.pdf")
             pagare_url = _upload_base64_to_blob(
                 pagare_b64, blob_path, "application/pdf",
-                {"companyId": str(payload.get("companyId", "0")), "type": "pagare"},
+                {"companyId": company_id, "clientId": str(client_id), "type": "pagare"},
             )
 
         # Signature match: crop from the front ID photo (client-side, only
@@ -228,20 +280,20 @@ async def contract_clientFaceRecognition_connector(payload: dict) -> JSONRespons
         id_signature_b64 = payload.get("idSignatureCropBase64", "")
         if id_signature_b64 and not id_signature_url:
             uid = str(uuid.uuid4())[:8]
-            blob_path = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + "/id_signature_" + ts + "_" + uid + ".png"
+            blob_path = client_blob_path(client_id, BLOB_FOLDER_SIGNATURES, f"id_signature_{ts}_{uid}.png")
             id_signature_url = _upload_base64_to_blob(
                 id_signature_b64, blob_path, "image/png",
-                {"companyId": str(payload.get("companyId", "0")), "type": "id_signature_crop"},
+                {"companyId": company_id, "clientId": str(client_id), "type": "id_signature_crop"},
             )
 
         contract_signature_url = payload.get("contractSignatureBlobUrl", "")
         contract_signature_b64 = payload.get("contractSignatureBase64", "")
         if contract_signature_b64 and not contract_signature_url:
             uid = str(uuid.uuid4())[:8]
-            blob_path = "clients/" + str(now.year) + "/" + str(now.month).zfill(2) + "/contract_signature_" + ts + "_" + uid + ".png"
+            blob_path = client_blob_path(client_id, BLOB_FOLDER_SIGNATURES, f"contract_signature_{ts}_{uid}.png")
             contract_signature_url = _upload_base64_to_blob(
                 contract_signature_b64, blob_path, "image/png",
-                {"companyId": str(payload.get("companyId", "0")), "type": "contract_signature"},
+                {"companyId": company_id, "clientId": str(client_id), "type": "contract_signature"},
             )
 
         match_result = None
