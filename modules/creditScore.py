@@ -29,7 +29,6 @@ from fastapi.responses import JSONResponse
 from databases import connection
 from datetime import datetime, timezone
 import json
-import math
 
 
 def _conn():
@@ -153,17 +152,22 @@ def _compute_score(data: dict) -> tuple[int, dict]:
     mix_score -= followup_default * 20          # heavy penalty per default flag
     mix_score = max(0, min(85, mix_score))
 
-    # ── Sum & bonus ───────────────────────────────────────────────────────
+    # ── Sum, scale & bonus ─────────────────────────────────────────────────
+    # Component points sum to at most BASE_MAX; scale that 0..BASE_MAX band
+    # LINEARLY into the 300..850 FICO-style range, THEN add the KYC bonuses on
+    # top. Previously we added a flat +300 offset, which let any base > 550 peg
+    # at 850 and scored a brand-new borrower "Muy bueno" (712). Scaling keeps the
+    # top end meaningful: a clean no-history user lands ~"Bajo"/"Regular", and
+    # the bonuses (+50 max) are a real, bounded nudge rather than noise.
+    BASE_MAX = 297 + 255 + 127 + 85 + 85  # 849 — must match the component maxes
     base = payment_score + utilization_score + history_score + new_credit_score + mix_score
 
     biometric_bonus  = 25 if data.get("isVerified")        else 0
     pagare_bonus     = 15 if data.get("pagareAccepted")    else 0
     contract_bonus   = 10 if data.get("contractAccepted")  else 0
 
-    raw_score = base + biometric_bonus + pagare_bonus + contract_bonus
-
-    # Clamp to 300–850 range
-    score = max(300, min(850, raw_score + 300))
+    scaled = 300 + int(round(base / BASE_MAX * 550))
+    score  = max(300, min(850, scaled + biometric_bonus + pagare_bonus + contract_bonus))
 
     breakdown = {
         "score": score,
@@ -231,7 +235,10 @@ NO_INCOME_MAX_MXN        = PROMO_FIRST_TIME_MXN  # cap when income is unverified
 # it reflects the applicant's NATIONAL credit history (every lender), which is
 # far more meaningful than our in-platform score, so it takes over as the
 # scoring input and a serious bureau delinquency is a hard decline.
-BURO_MIN_SCORE = 550              # below this on the bureau → decline
+BURO_MIN_SCORE = 580              # below this on the bureau → decline.
+                                  # Aligned with the lowest money-granting tier
+                                  # (TIER_C @ 580) so there is no "approved but
+                                  # $0" dead zone: clear the gate ⇒ get a limit.
 
 # Score (300–850) → base limit. First threshold met wins.
 SCORE_LIMIT_TIERS = [
