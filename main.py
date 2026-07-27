@@ -5,6 +5,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 load_dotenv()
 
+from observability import ObservabilityMiddleware, writer
+
 # Routers
 from routes_ import (
     login, utils, swagger, users, symptoms, scannertext, products, checks,
@@ -78,6 +80,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Observability layer — traces every request (correlationId), auto-emits an
+# applicationLog, and lets business code log workflow/audit/integration events.
+# Added after CORS so it sits outermost and captures the full request lifecycle.
+app.add_middleware(ObservabilityMiddleware)
 
 # --------------------------------------------------
 # Routers
@@ -214,6 +221,8 @@ async def _run_daily_registration_reminders():
 
 @app.on_event("startup")
 async def start_scheduler():
+    # Start the observability background log writer (async best-effort path).
+    writer.start()
     # 07:00 UTC ≈ early morning in Mexico (UTC-6/-5) — off-peak for billing.
     scheduler.add_job(_run_daily_charge_due, "cron", hour=7, minute=0, id="daily_charge_due")
     # 15:00 UTC ≈ mid-morning in Mexico — a time a client is likely to see
@@ -221,6 +230,12 @@ async def start_scheduler():
     scheduler.add_job(_run_daily_onboarding_reminders, "cron", hour=15, minute=0, id="daily_onboarding_reminders")
     scheduler.add_job(_run_daily_registration_reminders, "cron", hour=16, minute=0, id="daily_registration_reminders")
     scheduler.start()
+
+
+@app.on_event("shutdown")
+async def stop_observability_writer():
+    # Flush any queued logs before the process exits.
+    writer.flush_and_stop()
 
 # --------------------------------------------------
 # Local development only
