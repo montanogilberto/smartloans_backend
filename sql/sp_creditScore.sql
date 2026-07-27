@@ -120,10 +120,20 @@ BEGIN
             WHERE clientId = @clientId AND companyId = @companyId AND riskStatus = 'default'
         )
 
-        -- Biometric & legal flags
-        DECLARE @isVerified      BIT = (SELECT TOP 1 isVerified      FROM [dbo].[clientFaceRecognitions] WHERE clientId = @clientId AND companyId = @companyId ORDER BY createdAt DESC)
-        DECLARE @pagareAccepted  BIT = (SELECT TOP 1 pagareAccepted  FROM [dbo].[clientFaceRecognitions] WHERE clientId = @clientId AND companyId = @companyId ORDER BY createdAt DESC)
-        DECLARE @contractAccepted BIT= (SELECT TOP 1 contractAccepted FROM [dbo].[clientFaceRecognitions] WHERE clientId = @clientId AND companyId = @companyId ORDER BY createdAt DESC)
+        -- Biometric & legal flags — read all three from the newest VERIFIED
+        -- expediente, so a newer unfinished re-KYC row can't shadow it.
+        -- NOTE: ClientFaceRecognitions columns are snake_case (is_verified /
+        -- pagare_accepted / contract_accepted / created_At); the camelCase names
+        -- are only JSON OUTPUT aliases the Python engine reads.
+        DECLARE @faceId INT = (
+            SELECT TOP 1 clientFaceRecognitionId
+            FROM   [dbo].[ClientFaceRecognitions]
+            WHERE  clientId = @clientId AND companyId = @companyId AND is_verified = 1
+            ORDER BY created_At DESC
+        );
+        DECLARE @isVerified       BIT = CASE WHEN @faceId IS NULL THEN 0 ELSE 1 END;
+        DECLARE @pagareAccepted   BIT = ISNULL((SELECT pagare_accepted   FROM [dbo].[ClientFaceRecognitions] WHERE clientFaceRecognitionId = @faceId), 0);
+        DECLARE @contractAccepted BIT = ISNULL((SELECT contract_accepted FROM [dbo].[ClientFaceRecognitions] WHERE clientFaceRecognitionId = @faceId), 0);
 
         SELECT (SELECT
             @totalPayments      AS totalPayments,

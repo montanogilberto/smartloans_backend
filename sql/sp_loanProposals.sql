@@ -1,25 +1,72 @@
 -- ============================================================
 -- sp_loanProposals  (action 1=create, 2=update, 3=delete)
 -- ============================================================
--- Required table:
--- CREATE TABLE [dbo].[loanProposals] (
---   proposalId      INT IDENTITY PRIMARY KEY,
---   companyId       INT NOT NULL,
---   lenderId        INT NOT NULL,
---   borrowerId      INT NOT NULL,
---   requestedAmount DECIMAL(18,2) NOT NULL,
---   proposedRate    DECIMAL(5,2) NOT NULL,
---   termMonths      INT NOT NULL,
---   status          NVARCHAR(20) NOT NULL DEFAULT 'pending',
---                   -- pending | accepted | rejected | expired | cancelled
---   lenderNote      NVARCHAR(500) NULL,
---   borrowerNote    NVARCHAR(500) NULL,
---   pushNotificationId INT NULL,
---   respondedAt     DATETIME2 NULL,
---   expiresAt       DATETIME2 NULL,
---   created_At      DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
---   updated_at      DATETIME2 NULL,
--- )
+
+-- ── Table: loanProposals_status (lookup / catalog) ──────────
+-- Created BEFORE loanProposals so the FK below can reference it.
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'loanProposals_status')
+CREATE TABLE [dbo].[loanProposals_status] (
+    statusCode   NVARCHAR(20)   NOT NULL PRIMARY KEY,
+    sortOrder    INT            NOT NULL,
+    description  NVARCHAR(100)  NULL,
+    isTerminal   BIT            NOT NULL DEFAULT 0   -- 1 = no further transitions
+)
+GO
+
+-- Seed the catalog values (idempotent)
+MERGE [dbo].[loanProposals_status] AS t
+USING (VALUES
+    ('pending',   1, 'Awaiting the counterparty response', 0),
+    ('accepted',  2, 'Proposal accepted, loan proceeds',   1),
+    ('rejected',  3, 'Proposal declined',                  1),
+    ('expired',   4, 'Lapsed past expiresAt',              1),
+    ('cancelled', 5, 'Withdrawn by the initiator',         1)
+) AS s (statusCode, sortOrder, description, isTerminal)
+ON t.statusCode = s.statusCode
+WHEN NOT MATCHED THEN
+    INSERT (statusCode, sortOrder, description, isTerminal)
+    VALUES (s.statusCode, s.sortOrder, s.description, s.isTerminal);
+GO
+
+-- ── Table: loanProposals ────────────────────────────────────
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'loanProposals')
+CREATE TABLE [dbo].[loanProposals] (
+    proposalId          INT IDENTITY PRIMARY KEY,
+    companyId           INT            NOT NULL,
+    lenderId            INT            NOT NULL,
+    borrowerId          INT            NOT NULL,
+    requestedAmount     DECIMAL(18,2)  NOT NULL,
+    proposedRate        DECIMAL(5,2)   NOT NULL,
+    termMonths          INT            NOT NULL,
+    status              NVARCHAR(20)   NOT NULL DEFAULT 'pending',
+                        -- pending | accepted | rejected | expired | cancelled
+    lenderNote          NVARCHAR(500)  NULL,
+    borrowerNote        NVARCHAR(500)  NULL,
+    pushNotificationId  INT            NULL,
+    respondedAt         DATETIME2      NULL,
+    expiresAt           DATETIME2      NULL,
+    created_At          DATETIME2      NOT NULL DEFAULT GETUTCDATE(),
+    updated_at          DATETIME2      NULL
+)
+GO
+
+-- Indexes matching the read patterns in sp_loanProposals_all / sp_creditScore_data
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_loanProposals_company_lender')
+    CREATE INDEX IX_loanProposals_company_lender
+        ON [dbo].[loanProposals] (companyId, lenderId, status) INCLUDE (created_At);
+GO
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_loanProposals_company_borrower')
+    CREATE INDEX IX_loanProposals_company_borrower
+        ON [dbo].[loanProposals] (companyId, borrowerId, created_At);
+GO
+
+-- ── Relationship: loanProposals.status → loanProposals_status.statusCode
+IF NOT EXISTS (SELECT * FROM sys.foreign_keys WHERE name = 'FK_loanProposals_status')
+    ALTER TABLE [dbo].[loanProposals]
+        ADD CONSTRAINT FK_loanProposals_status
+        FOREIGN KEY (status) REFERENCES [dbo].[loanProposals_status] (statusCode);
+GO
+
 -- ============================================================
 IF OBJECT_ID('dbo.sp_loanProposals', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_loanProposals;
 GO
