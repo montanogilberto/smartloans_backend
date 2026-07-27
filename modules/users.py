@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from databases import connection
+from observability import workflow_step, log_workflow_step, timed_integration, log_audit
 import json
 import smtplib
 import ssl
@@ -70,10 +71,70 @@ def _users_sp_raw(json_file: dict) -> dict:
             pass
 
 
+def _fetch_user_snapshot(user_id) -> dict:
+    """Best-effort current field values for a user, for the audit before-image.
+    Returns {} on any failure — auditing must never break the update itself."""
+    try:
+        resp = one_users_sp({"users": [{"user_id": user_id}]})
+        data = json.loads(resp.body)
+        if isinstance(data, dict):
+            arr = data.get("users") or data.get("Users")
+            if isinstance(arr, list) and arr:
+                return arr[0]
+            return data
+        if isinstance(data, list) and data:
+            return data[0]
+    except Exception:
+        pass
+    return {}
+
+
+# Human-meaningful fields whose changes are worth an audit trail.
+_AUDITED_USER_FIELDS = ("cellphone", "email", "name")
+
+
 def users_sp(json_file: dict):
     try:
+        try:
+            payload = (json_file.get("users") or [{}])[0]
+            action = int(payload.get("action", 0))
+        except (TypeError, ValueError, IndexError):
+            payload, action = {}, 0
+
+        # Audit before-image: snapshot current values before an update.
+        before = _fetch_user_snapshot(payload.get("user_id")) if action == 2 else {}
+
         result = _users_sp_raw(json_file)
-        if result.get("error") and result["error"] not in (None, "", "0"):
+        error = result.get("error")
+        failed = error not in (None, "", "0")
+
+        if action == 1:
+            # Registration milestone: account creation. Redaction strips the
+            # password from the request body before it is stored.
+            log_workflow_step(
+                "User Created",
+                workflow_name="client_registration",
+                entity="users",
+                entity_id=int(result["userId"]) if str(result.get("userId") or "").isdigit() else None,
+                status="FAILED" if failed else "SUCCESS",
+                message=result.get("msg"),
+                request=json_file,
+            )
+        elif action == 2 and not failed:
+            # Audit: who changed which field, old → new (durable path).
+            uid = payload.get("user_id")
+            for field in _AUDITED_USER_FIELDS:
+                if field in payload and payload[field] not in (None, ""):
+                    new_val = payload[field]
+                    old_val = before.get(field)
+                    if str(old_val) != str(new_val):
+                        log_audit(
+                            "users",
+                            int(uid) if str(uid or "").isdigit() else None,
+                            field, old_val, new_val, action="UPDATE",
+                        )
+
+        if failed:
             return JSONResponse(content=result, status_code=500)
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
@@ -162,14 +223,19 @@ def send_verification_code(json_file: dict):
         _verification_codes[target] = {"code": code, "expires": expires}
         logger.info("[send_verification_code] method=%s target=%s code=%s", method, target, code)
 
-        if method == "email":
-            _send_email_otp(target, code)
-        elif method == "sms":
-            _send_sms_otp(target, code, via_whatsapp=False)
-        elif method == "whatsapp":
-            _send_sms_otp(target, code, via_whatsapp=True)
-        else:
+        if method not in ("email", "sms", "whatsapp"):
             return JSONResponse(content={"error": f"Unknown method: {method}"}, status_code=400)
+
+        # Registration milestone + external-service trace. The OTP code and the
+        # target (email/phone) are deliberately not passed into the log body.
+        service = "email" if method == "email" else "sms"
+        with workflow_step("Verification Sent", workflow_name="client_registration", action=method):
+            with timed_integration(service, f"send_otp_{method}") as span:
+                if method == "email":
+                    _send_email_otp(target, code)
+                else:
+                    _send_sms_otp(target, code, via_whatsapp=(method == "whatsapp"))
+                span.http_status = 200
 
         logger.info("[send_verification_code] sent via %s to %s", method, target)
         return JSONResponse(content={"message": "Código enviado", "method": method}, status_code=200)
@@ -204,6 +270,11 @@ def verify_code(json_file: dict):
 
         _verification_codes.pop(target, None)
         logger.info("[verify_code] verified OK for %s", target)
+        # Registration milestone: OTP verified (target/code not logged).
+        log_workflow_step(
+            "OTP Verified", workflow_name="client_registration", entity="users",
+            entity_id=int(user_id) if str(user_id or "").isdigit() else None,
+        )
 
         if user_id:
             try:

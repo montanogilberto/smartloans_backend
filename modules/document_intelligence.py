@@ -26,6 +26,8 @@ import re
 import asyncio
 import httpx
 
+from observability import workflow_step, timed_integration
+
 AZURE_DOC_INTEL_ENDPOINT = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", "").rstrip("/")
 AZURE_DOC_INTEL_KEY = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_KEY", "")
 
@@ -271,7 +273,12 @@ async def extract_id_text_and_fields(payload: dict) -> dict:
     if not image_base64:
         raise ValueError("imageBase64 is required")
 
-    analyze_result = await _analyze_document(image_base64)
+    # Registration milestone + external-service trace. The base64 image is NOT
+    # passed into the log body (redaction would drop it anyway).
+    with workflow_step("OCR Executed", workflow_name="client_registration", entity="clientFaceRecognitions"):
+        with timed_integration("document_intelligence", "analyze") as span:
+            analyze_result = await _analyze_document(image_base64)
+            span.http_status = 200
     raw_text = analyze_result.get("content", "")
 
     mrz_fields = parse_mrz(raw_text)

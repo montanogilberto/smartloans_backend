@@ -17,6 +17,7 @@ DECLARE @email            VARCHAR(100)
        ,@appProfile       VARCHAR(20)
        ,@enabledModules   NVARCHAR(MAX)
        ,@identityVerified BIT
+       ,@imageUrl         NVARCHAR(500)
        ,@Error            VARCHAR(500) = ''
 
 DECLARE @Outputmessage VARCHAR(MAX) = '{
@@ -98,8 +99,17 @@ BEGIN
             -- contact could never resume partway. See sp_checkContact v5.
             @appProfile       = NULLIF(JSON_VALUE(value, '$.appProfile'), ''),
             @enabledModules   = JSON_QUERY(value, '$.enabledModules'),
-            @identityVerified = TRY_CONVERT(BIT, JSON_VALUE(value, '$.identityVerified'))
+            @identityVerified = TRY_CONVERT(BIT, JSON_VALUE(value, '$.identityVerified')),
+            -- Profile avatar (e.g. the verified 'front' liveness capture). Written
+            -- to dbo.users.imageUrl, which /one_users reads back as the avatar.
+            @imageUrl         = NULLIF(JSON_VALUE(value, '$.imageUrl'), '')
         FROM OPENJSON(@pjsonfile, '$.users')
+
+        -- Allow the caller to target the row by clientId when it doesn't hold a
+        -- user_id (agent-assisted KYC only knows the client). Resolves to the
+        -- login linked to that client so avatar updates work in both flows.
+        IF (@user_id IS NULL OR @user_id = 0) AND @clientId IS NOT NULL
+            SET @user_id = (SELECT TOP 1 [userId] FROM dbo.users WHERE clientId = @clientId ORDER BY [userId])
 
         BEGIN TRAN
             -- clientId mirrors the INSERT path: link/re-link this login to a
@@ -115,6 +125,7 @@ BEGIN
                 appProfile       = ISNULL(@appProfile,     appProfile),
                 enabledModules   = ISNULL(@enabledModules, enabledModules),
                 identityVerified = CASE WHEN @identityVerified = 1 THEN 1 ELSE identityVerified END,
+                imageUrl         = ISNULL(@imageUrl, imageUrl),
                 [name]    = ISNULL(NULLIF(JSON_VALUE((SELECT value FROM OPENJSON(@pjsonfile,'$.users')), '$.name'), ''), [name]),
                 [password]= ISNULL(NULLIF(JSON_VALUE((SELECT value FROM OPENJSON(@pjsonfile,'$.users')), '$.password'), ''), [password])
             WHERE [userId] = @user_id
