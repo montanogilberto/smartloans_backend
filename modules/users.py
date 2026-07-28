@@ -288,6 +288,64 @@ def verify_code(json_file: dict):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+def _account_created_email_body(username: str) -> str:
+    return (
+        "¡Bienvenido a SmartLoans!\n\n"
+        "Tu cuenta fue creada exitosamente.\n\n"
+        "Tu nombre de usuario para iniciar sesión es:\n\n"
+        f"    {username}\n\n"
+        "Guárdalo — lo necesitarás junto con tu contraseña para acceder a la app.\n\n"
+        "Si no reconoces este registro, ignora este mensaje."
+    )
+
+
+def _account_created_sms_message(username: str) -> str:
+    return (
+        f"¡Bienvenido a SmartLoans! Tu cuenta fue creada. "
+        f"Tu usuario para iniciar sesión es: {username}. Guárdalo para acceder."
+    )
+
+
+def send_account_created(json_file: dict):
+    """Notify a newly-registered user of their login username via email / SMS /
+    WhatsApp. The username is the key detail — login requires it.
+
+    Body: { "target": str(email|phone), "method": "email"|"sms"|"whatsapp",
+            "username": str }
+    """
+    try:
+        target   = (json_file.get("target") or "").strip()
+        method   = (json_file.get("method") or json_file.get("channel") or "email").strip().lower()
+        username = (json_file.get("username") or "").strip()
+        if not target or not username:
+            return JSONResponse(content={"error": "target and username are required"}, status_code=400)
+        if method not in ("email", "sms", "whatsapp"):
+            return JSONResponse(content={"error": f"Unknown method: {method}"}, status_code=400)
+
+        # Registration milestone + external-service trace. Username is not a
+        # secret, but the target (email/phone) is kept out of the log body.
+        service = "email" if method == "email" else "sms"
+        with workflow_step("Account Created Notice", workflow_name="client_registration", action=method):
+            with timed_integration(service, f"account_created_{method}") as span:
+                if method == "email":
+                    _send_email(target, "Tu cuenta SmartLoans", _account_created_email_body(username))
+                else:
+                    from modules.ticket_notifications import send_sms, send_whatsapp
+                    normalized = _normalize_phone(target)
+                    message = _account_created_sms_message(username)
+                    if method == "whatsapp":
+                        send_whatsapp(normalized, message)
+                    else:
+                        send_sms(normalized, message)
+                span.http_status = 200
+
+        logger.info("[send_account_created] sent via %s for username=%s", method, username)
+        return JSONResponse(content={"message": "Notificación enviada", "method": method}, status_code=200)
+    except Exception as e:
+        logger.exception("[send_account_created] EXCEPTION: %s", e)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 def check_contact_sp(json_file: dict):
     """
     Look up a phone or email in dbo.clients + dbo.users.

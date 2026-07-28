@@ -118,7 +118,10 @@ FACE_POSES = ("front", "up", "down", "left", "right")
 # Sides accepted by the image upload endpoint. 'front'/'back' are the document
 # scans; 'selfie' is the final capture; 'selfie_<pose>' are the five liveness
 # positions.
-_VALID_UPLOAD_SIDES = {"front", "back", "selfie"} | {f"selfie_{p}" for p in FACE_POSES}
+# 'front_hires' is a full-resolution copy of the front, uploaded alongside the
+# ~1100px 'front' (which stays the OCR image) purely so the face-validation
+# agent has enough portrait detail for its INE comparison.
+_VALID_UPLOAD_SIDES = {"front", "front_hires", "back", "selfie"} | {f"selfie_{p}" for p in FACE_POSES}
 
 BLOB_FOLDER_IDS        = "ids"
 BLOB_FOLDER_SELFIES    = "selfies"
@@ -181,7 +184,7 @@ async def upload_id_image_connector(payload: dict) -> JSONResponse:
         uid = str(uuid.uuid4())[:8]
         # Selfies live apart from the ID captures: the selfie is biometric
         # evidence of the person, the front/back scans are the document.
-        folder = BLOB_FOLDER_IDS if side in ("front", "back") else BLOB_FOLDER_SELFIES
+        folder = BLOB_FOLDER_IDS if side in ("front", "front_hires", "back") else BLOB_FOLDER_SELFIES
         blob_path = client_blob_path(client_id, folder, f"{side}_{ts}_{uid}.jpg")
 
         blob_url = _upload_base64_to_blob(
