@@ -20,6 +20,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 from .context import set_request_context
+from .debug import dbg
 from .logger import log_application
 
 # Paths that would only add noise (Azure health probes hit /health constantly).
@@ -49,6 +50,7 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
             endpoint=endpoint,
         )
 
+        dbg("→", endpoint, "cid=", correlation_id, "wid=", h.get("x-workflow-id"))
         start = time.monotonic()
         status_code = 500
         error = None
@@ -63,6 +65,7 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
         finally:
             duration_ms = int((time.monotonic() - start) * 1000)
             level = "ERROR" if (error or status_code >= 500) else "INFO"
+            dbg("←", endpoint, "status=", status_code, f"{duration_ms}ms")
             log_application(
                 level, "http", endpoint,
                 exception=error, http_status=status_code, duration_ms=duration_ms,

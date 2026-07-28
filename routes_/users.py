@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.users import users_sp, all_users_sp, one_users_sp, one_users_email_sp, send_recovery_email, send_verification_code, verify_code, check_contact_sp, check_username_sp
+from modules.users import users_sp, all_users_sp, one_users_sp, one_users_email_sp, send_recovery_email, send_verification_code, verify_code, check_contact_sp, check_username_sp, send_account_created
 
 
 router = APIRouter()
@@ -55,3 +55,7 @@ def send_code(json: dict):
 @router.post("/verify_code", summary="Validate email OTP")
 def check_code(json: dict):
     return verify_code(json)
+
+@router.post("/send_account_created", summary="Send account-created notice with login username (email/SMS/WhatsApp)")
+def account_created(json: dict):
+    return send_account_created(json)

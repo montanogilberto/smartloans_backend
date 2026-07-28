@@ -23,6 +23,7 @@ import time
 from typing import Optional
 
 from databases import connection
+from .debug import dbg
 
 _QUEUE_MAXSIZE = 10_000
 _BATCH_SIZE = 100
@@ -62,8 +63,11 @@ class _Writer:
     def enqueue(self, log: dict) -> None:
         try:
             self._q.put_nowait(log)
+            dbg("enqueue", log.get("logType"), log.get("stepName") or log.get("service") or log.get("level"),
+                "wid=", log.get("workflowId"), "cid=", log.get("correlationId"))
         except queue.Full:
             self.dropped += 1  # shed load rather than block a request
+            dbg("QUEUE FULL — dropped", log.get("logType"))
 
     # ── durable path ───────────────────────────────────────────────────────
     def write_now(self, log_type: str, log: dict) -> None:
@@ -82,8 +86,10 @@ class _Writer:
                 cur.fetchone()
             except Exception:
                 pass
+            dbg("durable write", log_type, "cid=", log.get("correlationId"))
         except Exception:
             self.dropped += 1
+            dbg("durable write FAILED (swallowed)", log_type)
         finally:
             if conn:
                 try:
@@ -140,11 +146,13 @@ class _Writer:
                     cur.fetchone()
                 except Exception:
                     pass
+                dbg("batch flushed", len(batch), "rows")
                 return
             except Exception:
                 self._close_conn()  # force reconnect next attempt
                 if attempt == 2:
                     self.dropped += len(batch)
+                    dbg("batch FAILED (swallowed)", len(batch), "rows; total dropped=", self.dropped)
 
 
 writer = _Writer()
