@@ -397,47 +397,20 @@ async def get_connected_account_status(payload: dict):
 
         print(f"[stripe][get_connected_account_status] retrieving Stripe account acct_id={acct_id}")
         acct = stripe.Account.retrieve(acct_id, expand=["external_accounts"])
-        charges_enabled   = getattr(acct, "charges_enabled", False)
-        payouts_enabled   = getattr(acct, "payouts_enabled", False)
-        details_submitted = getattr(acct, "details_submitted", False)
-        has_ext, ext_last4, ext_type, ext_bank = _external_account_info(acct)
 
+        # _persist_and_serialize (not a hand-built dict) so the response and the
+        # SQL upsert both carry identitySubmitted — the app's resume logic
+        # (startAtPayout) reads it from this endpoint, and hand-building the
+        # payload here silently dropped it.
+        account = _persist_and_serialize(acct, client_id, company_id)
         print(
             "[stripe][get_connected_account_status] stripe retrieve success "
-            f"charges_enabled={charges_enabled} payouts_enabled={payouts_enabled} "
-            f"details_submitted={details_submitted} hasExternalAccount={has_ext}"
+            f"charges_enabled={account['chargesEnabled']} payouts_enabled={account['payoutsEnabled']} "
+            f"details_submitted={account['detailsSubmitted']} "
+            f"identity_submitted={account['identitySubmitted']} hasExternalAccount={account['hasExternalAccount']}"
         )
 
-        # Update SQL with latest status
-        print("[stripe][get_connected_account_status] updating SQL account status")
-        _sp_connected_accounts({
-            "action": "upsert",
-            "clientId": client_id,
-            "companyId": company_id,
-            "connectedAccountId": acct_id,
-            "chargesEnabled": charges_enabled,
-            "payoutsEnabled": payouts_enabled,
-            "detailsSubmitted": details_submitted,
-            "hasExternalAccount": has_ext,
-            "externalAccountLast4": ext_last4,
-            "externalAccountType": ext_type,
-            "externalAccountBankName": ext_bank,
-        })
-
-        return JSONResponse({
-            "account": {
-                "connectedAccountId": acct_id,
-                "clientId": client_id,
-                "companyId": company_id,
-                "chargesEnabled": charges_enabled,
-                "payoutsEnabled": payouts_enabled,
-                "detailsSubmitted": details_submitted,
-                "hasExternalAccount": has_ext,
-                "externalAccountLast4": ext_last4,
-                "externalAccountType": ext_type,
-                "externalAccountBankName": ext_bank,
-            }
-        }, status_code=200)
+        return JSONResponse({"account": account}, status_code=200)
 
     except stripe.StripeError as e:
         print(
