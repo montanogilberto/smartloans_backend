@@ -13,6 +13,7 @@ CREATE TABLE [dbo].[stripeConnectedAccounts] (
     chargesEnabled           BIT NOT NULL DEFAULT 0,
     payoutsEnabled           BIT NOT NULL DEFAULT 0,
     detailsSubmitted         BIT NOT NULL DEFAULT 0,
+    identitySubmitted        BIT NOT NULL DEFAULT 0,   -- KYC identity (name/DOB/address) submitted → skip re-asking on reload
     hasExternalAccount       BIT NOT NULL DEFAULT 0,   -- bank account/debit card actually on file
     externalAccountLast4     NVARCHAR(4) NULL,
     externalAccountType      NVARCHAR(20) NULL,        -- bank_account | card
@@ -30,6 +31,11 @@ ALTER TABLE [dbo].[stripeConnectedAccounts] ADD
     externalAccountLast4     NVARCHAR(4) NULL,
     externalAccountType      NVARCHAR(20) NULL,
     externalAccountBankName  NVARCHAR(100) NULL
+GO
+
+-- Backfill identitySubmitted for pre-existing databases (no-op on fresh create).
+IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.stripeConnectedAccounts') AND name = 'identitySubmitted')
+ALTER TABLE [dbo].[stripeConnectedAccounts] ADD identitySubmitted BIT NOT NULL DEFAULT 0
 GO
 
 -- ── Table: stripeTransactions ───────────────────────────────
@@ -81,6 +87,7 @@ BEGIN
         DECLARE @chargesEnabled          BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].chargesEnabled')
         DECLARE @payoutsEnabled          BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].payoutsEnabled')
         DECLARE @detailsSubmitted        BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].detailsSubmitted')
+        DECLARE @identitySubmitted       BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].identitySubmitted')
         DECLARE @hasExternalAccount      BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].hasExternalAccount')
         DECLARE @externalAccountLast4    NVARCHAR(4)   = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].externalAccountLast4')
         DECLARE @externalAccountType     NVARCHAR(20)  = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].externalAccountType')
@@ -96,6 +103,7 @@ BEGIN
                            chargesEnabled          = ISNULL(@chargesEnabled,          target.chargesEnabled),
                            payoutsEnabled          = ISNULL(@payoutsEnabled,          target.payoutsEnabled),
                            detailsSubmitted        = ISNULL(@detailsSubmitted,        target.detailsSubmitted),
+                           identitySubmitted       = ISNULL(@identitySubmitted,       target.identitySubmitted),
                            hasExternalAccount      = ISNULL(@hasExternalAccount,      target.hasExternalAccount),
                            externalAccountLast4    = ISNULL(@externalAccountLast4,    target.externalAccountLast4),
                            externalAccountType     = ISNULL(@externalAccountType,     target.externalAccountType),
@@ -103,10 +111,10 @@ BEGIN
                            updated_at              = GETUTCDATE()
             WHEN NOT MATCHED THEN
                 INSERT (clientId, companyId, connectedAccountId, chargesEnabled, payoutsEnabled, detailsSubmitted,
-                        hasExternalAccount, externalAccountLast4, externalAccountType, externalAccountBankName)
+                        identitySubmitted, hasExternalAccount, externalAccountLast4, externalAccountType, externalAccountBankName)
                 VALUES (@clientId, @companyId, @connectedAccountId,
                         ISNULL(@chargesEnabled, 0), ISNULL(@payoutsEnabled, 0), ISNULL(@detailsSubmitted, 0),
-                        ISNULL(@hasExternalAccount, 0), @externalAccountLast4, @externalAccountType, @externalAccountBankName);
+                        ISNULL(@identitySubmitted, 0), ISNULL(@hasExternalAccount, 0), @externalAccountLast4, @externalAccountType, @externalAccountBankName);
 
             SELECT (SELECT TOP 1 * FROM [dbo].[stripeConnectedAccounts]
                     WHERE clientId = @clientId AND companyId = @companyId
@@ -117,7 +125,7 @@ BEGIN
         BEGIN
             SELECT ISNULL(
                 (SELECT TOP 1 connectedAccountId, clientId, companyId,
-                        chargesEnabled, payoutsEnabled, detailsSubmitted,
+                        chargesEnabled, payoutsEnabled, detailsSubmitted, identitySubmitted,
                         hasExternalAccount, externalAccountLast4, externalAccountType, externalAccountBankName,
                         CONVERT(NVARCHAR, created_At, 127) AS created_At
                  FROM [dbo].[stripeConnectedAccounts]

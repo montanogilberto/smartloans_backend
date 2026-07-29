@@ -110,6 +110,7 @@ def _persist_and_serialize(acct, client_id: int, company_id: int) -> dict:
         "chargesEnabled": charges,
         "payoutsEnabled": payouts,
         "detailsSubmitted": submitted,
+        "identitySubmitted": identity_submitted,
         "hasExternalAccount": has_ext,
         "externalAccountLast4": ext_last4,
         "externalAccountType": ext_type,
