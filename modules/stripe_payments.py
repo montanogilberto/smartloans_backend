@@ -94,6 +94,14 @@ def _persist_and_serialize(acct, client_id: int, company_id: int) -> dict:
     payouts   = getattr(acct, "payouts_enabled", False)
     submitted = getattr(acct, "details_submitted", False)
     has_ext, ext_last4, ext_type, ext_bank = _external_account_info(acct)
+    # Whether the KYC identity step is already done, so the app can SKIP re-asking
+    # for name/DOB/address on reload and jump straight to the payout step. Stripe
+    # is the source of truth: once submit_connected_account_kyc runs, the account's
+    # `individual` carries the submitted name (and Stripe stops listing those
+    # fields as currently_due). details_submitted stays False until the external
+    # account is also attached, so it can't stand in for "identity done".
+    individual = getattr(acct, "individual", None)
+    identity_submitted = bool(individual and getattr(individual, "first_name", None))
     _sp_connected_accounts({
         "action": "upsert",
         "clientId": client_id,
@@ -114,6 +122,7 @@ def _persist_and_serialize(acct, client_id: int, company_id: int) -> dict:
         "chargesEnabled": charges,
         "payoutsEnabled": payouts,
         "detailsSubmitted": submitted,
+        "identitySubmitted": identity_submitted,
         "hasExternalAccount": has_ext,
         "externalAccountLast4": ext_last4,
         "externalAccountType": ext_type,
