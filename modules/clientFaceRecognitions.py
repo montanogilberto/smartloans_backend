@@ -179,13 +179,18 @@ async def upload_id_image_connector(payload: dict) -> JSONResponse:
         if not image_b64:
             return JSONResponse(content={"error": "imageBase64 is required"}, status_code=400)
 
-        now = datetime.utcnow()
-        ts  = now.strftime("%Y%m%d%H%M%S")
-        uid = str(uuid.uuid4())[:8]
         # Selfies live apart from the ID captures: the selfie is biometric
         # evidence of the person, the front/back scans are the document.
         folder = BLOB_FOLDER_IDS if side in ("front", "front_hires", "back") else BLOB_FOLDER_SELFIES
-        blob_path = client_blob_path(client_id, folder, f"{side}_{ts}_{uid}.jpg")
+        # Deterministic filename per (client, side) — ONE blob per capture type.
+        # The whole set (front, front_hires, selfie, selfie_<pose>...) is
+        # re-uploaded on every KYC retry; a timestamp+uuid in the name made each
+        # failed attempt leave a fresh duplicate behind, piling up many copies of
+        # the same person under one client. With a stable name the retry simply
+        # overwrites its previous upload (overwrite=True above), so only the
+        # latest capture of each type is ever kept — and the stored blob URL
+        # stays valid across retries instead of going stale.
+        blob_path = client_blob_path(client_id, folder, f"{side}.jpg")
 
         blob_url = _upload_base64_to_blob(
             image_b64, blob_path, "image/jpeg",
@@ -331,6 +336,7 @@ async def contract_clientFaceRecognition_connector(payload: dict) -> JSONRespons
             "domicilio":           payload.get("domicilio"),
             "curp":                payload.get("curp"),
             "claveElector":        payload.get("claveElector"),
+            "rfc":                 payload.get("rfc"),
             "fechaNacimiento":     payload.get("fechaNacimiento"),
             "contractAccepted":    payload.get("contractAccepted", False),
             "contractPdfBlobUrl":  contract_url,

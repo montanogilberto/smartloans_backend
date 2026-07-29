@@ -29,6 +29,7 @@ CREATE TABLE dbo.ClientFaceRecognitions (
     domicilio                     NVARCHAR(500)       NULL,
     curp                          NVARCHAR(18)        NULL,
     clave_elector                 NVARCHAR(20)        NULL,
+    rfc                           NVARCHAR(13)        NULL,  -- Mexico tax ID (Stripe individual.id_number); NOT the CURP
     fecha_nacimiento              NVARCHAR(10)        NULL,
 
     -- Legal contract metadata
@@ -74,6 +75,15 @@ CREATE TABLE dbo.ClientFaceRecognitions (
     CONSTRAINT PK_ClientFaceRecognitions PRIMARY KEY CLUSTERED (clientFaceRecognitionId ASC),
     CONSTRAINT FK_ClientFaceRecognitions_Companies FOREIGN KEY (companyId) REFERENCES dbo.companies(companyId)
 );
+GO
+
+-- Migration for EXISTING deployments (the CREATE TABLE above only runs on a
+-- fresh DB). Adds the RFC column if it isn't there yet. RFC = Mexico's 13-char
+-- tax ID, i.e. Stripe's individual.id_number — persisted so a client's edited
+-- RFC survives and re-seeds the native onboarding form instead of blanking on
+-- every reopen (the CURP, 18 chars, is a different identifier Stripe rejects).
+IF COL_LENGTH('dbo.ClientFaceRecognitions', 'rfc') IS NULL
+    ALTER TABLE dbo.ClientFaceRecognitions ADD rfc NVARCHAR(13) NULL;
 GO
 
 CREATE NONCLUSTERED INDEX IX_ClientFaceRecognitions_CompanyId ON dbo.ClientFaceRecognitions (companyId);
@@ -124,6 +134,7 @@ BEGIN
         domicilio                    NVARCHAR(500) NULL,
         curp                         NVARCHAR(18) NULL,
         clave_elector                NVARCHAR(20) NULL,
+        rfc                          NVARCHAR(13) NULL,
         fecha_nacimiento             NVARCHAR(10) NULL,
 
         contract_accepted            BIT NULL,
@@ -168,6 +179,7 @@ BEGIN
         domicilio,
         curp,
         clave_elector,
+        rfc,
         fecha_nacimiento,
         contract_accepted,
         contract_pdf_blob_url,
@@ -204,6 +216,7 @@ BEGIN
         JSON_VALUE(value, '$.domicilio'),
         JSON_VALUE(value, '$.curp'),
         JSON_VALUE(value, '$.claveElector'),
+        JSON_VALUE(value, '$.rfc'),
         JSON_VALUE(value, '$.fechaNacimiento'),
 
         TRY_CONVERT(BIT, JSON_VALUE(value, '$.contractAccepted')),
@@ -250,6 +263,7 @@ BEGIN
                 domicilio,
                 curp,
                 clave_elector,
+                rfc,
                 fecha_nacimiento,
                 contract_accepted,
                 contract_pdf_blob_url,
@@ -288,6 +302,7 @@ BEGIN
                 p.domicilio,
                 p.curp,
                 p.clave_elector,
+                p.rfc,
                 p.fecha_nacimiento,
                 p.contract_accepted,
                 p.contract_pdf_blob_url,
@@ -344,6 +359,7 @@ BEGIN
                 cfr.domicilio                  = COALESCE(p.domicilio, cfr.domicilio),
                 cfr.curp                       = COALESCE(p.curp, cfr.curp),
                 cfr.clave_elector              = COALESCE(p.clave_elector, cfr.clave_elector),
+                cfr.rfc                        = COALESCE(p.rfc, cfr.rfc),
                 cfr.fecha_nacimiento           = COALESCE(p.fecha_nacimiento, cfr.fecha_nacimiento),
 
                 cfr.contract_accepted          = COALESCE(p.contract_accepted, cfr.contract_accepted),
@@ -437,6 +453,7 @@ BEGIN
         ISNULL([domicilio], '')                             AS domicilio,
         ISNULL([curp], '')                                  AS curp,
         ISNULL([clave_elector], '')                         AS claveElector,
+        ISNULL([rfc], '')                                   AS rfc,
         ISNULL([fecha_nacimiento], '')                      AS fechaNacimiento,
 
         -- Legal Contract Metadata
@@ -511,6 +528,7 @@ BEGIN
         ISNULL([domicilio], '')                             AS domicilio,
         ISNULL([curp], '')                                  AS curp,
         ISNULL([clave_elector], '')                         AS claveElector,
+        ISNULL([rfc], '')                                   AS rfc,
         ISNULL([fecha_nacimiento], '')                      AS fechaNacimiento,
 
         -- Legal Contract Metadata
