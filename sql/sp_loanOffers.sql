@@ -1,21 +1,27 @@
 -- ============================================================
 -- sp_loanOffers  (action 1=create, 2=update/close, 3=delete)
 -- ============================================================
--- Required table:
--- CREATE TABLE [dbo].[loanOffers] (
---   offerId         INT IDENTITY PRIMARY KEY,
---   companyId       INT NOT NULL,
---   lenderId        INT NOT NULL,           -- clientId of the lender
---   availableCapital DECIMAL(18,2) NOT NULL,
---   minRate         DECIMAL(5,2) NOT NULL,
---   maxRate         DECIMAL(5,2) NOT NULL,
---   minTermMonths   INT NOT NULL DEFAULT 1,
---   maxTermMonths   INT NOT NULL DEFAULT 24,
---   description     NVARCHAR(500) NULL,
---   isActive        BIT NOT NULL DEFAULT 1,
---   expiresAt       DATETIME2 NULL,
---   created_At      DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
--- )
+-- Table (executable, guarded — this used to be only a comment, so the
+-- procs below existed in the DB for a month with no table behind them
+-- and every /loanOffers call 500'd with "Invalid object name").
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'loanOffers')
+CREATE TABLE [dbo].[loanOffers] (
+    offerId          INT IDENTITY PRIMARY KEY,
+    companyId        INT NOT NULL,
+    lenderId         INT NOT NULL,           -- clientId of the lender
+    availableCapital DECIMAL(18,2) NOT NULL,
+    minRate          DECIMAL(5,2) NOT NULL,
+    maxRate          DECIMAL(5,2) NOT NULL,
+    minTermMonths    INT NOT NULL DEFAULT 1,
+    maxTermMonths    INT NOT NULL DEFAULT 24,
+    description      NVARCHAR(500) NULL,
+    isActive         BIT NOT NULL DEFAULT 1,
+    -- DATETIME (not DATETIME2): factory reviewer_agent auto-errors DATETIME2
+    -- outside IOT modules
+    expiresAt        DATETIME NULL,
+    created_At       DATETIME NOT NULL DEFAULT GETUTCDATE()
+)
+GO
 -- ============================================================
 IF OBJECT_ID('dbo.sp_loanOffers', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_loanOffers;
 GO

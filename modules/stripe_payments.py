@@ -477,7 +477,25 @@ async def submit_connected_account_kyc(payload: dict):
     if payload.get("taxId"):
         individual["id_number"] = payload["taxId"]
 
-    modify_kwargs = {"individual": individual, "business_type": "individual"}
+    # Stripe MX requires business_profile.url before enabling charges — without
+    # it the account sits in requirements.past_due forever (this is what kept
+    # charges_enabled=False even after full identity + bank onboarding). For
+    # individuals with no website Stripe accepts product_description instead;
+    # a real platform URL can be supplied via STRIPE_BUSINESS_PROFILE_URL.
+    business_profile = {
+        "product_description": (
+            "Préstamos personales entre particulares (P2P) gestionados a "
+            "través de la plataforma SmartLoans."
+        ),
+    }
+    if os.getenv("STRIPE_BUSINESS_PROFILE_URL"):
+        business_profile["url"] = os.getenv("STRIPE_BUSINESS_PROFILE_URL")
+
+    modify_kwargs = {
+        "individual": individual,
+        "business_type": "individual",
+        "business_profile": business_profile,
+    }
     if payload.get("acceptedTos"):
         modify_kwargs["tos_acceptance"] = {
             "date": int(datetime.utcnow().timestamp()),
