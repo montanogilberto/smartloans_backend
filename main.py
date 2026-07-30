@@ -25,6 +25,7 @@ from routes_ import (
     digitalContracts, legalCases, disbursement,
     document_intelligence, geocoding, onboardingReminders, registrationReminders,
     clientFollowUps,
+    bankAccounts, walletTransactions, transfers,
 )
 
 app = FastAPI(
@@ -152,6 +153,11 @@ app.include_router(clientFollowUps.router)
 app.include_router(loanProposals.router)
 app.include_router(loanOffers.router)
 app.include_router(stripe_payments.router)
+# Banking-first Phase 1 (docs/payment-banking-first-redesign.md):
+# CLABEs verificadas + ledger inmutable + dispersión SPEI (STP, mock hasta contrato)
+app.include_router(bankAccounts.router)
+app.include_router(walletTransactions.router)
+app.include_router(transfers.router)
 app.include_router(creditScore.router)
 app.include_router(walletBalance.router)
 app.include_router(automatedPayments.router)
