@@ -55,6 +55,27 @@ async def _generate_agent_reply(conversation_id: int, borrower_id: int, company_
         return resp.json()["reply"]
 
 
+def loanChat_config():
+    """Config the frontend reads at runtime so the agent identity lives in ONE
+    place (the LOANCHAT_AGENT_CLIENT_ID env var), never hardcoded client-side."""
+    return {
+        "agentClientId": AGENT_CLIENT_ID or 0,
+        "agentEnabled": bool(AGENT_CLIENT_ID),
+        "agentReplyEnabled": bool(AGENT_CLIENT_ID and NEGOTIATION_AGENT_URL),
+    }
+
+
+def _tag_assistant(result):
+    """Mark conversations whose lender is the reserved agent so the frontend can
+    switch to assistant mode without knowing the agent's clientId."""
+    if not AGENT_CLIENT_ID:
+        return
+    rows = result if isinstance(result, list) else [result]
+    for row in rows:
+        if isinstance(row, dict) and "lenderId" in row:
+            row["isAssistant"] = row.get("lenderId") == AGENT_CLIENT_ID
+
+
 async def loanChat_sp(payload: dict):
     action = payload.get("action", "")
     print(f"[loanChat] action={action} conv={payload.get('conversationId')} client={payload.get('clientId')}")
@@ -63,6 +84,9 @@ async def loanChat_sp(payload: dict):
 
     if isinstance(result, dict) and "error" in result:
         return JSONResponse(content=result, status_code=400)
+
+    if action in ("start_conversation", "get_conversation", "list_conversations"):
+        _tag_assistant(result)
 
     # ── Send push notification after message events ───────────
     push_actions = {"send_message", "accept_proposal", "reject_proposal", "start_conversation"}

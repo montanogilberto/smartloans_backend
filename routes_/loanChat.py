@@ -1,7 +1,20 @@
 from fastapi import APIRouter
-from modules.loanChat import loanChat_sp
+from modules.loanChat import loanChat_sp, loanChat_config
 
 router = APIRouter()
+
+@router.get("/loanChat/config", summary="Loan Chat — assistant/agent configuration",
+    description="""
+Single source of truth for the reserved "Asistente SmartLoans" identity.
+The frontend must NEVER hardcode the agent clientId — it reads it from here.
+
+  agentClientId     — dbo.clients row acting as the assistant lender (0 = not configured)
+  agentEnabled      — true when LOANCHAT_AGENT_CLIENT_ID is set (assistant chats allowed)
+  agentReplyEnabled — true when NEGOTIATION_AGENT_URL is also set (real AI replies;
+                      otherwise the borrower gets a fallback message)
+""")
+async def loanChatConfig():
+    return loanChat_config()
 
 @router.post("/loanChat", summary="Loan Chat — conversational loan negotiation",
     description="""
