@@ -187,14 +187,24 @@ BEGIN
 
         ELSE IF @action = 'update_status'
         BEGIN
+            -- Capture the PREVIOUS status so callers can act exactly once on
+            -- the pending→succeeded transition (e.g. credit a wallet top-up)
+            -- even when both the app's confirm call and the Stripe webhook
+            -- report the same intent.
+            DECLARE @prev TABLE (prevStatus NVARCHAR(20));
+
             UPDATE [dbo].[stripeTransactions]
             SET status        = @status,
                 failureReason = ISNULL(@failureReason, failureReason),
                 updated_at    = GETUTCDATE()
+            OUTPUT deleted.status INTO @prev
             WHERE stripePaymentIntentId = @stripePaymentIntentId
               AND (@companyId IS NULL OR companyId = @companyId)
 
-            SELECT (SELECT TOP 1 transactionId, status, stripePaymentIntentId, amount, currency
+            SELECT (SELECT TOP 1 transactionId, status,
+                           (SELECT TOP 1 prevStatus FROM @prev) AS prevStatus,
+                           stripePaymentIntentId, amount, currency,
+                           paymentType, fromClientId, toClientId, companyId
                     FROM [dbo].[stripeTransactions]
                     WHERE stripePaymentIntentId = @stripePaymentIntentId
                     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
