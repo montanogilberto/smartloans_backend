@@ -721,10 +721,42 @@ async def create_payment_intent(payload: dict):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+async def _settle_wallet_top_up(tx: dict):
+    """Credit the client's wallet ledger for a wallet_top_up transaction that
+    JUST transitioned to succeeded. Runs from both the app's confirm call and
+    the Stripe webhook — sp_stripe_transactions.update_status returns the
+    previous status, so only the caller that performed the pending→succeeded
+    flip credits; the other sees prevStatus='succeeded' and skips. Without this
+    the charge succeeded but clientWallets never moved, so the app's "Saldo en
+    cartera" stayed at $0 and no funds could be reserved/disbursed."""
+    try:
+        if not isinstance(tx, dict) or tx.get("paymentType") != "wallet_top_up":
+            return
+        if tx.get("status") != "succeeded" or tx.get("prevStatus") == "succeeded":
+            print(f"[stripe][topup] settle skipped (status={tx.get('status')}, prev={tx.get('prevStatus')})")
+            return
+        amount_mxn = float(tx.get("amount", 0)) / 100.0  # stored in centavos
+        client_id  = tx.get("fromClientId")
+        company_id = tx.get("companyId")
+        if not client_id or amount_mxn <= 0:
+            return
+        from modules.walletBalance import credit_wallet
+        await credit_wallet({
+            "clientId": client_id, "companyId": company_id,
+            "amountMXN": amount_mxn, "type": "top_up",
+        })
+        print(f"[stripe][topup] wallet CREDITED clientId={client_id} +{amount_mxn} MXN (intent {tx.get('stripePaymentIntentId')})")
+    except Exception as e:
+        # Ledger credit must not fail the confirm/webhook response; the
+        # transaction row is already 'succeeded' for reconciliation.
+        print(f"[stripe][topup] wallet credit FAILED: {e}")
+
+
 async def confirm_payment_intent(payload: dict):
     """
     Verify a PaymentIntent succeeded (called by frontend after confirmation).
-    Updates SQL transaction status to 'succeeded'.
+    Updates SQL transaction status to 'succeeded' and, for wallet top-ups,
+    credits the client's wallet ledger exactly once.
     """
     payment_intent_id = payload.get("paymentIntentId")
     company_id        = payload.get("companyId")
@@ -741,10 +773,14 @@ async def confirm_payment_intent(payload: dict):
                 "status": "succeeded",
                 "companyId": company_id,
             })
+            await _settle_wallet_top_up(tx)
             return JSONResponse({"status": "succeeded", "stripePaymentIntentId": payment_intent_id, **tx}, status_code=200)
 
         intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-        status = intent.get("status")
+        # Bracket access, not .get(): stripe 15.x StripeObject is no longer a
+        # dict — .get() raises AttributeError and this endpoint 500'd on every
+        # call (same bug automatedPayments already fixed).
+        status = intent["status"]
 
         tx = _sp_transaction({
             "action": "update_status",
@@ -755,6 +791,8 @@ async def confirm_payment_intent(payload: dict):
 
         if status != "succeeded":
             return JSONResponse({"error": f"Payment status: {status}"}, status_code=400)
+
+        await _settle_wallet_top_up(tx)
 
         return JSONResponse({"status": status, "stripePaymentIntentId": payment_intent_id, **tx}, status_code=200)
 
@@ -939,7 +977,13 @@ async def handle_webhook(request: Request):
         event = json.loads(payload_bytes)
     else:
         try:
-            event = stripe.Webhook.construct_event(payload_bytes, sig_header, WEBHOOK_SECRET)
+            # construct_event VERIFIES the signature but returns a stripe 15.x
+            # StripeObject, which no longer supports dict .get() — every
+            # handler below crashed with AttributeError('get') and Stripe saw
+            # nothing but 500s. Verify with it, then work on the plain-JSON
+            # payload so the .get() handling keeps working in any SDK version.
+            stripe.Webhook.construct_event(payload_bytes, sig_header, WEBHOOK_SECRET)
+            event = json.loads(payload_bytes)
         except stripe.SignatureVerificationError as e:
             print(f"[stripe][webhook] Signature verification failed: {e}")
             return JSONResponse({"error": "Invalid signature"}, status_code=400)
@@ -952,12 +996,15 @@ async def handle_webhook(request: Request):
     if event_type == "payment_intent.succeeded":
         intent_id = data_obj.get("id")
         metadata  = data_obj.get("metadata", {})
-        _sp_transaction({
+        tx = _sp_transaction({
             "action": "update_status",
             "stripePaymentIntentId": intent_id,
             "status": "succeeded",
             "companyId": metadata.get("companyId"),
         })
+        # Wallet top-ups: credit the ledger (no-op if the app's confirm call
+        # already did — update_status returns prevStatus for idempotency).
+        await _settle_wallet_top_up(tx)
         print(f"[stripe][webhook] PaymentIntent succeeded: {intent_id}")
 
     elif event_type == "payment_intent.payment_failed":
