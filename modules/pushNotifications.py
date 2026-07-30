@@ -200,6 +200,47 @@ def all_pushNotifications_sp(json_file: dict):
             conn.close()
 
 
+def my_notifications_sp(json_file: dict):
+    """Per-user notification inbox (bell icon): NotificationDeliveries joined
+    with content + unreadCount. Body: { userId }"""
+    conn = None
+    try:
+        conn = connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC [dbo].[sp_pushNotifications_forUser] @pjsonfile = %s", (json.dumps(json_file),))
+        rows = cursor.fetchall()
+        json_result = "".join(row[0] for row in rows if row and row[0])
+        result = json.loads(json_result) if json_result else {"unreadCount": 0, "notifications": []}
+        print(f"[pushNotifications][inbox] userId={json_file.get('userId')} unread={result.get('unreadCount')} items={len(result.get('notifications', []))}")
+        return JSONResponse(content=result, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
+
+
+def mark_notifications_read_sp(json_file: dict):
+    """Mark a user's deliveries read. Body: { userId, pushNotificationId? }
+    (omit pushNotificationId to mark ALL)."""
+    conn = None
+    try:
+        conn = connection()
+        conn.autocommit(True)
+        cursor = conn.cursor()
+        cursor.execute("EXEC [dbo].[sp_pushNotifications_markRead] @pjsonfile = %s", (json.dumps(json_file),))
+        rows = cursor.fetchall()
+        json_result = "".join(row[0] for row in rows if row and row[0])
+        result = json.loads(json_result) if json_result else {"marked": 0}
+        print(f"[pushNotifications][inbox] markRead userId={json_file.get('userId')} → {result}")
+        return JSONResponse(content=result, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
+
+
 async def register_device_sp(json_file: dict):
     try:
         print("[pushNotifications][registerDevice] Handler started.")
