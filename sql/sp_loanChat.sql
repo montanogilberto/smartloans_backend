@@ -76,6 +76,15 @@ BEGIN
         DECLARE @requestedAmt    DECIMAL(14,2) = JSON_VALUE(@pjsonfile, '$.chat[0].requestedAmount')
         DECLARE @title           NVARCHAR(200) = JSON_VALUE(@pjsonfile, '$.chat[0].title')
 
+        -- The frontend often only knows clientIds (the clients API carries no
+        -- userId). Push notifications target the stored *userIds*, so resolve
+        -- missing/zero ones from users here — otherwise a conversation started
+        -- with only lenderId would silently never notify the lender.
+        IF ISNULL(@borrowerUserId, 0) = 0
+            SELECT TOP 1 @borrowerUserId = userId FROM users WHERE clientId = @borrowerId
+        IF ISNULL(@lenderUserId, 0) = 0
+            SELECT TOP 1 @lenderUserId = userId FROM users WHERE clientId = @lenderId
+
         -- Reuse existing open conversation between these two parties
         IF EXISTS (
             SELECT 1 FROM loanConversations

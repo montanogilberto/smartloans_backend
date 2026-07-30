@@ -111,6 +111,29 @@ async def pushNotifications_sp(json_file: dict):
                 else:
                     recipient_ids = [target_user_id] if target_user_id else []
 
+                # Callers routinely pass a CLIENT id where a USER id belongs
+                # (e.g. the app sends targetUserId=2167 for borrower clientId
+                # 2167, whose real userId is 27). The hub tags devices by
+                # user_{userId}, so an unmapped clientId targets a tag with
+                # ZERO devices and Azure still reports success — pushes vanish
+                # silently. Resolve here, once, for every caller: keep the id
+                # if it's a real userId; else map clientId→userId.
+                resolved = []
+                for rid in recipient_ids:
+                    cursor.execute("SELECT 1 FROM users WHERE userId = %s", (rid,))
+                    if cursor.fetchone():
+                        resolved.append(rid)
+                        continue
+                    cursor.execute("SELECT TOP 1 userId FROM users WHERE clientId = %s", (rid,))
+                    row = cursor.fetchone()
+                    if row:
+                        print(f"[pushNotifications][module] mapped clientId {rid} → userId {row[0]}")
+                        resolved.append(row[0])
+                    else:
+                        print(f"[pushNotifications][module] WARNING: id {rid} matches no user — push will target an empty tag")
+                        resolved.append(rid)
+                recipient_ids = resolved
+
                 print("[pushNotifications][module] Resolved recipients:", recipient_ids)
                 sent_count = 0
                 for user_id in recipient_ids:

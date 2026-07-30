@@ -94,6 +94,25 @@ async def link_bank_account(payload: dict):
         "verificationCents": verification_cents,
     }]})
     if result.get("error"):
+        # Idempotent re-link: the same client re-submitting the same CLABE gets
+        # their existing account back (with its pending verification state if
+        # any) instead of a raw UNIQUE-index error.
+        if "duplicate" in result["error"].lower():
+            existing = _sp("sp_bankAccounts_all", {"bankAccounts": [{
+                "companyId": company_id, "clientId": client_id,
+            }]}).get("bankAccounts", [])
+            match = next((a for a in existing if a.get("clabeLast4") == clabe[-4:]
+                          and a.get("bankCode") == bank_code), None)
+            if match:
+                print(f"[bankAccounts] link REPLAY clientId={client_id} → bankAccountId={match['bankAccountId']} "
+                      f"(verified={match.get('isVerified')})")
+                body = {**match, "alreadyLinked": True,
+                        "status": "verified" if match.get("isVerified") else "pending_verification"}
+                if not match.get("isVerified") and is_mock():
+                    full = _sp("sp_bankAccounts_one", {"bankAccounts": [{"bankAccountId": match["bankAccountId"]}]})
+                    if full.get("verificationCents"):
+                        body["mockVerificationCents"] = full["verificationCents"]
+                return JSONResponse(body, status_code=200)
         return JSONResponse(result, status_code=400)
 
     # Real mode: send the actual micro-deposit via SPEI here (1–99 centavos to
