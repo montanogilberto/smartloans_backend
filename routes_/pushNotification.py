@@ -5,6 +5,8 @@ from modules.pushNotifications import (
     all_pushNotifications_sp,
     one_pushNotifications_sp,
     register_device_sp,
+    my_notifications_sp,
+    mark_notifications_read_sp,
 )
 
 
@@ -43,3 +45,26 @@ async def registerDevice(json: dict):
     response = await register_device_sp(json)
     print("[pushNotifications][route][registerDevice] Outgoing response prepared.")
     return response
+
+
+@router.post(
+    "/myNotifications",
+    summary="Per-user notification inbox (bell icon)",
+    description="""Body: { "userId": int }
+Returns: { unreadCount, notifications: [{ pushNotificationId, title, message,
+notificationType, priority, navigationRoute, isRead, receivedAt }] } — newest
+first, top 50. Backed by NotificationDeliveries so the in-app history persists
+after the system push disappears.""",
+)
+def my_notifications(json: dict):
+    return my_notifications_sp(json)
+
+
+@router.post(
+    "/myNotifications/markRead",
+    summary="Mark a user's notifications as read",
+    description="""Body: { "userId": int, "pushNotificationId"?: int } — omit
+pushNotificationId to mark ALL of the user's notifications read.""",
+)
+def my_notifications_mark_read(json: dict):
+    return mark_notifications_read_sp(json)
