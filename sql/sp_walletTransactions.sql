@@ -28,7 +28,8 @@ USING (VALUES
     ('WITHDRAWAL',             9, 'Payout to bank account (out)'),
     ('REFUND',                10, 'Money returned to the client'),
     ('REVERSAL',              11, 'Correction of a previous entry'),
-    ('ADJUSTMENT',            12, 'Manual admin adjustment')
+    ('ADJUSTMENT',            12, 'Manual admin adjustment'),
+    ('LOAN_REPAYMENT',        13, 'Borrower pays an installment (out, SPEI rail)')
 ) AS s (entryType, sortOrder, description)
 ON t.entryType = s.entryType
 WHEN NOT MATCHED THEN
