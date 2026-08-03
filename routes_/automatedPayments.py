@@ -6,6 +6,7 @@ from modules.automatedPayments import (
     generate_installment_schedule,
     get_installment_schedule,
     charge_due_installments,
+    pay_installment_spei,
 )
 
 router = APIRouter(prefix="/automated-payments", tags=["Automated Payments"])
@@ -83,6 +84,23 @@ Returns: { "installments": [{ installmentNumber, dueDate, amount, principal,
 )
 async def schedule(json: dict):
     return await get_installment_schedule(json)
+
+
+@router.post(
+    "/pay-spei",
+    summary="Pay ONE installment through the STP/SPEI rail (primary)",
+    description="""
+Riel primario de cobranza (decisión: solo STP para mover dinero). Debita la
+billetera del borrower y abona la del lender en el ledger inmutable, marca la
+cuota como pagada y notifica al prestamista. Sin tarjeta, sin Stripe.
+
+Body: { "companyId": int, "loanId": int, "installmentId": int, "clientId": int }
+Returns: { paid, rail: "spei", installmentId, amount, borrowerBalanceAfter, lenderBalanceAfter }
+402 cuando la billetera del borrower no alcanza (depositar por SPEI primero).
+""",
+)
+async def pay_spei(json: dict):
+    return await pay_installment_spei(json)
 
 
 @router.post(

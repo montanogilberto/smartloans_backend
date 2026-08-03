@@ -294,6 +294,128 @@ async def get_installment_schedule(payload: dict):
             conn.close()
 
 
+# ── SPEI repayment (primary rail — user decision: "only we use STP") ─────────
+
+async def pay_installment_spei(payload: dict):
+    """
+    Pays ONE installment through the STP/SPEI rail: debits the borrower's
+    wallet and credits the lender's wallet in the immutable ledger, then marks
+    the installment paid. No card, no Stripe. The card auto-charge below stays
+    as the dormant 2nd option.
+
+    POST /automated-payments/pay-spei
+    Body: { "companyId": int, "loanId": int, "installmentId": int, "clientId": int }
+    """
+    from modules.walletTransactions import post_entry, get_balance
+    from modules.azure_notifications import send_azure_push
+
+    company_id  = int(payload.get("companyId", 0))
+    loan_id     = int(payload.get("loanId", 0))
+    inst_id     = int(payload.get("installmentId", 0))
+    borrower_id = int(payload.get("clientId", 0))
+    if not (company_id and loan_id and inst_id and borrower_id):
+        return JSONResponse({"error": "companyId, loanId, installmentId y clientId son requeridos"}, status_code=400)
+
+    # The SP's 'list' action omits clientId/lenderId — read the row directly
+    # for ownership + counterpart (read-only; mutations stay in the SP).
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT clientId, lenderId, installmentNumber, amount, principal, interest, status, attemptCount "
+        "FROM loanInstallments WHERE installmentId = %s AND loanId = %s AND companyId = %s",
+        (inst_id, loan_id, company_id))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return JSONResponse({"error": f"Cuota {inst_id} no encontrada en el préstamo {loan_id}"}, status_code=404)
+    inst_client_id, lender_id, inst_number = int(row[0]), int(row[1]), int(row[2])
+    amount, principal, interest = float(row[3]), float(row[4] or 0), float(row[5] or 0)
+    inst_status, attempt_count = row[6], int(row[7] or 0)
+    if inst_client_id != borrower_id:
+        return JSONResponse({"error": "La cuota no pertenece a este cliente"}, status_code=403)
+    if inst_status == "paid":
+        return JSONResponse({"paid": True, "replayed": True, "installmentId": inst_id}, status_code=200)
+    inst = {"installmentNumber": inst_number, "attemptCount": attempt_count}
+
+    bal = get_balance(company_id, borrower_id)
+    available = float(bal.get("availableBalance", 0))
+    if available < amount:
+        return JSONResponse({
+            "error": f"Saldo insuficiente: la cuota es de ${amount:,.2f} y tu billetera tiene ${available:,.2f}. Deposita por SPEI primero.",
+            "availableBalance": available, "amount": amount,
+        }, status_code=402)
+
+    debit = post_entry(
+        company_id=company_id, client_id=borrower_id,
+        entry_type="LOAN_REPAYMENT", direction="D", amount_mxn=amount,
+        idempotency_key=f"cuota:{inst_id}:borrower",
+        reference_type="loanInstallment", reference_id=inst_id,
+        note=f"Pago cuota #{inst.get('installmentNumber')} préstamo {loan_id} (SPEI)")
+    if debit.get("error"):
+        return JSONResponse({"error": debit["error"]}, status_code=400)
+
+    # Lender credit split per the catalog design: principal + interest as
+    # separate entries (any rounding residue rides on the principal entry).
+    credit_principal = post_entry(
+        company_id=company_id, client_id=lender_id,
+        entry_type="REPAYMENT_PRINCIPAL", direction="C",
+        amount_mxn=round(amount - interest, 2),
+        idempotency_key=f"cuota:{inst_id}:lender:principal",
+        reference_type="loanInstallment", reference_id=inst_id,
+        note=f"Capital cuota #{inst_number} préstamo {loan_id} (SPEI)")
+    credit_interest = {"error": None}
+    if not credit_principal.get("error") and interest > 0:
+        credit_interest = post_entry(
+            company_id=company_id, client_id=lender_id,
+            entry_type="REPAYMENT_INTEREST", direction="C", amount_mxn=interest,
+            idempotency_key=f"cuota:{inst_id}:lender:interest",
+            reference_type="loanInstallment", reference_id=inst_id,
+            note=f"Interés cuota #{inst_number} préstamo {loan_id} (SPEI)")
+    if credit_principal.get("error") or credit_interest.get("error"):
+        # The borrower was already debited — reverse so no money is stranded.
+        post_entry(
+            company_id=company_id, client_id=borrower_id,
+            entry_type="REVERSAL", direction="C", amount_mxn=amount,
+            idempotency_key=f"cuota:{inst_id}:borrower:reversal",
+            reference_type="loanInstallment", reference_id=inst_id,
+            note=f"Reversa pago cuota #{inst_number} — abono al prestamista falló")
+        err = credit_principal.get("error") or credit_interest.get("error")
+        return JSONResponse({"error": f"No se pudo abonar al prestamista (pago revertido): {err}"}, status_code=500)
+    credit = credit_interest if interest > 0 and credit_interest.get("balanceAfter") is not None else credit_principal
+
+    _sp_installments({
+        "action":        "update_status",
+        "installmentId": inst_id,
+        "status":        "paid",
+        "paidAt":        datetime.now(timezone.utc).isoformat(),
+        "attemptCount":  int(inst.get("attemptCount", 0)) + 1,
+    })
+
+    try:
+        # Hub tags are user_{userId}; lender_id is a CLIENT id — resolve first
+        # or the push targets an empty tag and vanishes silently.
+        conn = _conn()
+        cur = conn.cursor()
+        cur.execute("SELECT TOP 1 userId FROM users WHERE clientId = %s", (lender_id,))
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            await send_azure_push(
+                "💵 Cuota recibida",
+                f"Cuota #{inst.get('installmentNumber')} de ${amount:,.2f} pagada por SPEI.",
+                row[0],
+                data={"navigationRoute": "/p2p-lending"})
+    except Exception as e:
+        print(f"[automatedPayments] pay_installment_spei: push failed: {e}")
+
+    print(f"[automatedPayments] pay_installment_spei: PAID inst={inst_id} ${amount} borrower={borrower_id} → lender={lender_id}")
+    return JSONResponse({
+        "paid": True, "rail": "spei", "installmentId": inst_id, "amount": amount,
+        "borrowerBalanceAfter": debit.get("balanceAfter"),
+        "lenderBalanceAfter": credit.get("balanceAfter"),
+    }, status_code=200)
+
+
 # ── Auto-charge due installments (cron job endpoint) ─────────────────────────
 
 async def charge_due_installments(payload: dict):

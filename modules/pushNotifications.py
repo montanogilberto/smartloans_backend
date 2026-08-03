@@ -79,6 +79,7 @@ async def pushNotifications_sp(json_file: dict):
         if action == 1 and is_success:
             title = payload_item.get("title", "New Notification") if isinstance(payload_item, dict) else "New Notification"
             message = payload_item.get("message", "") if isinstance(payload_item, dict) else ""
+            navigation_route = payload_item.get("navigationRoute") if isinstance(payload_item, dict) else None
             target_type = (payload_item.get("targetType") or "User") if isinstance(payload_item, dict) else "User"
             target_user_id = payload_item.get("targetUserId") if isinstance(payload_item, dict) else None
             target_company_id = payload_item.get("targetCompanyId") if isinstance(payload_item, dict) else None
@@ -138,7 +139,9 @@ async def pushNotifications_sp(json_file: dict):
                 sent_count = 0
                 for user_id in recipient_ids:
                     try:
-                        azure_result = await send_azure_push(title, message, user_id)
+                        azure_result = await send_azure_push(
+                            title, message, user_id,
+                            data={"navigationRoute": navigation_route} if navigation_route else None)
                         was_sent = bool(isinstance(azure_result, dict) and azure_result.get("sent") is True)
                         if was_sent:
                             sent_count += 1

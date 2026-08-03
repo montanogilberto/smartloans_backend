@@ -66,25 +66,31 @@ def _build_installation_id(user_id, token: str, platform: str) -> str:
     return f"u{user_id}_{digest[:32]}"
 
 
-def _build_payload_and_format(fmt: str, title: str, message: str, target_user_id) -> tuple[dict, str]:
-    """Return (payload, nh_format_header) for a given send format."""
+def _build_payload_and_format(fmt: str, title: str, message: str, target_user_id,
+                              data: dict | None = None) -> tuple[dict, str]:
+    """Return (payload, nh_format_header) for a given send format.
+
+    `data` rides along as key/value strings (e.g. navigationRoute) so the app
+    can act on a notification tap instead of just opening."""
+    extra = {str(k): str(v) for k, v in (data or {}).items() if v is not None}
     if fmt == "fcmv1":
-        return (
-            {"message": {
-                "notification": {"title": title, "body": message},
-                "android": {"notification": {"channel_id": "push_notifications", "sound": "default"}},
-            }},
-            "fcmv1",
-        )
+        msg: dict = {
+            "notification": {"title": title, "body": message},
+            "android": {"notification": {"channel_id": "push_notifications", "sound": "default"}},
+        }
+        if extra:
+            msg["data"] = extra
+        return ({"message": msg}, "fcmv1")
     if fmt == "apns":
         return (
-            {"aps": {"alert": {"title": title, "body": message}}},
+            {"aps": {"alert": {"title": title, "body": message}}, **extra},
             "apple",
         )
     # gcm legacy fallback
     return (
         {"data": {"title": title, "body": message,
-                  "targetUserId": str(target_user_id) if target_user_id else ""}},
+                  "targetUserId": str(target_user_id) if target_user_id else "",
+                  **extra}},
         "gcm",
     )
 
@@ -192,8 +198,10 @@ async def register_device_token(user_id, token: str, platform: str):
         }
 
 
-async def send_azure_push(title: str, message: str, target_user_id: int = None):
-    logger.info("[azure_notifications] send_azure_push. title=%r user_id=%s", title, target_user_id)
+async def send_azure_push(title: str, message: str, target_user_id: int = None,
+                          data: dict | None = None):
+    logger.info("[azure_notifications] send_azure_push. title=%r user_id=%s data=%s",
+                title, target_user_id, data)
 
     connection_string = os.getenv("AZURE_NOTIFICATION_HUB_CONNECTION_STRING", "")
     hub_name = os.getenv("AZURE_NOTIFICATION_HUB_NAME", "")
@@ -232,7 +240,7 @@ async def send_azure_push(title: str, message: str, target_user_id: int = None):
 
     results = []
     for fmt in formats:
-        payload, nh_header = _build_payload_and_format(fmt, title, message, target_user_id)
+        payload, nh_header = _build_payload_and_format(fmt, title, message, target_user_id, data)
         result = await _send_single(url, sas_token, nh_header, payload, target_user_id)
         results.append(result)
 

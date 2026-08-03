@@ -60,9 +60,13 @@ BEGIN
 
         ELSE IF @action = 2 -- UPDATE / CLOSE
         BEGIN
+            -- availableCapital actualizable: al aceptarse una propuesta el
+            -- capital anunciado se consume — la oferta debe reflejarlo (y
+            -- desactivarse en 0) para no anunciar dinero ya prestado.
             UPDATE [dbo].[loanOffers]
-            SET isActive    = ISNULL(@isActive, isActive),
-                description = ISNULL(@description, description)
+            SET isActive         = ISNULL(@isActive, isActive),
+                description      = ISNULL(@description, description),
+                availableCapital = ISNULL(@availableCapital, availableCapital)
             WHERE offerId = @offerId AND companyId = @companyId
 
             SELECT '{"message":"updated","offerId":' + CAST(@offerId AS NVARCHAR) + '}' AS [jsonResult]
