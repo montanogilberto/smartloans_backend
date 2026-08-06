@@ -752,14 +752,55 @@ async def _settle_wallet_top_up(tx: dict):
         print(f"[stripe][topup] wallet credit FAILED: {e}")
 
 
+def _persist_intent_payment_method(intent, tx: dict, company_id):
+    """Persist the card used in a succeeded PaymentIntent into
+    savedPaymentMethods (checkbox "guardar tarjeta" del frontend) — same table
+    /automated-payments/saved-method reads for the auto-charge of cuotas.
+    Best-effort: a failure here must never fail the confirm response."""
+    try:
+        pm_field = intent["payment_method"]
+        pm_id = getattr(pm_field, "id", None) or pm_field
+        if not pm_id:
+            print("[stripe][confirm] save card skipped: intent has no payment_method")
+            return
+        pm = stripe.PaymentMethod.retrieve(pm_id)
+        card = getattr(pm, "card", None)
+        if not card:
+            # OXXO / non-card methods can't be reused for auto-charges.
+            print(f"[stripe][confirm] save card skipped: pm {pm_id} is not a card")
+            return
+        client_id = tx.get("fromClientId") or getattr(intent["metadata"], "fromClientId", None)
+        if not client_id:
+            print("[stripe][confirm] save card skipped: no fromClientId on tx/metadata")
+            return
+        # Import perezoso: automatedPayments importa de este módulo, un import
+        # a nivel de módulo crearía un ciclo (mismo patrón que credit_wallet).
+        from modules.automatedPayments import _sp_saved_methods
+        result = _sp_saved_methods({
+            "action": "upsert",
+            "clientId": int(client_id),
+            "companyId": company_id,
+            "stripePaymentMethodId": pm_id,
+            "last4":       getattr(card, "last4", ""),
+            "brand":       getattr(card, "brand", ""),
+            "expiryMonth": getattr(card, "exp_month", None),
+            "expiryYear":  getattr(card, "exp_year", None),
+        })
+        print(f"[stripe][confirm] card SAVED clientId={client_id} pm={pm_id} → {result}")
+    except Exception as e:
+        print(f"[stripe][confirm] save card FAILED (non-fatal): {type(e).__name__}: {e}")
+
+
 async def confirm_payment_intent(payload: dict):
     """
     Verify a PaymentIntent succeeded (called by frontend after confirmation).
     Updates SQL transaction status to 'succeeded' and, for wallet top-ups,
-    credits the client's wallet ledger exactly once.
+    credits the client's wallet ledger exactly once. With savePaymentMethod
+    (checkbox del frontend) also persists the card to savedPaymentMethods.
     """
     payment_intent_id = payload.get("paymentIntentId")
     company_id        = payload.get("companyId")
+    save_pm           = bool(payload.get("savePaymentMethod"))
 
     if not payment_intent_id:
         return JSONResponse({"error": "paymentIntentId required"}, status_code=400)
@@ -774,6 +815,17 @@ async def confirm_payment_intent(payload: dict):
                 "companyId": company_id,
             })
             await _settle_wallet_top_up(tx)
+            if save_pm and tx.get("fromClientId"):
+                # Mock card, same shape save_payment_method uses in dev.
+                from modules.automatedPayments import _sp_saved_methods
+                _sp_saved_methods({
+                    "action": "upsert",
+                    "clientId": tx.get("fromClientId"),
+                    "companyId": company_id,
+                    "stripePaymentMethodId": "pm_mock_card",
+                    "last4": "4242", "brand": "visa",
+                    "expiryMonth": 12, "expiryYear": 2030,
+                })
             return JSONResponse({"status": "succeeded", "stripePaymentIntentId": payment_intent_id, **tx}, status_code=200)
 
         intent = stripe.PaymentIntent.retrieve(payment_intent_id)
@@ -793,6 +845,9 @@ async def confirm_payment_intent(payload: dict):
             return JSONResponse({"error": f"Payment status: {status}"}, status_code=400)
 
         await _settle_wallet_top_up(tx)
+
+        if save_pm:
+            _persist_intent_payment_method(intent, tx, company_id)
 
         return JSONResponse({"status": status, "stripePaymentIntentId": payment_intent_id, **tx}, status_code=200)
 
