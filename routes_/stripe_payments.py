@@ -146,7 +146,11 @@ Called by the frontend after stripe.confirmPayment() resolves without error.
 Retrieves the PaymentIntent from Stripe server-side to verify its status
 and updates the local transaction record.
 
-Body: { "paymentIntentId": str, "companyId": int }
+savePaymentMethod=true (checkbox "guardar tarjeta" del frontend) persiste la
+tarjeta usada en este pago en savedPaymentMethods (sp_savedPaymentMethods),
+la misma tabla que consulta /automated-payments/saved-method.
+
+Body: { "paymentIntentId": str, "companyId": int, "savePaymentMethod"?: bool }
 Returns: { "status": str, "stripePaymentIntentId": str, ...transactionFields }
 """,
 )

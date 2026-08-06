@@ -125,8 +125,9 @@ async def _send_single(url: str, sas_token: str, fmt: str, payload: dict,
                 "status_code": 500, "error": str(e)}
 
 
-async def register_device_token(user_id, token: str, platform: str):
-    logger.info("[azure_notifications] register_device_token. user_id=%s platform=%s", user_id, platform)
+async def register_device_token(user_id, token: str, platform: str, app_env: str = None):
+    logger.info("[azure_notifications] register_device_token. user_id=%s platform=%s app_env=%s",
+                user_id, platform, app_env)
 
     if user_id is None or not str(user_id).strip():
         return {"success": False, "reason": "missing_user_id", "status_code": 400}
@@ -158,6 +159,13 @@ async def register_device_token(user_id, token: str, platform: str):
     sas_token = generate_sas_token(uri, key_name, key)
 
     tags = [f"user_{user_id}"]
+    # Flag dev/prod: distingue dispositivos de desarrolladores de usuarios
+    # reales en el Hub (permite enviar pushes de prueba solo a tag env_dev y
+    # auditar qué instalaciones son builds de desarrollo).
+    if app_env and str(app_env).strip():
+        safe_env = "".join(c for c in str(app_env).strip().lower() if c.isalnum() or c in "-_")[:24]
+        if safe_env:
+            tags.append(f"env_{safe_env}")
     payload = {
         "installationId": installation_id,
         "platform": nh_platform,
