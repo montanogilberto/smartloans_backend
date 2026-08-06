@@ -721,31 +721,65 @@ async def create_payment_intent(payload: dict):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-async def _settle_wallet_top_up(tx: dict):
+# Fórmula publicada Stripe MX (fallback): 3.6% + $3 MXN + IVA 16% sobre la comisión.
+_STRIPE_MX_PCT, _STRIPE_MX_FIXED, _IVA = 0.036, 3.0, 0.16
+
+
+def _stripe_fee_and_net_mxn(intent, gross_mxn: float) -> tuple[float, float]:
+    """(feeMXN, netMXN) REALES del balance transaction del cargo. Si el intent
+    no está disponible/expandido, cae a la fórmula publicada de Stripe MX."""
+    try:
+        if intent is not None:
+            charge = intent["latest_charge"]
+            bt = charge["balance_transaction"] if charge else None
+            if bt is not None and not isinstance(bt, str):
+                return round(float(bt["fee"]) / 100.0, 2), round(float(bt["net"]) / 100.0, 2)
+    except Exception as e:
+        print(f"[stripe][fee] balance transaction unavailable, using formula: {e}")
+    fee = round((gross_mxn * _STRIPE_MX_PCT + _STRIPE_MX_FIXED) * (1 + _IVA), 2)
+    return fee, round(gross_mxn - fee, 2)
+
+
+async def _settle_wallet_top_up(tx: dict, net_mxn: float = None):
     """Credit the client's wallet ledger for a wallet_top_up transaction that
     JUST transitioned to succeeded. Runs from both the app's confirm call and
     the Stripe webhook — sp_stripe_transactions.update_status returns the
     previous status, so only the caller that performed the pending→succeeded
-    flip credits; the other sees prevStatus='succeeded' and skips. Without this
-    the charge succeeded but clientWallets never moved, so the app's "Saldo en
-    cartera" stayed at $0 and no funds could be reserved/disbursed."""
+    flip credits; the other sees prevStatus='succeeded' and skips.
+
+    Se acredita el NETO real (bruto − comisión Stripe): si el caller no lo
+    pasa (webhook), se resuelve aquí desde el balance transaction del intent,
+    con la fórmula MX como fallback. El cliente ve la comisión en la app."""
     try:
         if not isinstance(tx, dict) or tx.get("paymentType") != "wallet_top_up":
             return
         if tx.get("status") != "succeeded" or tx.get("prevStatus") == "succeeded":
             print(f"[stripe][topup] settle skipped (status={tx.get('status')}, prev={tx.get('prevStatus')})")
             return
-        amount_mxn = float(tx.get("amount", 0)) / 100.0  # stored in centavos
+        gross_mxn  = float(tx.get("amount", 0)) / 100.0  # stored in centavos
         client_id  = tx.get("fromClientId")
         company_id = tx.get("companyId")
-        if not client_id or amount_mxn <= 0:
+        if not client_id or gross_mxn <= 0:
             return
+
+        if net_mxn is None:
+            intent_id = tx.get("stripePaymentIntentId") or ""
+            intent = None
+            if intent_id and not intent_id.startswith("pi_mock_"):
+                try:
+                    intent = stripe.PaymentIntent.retrieve(
+                        intent_id, expand=["latest_charge.balance_transaction"])
+                except Exception as e:
+                    print(f"[stripe][topup] intent retrieve for net FAILED: {e}")
+            _fee, net_mxn = _stripe_fee_and_net_mxn(intent, gross_mxn)
+
         from modules.walletBalance import credit_wallet
         await credit_wallet({
             "clientId": client_id, "companyId": company_id,
-            "amountMXN": amount_mxn, "type": "top_up",
+            "amountMXN": net_mxn, "type": "top_up",
         })
-        print(f"[stripe][topup] wallet CREDITED clientId={client_id} +{amount_mxn} MXN (intent {tx.get('stripePaymentIntentId')})")
+        print(f"[stripe][topup] wallet CREDITED clientId={client_id} +{net_mxn} MXN neto "
+              f"(bruto {gross_mxn}, intent {tx.get('stripePaymentIntentId')})")
     except Exception as e:
         # Ledger credit must not fail the confirm/webhook response; the
         # transaction row is already 'succeeded' for reconciliation.
@@ -791,12 +825,91 @@ def _persist_intent_payment_method(intent, tx: dict, company_id):
         print(f"[stripe][confirm] save card FAILED (non-fatal): {type(e).__name__}: {e}")
 
 
+def _client_contact(client_id) -> dict:
+    """Email y nombre del cliente para el comprobante — lectura directa,
+    best-effort (un fallo aquí nunca afecta la transacción)."""
+    conn = None
+    try:
+        conn = connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT email, first_name, last_name FROM dbo.clients WHERE clientId = %s",
+            (client_id,))
+        row = cur.fetchone()
+        if not row:
+            return {}
+        return {"email": (row[0] or "").strip(),
+                "name": f"{row[1] or ''} {row[2] or ''}".strip() or "cliente"}
+    except Exception as e:
+        print(f"[stripe][receipt] client lookup FAILED: {e}")
+        return {}
+    finally:
+        if conn:
+            conn.close()
+
+
+def _send_transaction_receipt_email(tx: dict, intent_id: str,
+                                    fee_mxn: float, net_mxn: float):
+    """Comprobante por correo de cada movimiento (el "ticket" del cliente):
+    folio = transactionId, referencia Stripe, montos y comisión — equivalente
+    al comprobante bancario. Corre en un hilo aparte y es best-effort: nunca
+    retrasa ni rompe la respuesta del confirm. El registro persistente por
+    canal (email/push/inapp) con estado pending→sent→confirmed es el módulo
+    transactionNotification del factory (PRD ya autorado)."""
+    try:
+        client_id = tx.get("fromClientId")
+        if not client_id:
+            return
+        contact = _client_contact(client_id)
+        email = contact.get("email") or ""
+        if "@" not in email:
+            print(f"[stripe][receipt] clientId={client_id} sin email — comprobante omitido")
+            return
+        gross_mxn = float(tx.get("amount", 0)) / 100.0
+        folio = tx.get("transactionId") or "—"
+        payment_type = tx.get("paymentType") or ""
+        concepto = ("Recarga de cartera P2P" if payment_type == "wallet_top_up"
+                    else "Pago de préstamo" if payment_type == "loan_repayment"
+                    else payment_type or "Movimiento")
+        fecha = datetime.utcnow().strftime("%d/%m/%Y %H:%M UTC")
+        lineas = [
+            f"Hola {contact.get('name', 'cliente')},",
+            "",
+            "Tu operación en SmartLoans fue procesada con éxito.",
+            "",
+            f"Concepto:            {concepto}",
+            f"Folio de operación:  {folio}",
+            f"Referencia Stripe:   {intent_id}",
+            f"Fecha y hora:        {fecha}",
+            "",
+            f"Monto pagado:        ${gross_mxn:,.2f} MXN",
+            f"Comisión Stripe:     -${fee_mxn:,.2f} MXN",
+        ]
+        if payment_type == "wallet_top_up":
+            lineas.append(f"Abonado a tu cartera: ${net_mxn:,.2f} MXN")
+        lineas += [
+            "",
+            "Puedes consultar este movimiento en la app SmartLoans → Movimientos.",
+            "",
+            "— SmartLoans · POS GMO",
+            "Este correo es el comprobante informativo de tu transacción.",
+        ]
+        subject = f"Comprobante SmartLoans — {concepto} ${gross_mxn:,.2f} MXN (folio {folio})"
+        # Import perezoso para no acoplar módulos al cargar.
+        from modules.users import _send_email
+        _send_email(email, subject, "\n".join(lineas))
+        print(f"[stripe][receipt] comprobante ENVIADO a {email} folio={folio}")
+    except Exception as e:
+        print(f"[stripe][receipt] email FAILED (non-fatal): {type(e).__name__}: {e}")
+
+
 async def confirm_payment_intent(payload: dict):
     """
     Verify a PaymentIntent succeeded (called by frontend after confirmation).
     Updates SQL transaction status to 'succeeded' and, for wallet top-ups,
     credits the client's wallet ledger exactly once. With savePaymentMethod
     (checkbox del frontend) also persists the card to savedPaymentMethods.
+    Envía además el comprobante por correo (folio + referencia + comisión).
     """
     payment_intent_id = payload.get("paymentIntentId")
     company_id        = payload.get("companyId")
@@ -814,7 +927,9 @@ async def confirm_payment_intent(payload: dict):
                 "status": "succeeded",
                 "companyId": company_id,
             })
-            await _settle_wallet_top_up(tx)
+            mock_gross = float(tx.get("amount", 0)) / 100.0
+            mock_fee, mock_net = _stripe_fee_and_net_mxn(None, mock_gross)
+            await _settle_wallet_top_up(tx, net_mxn=mock_net)
             if save_pm and tx.get("fromClientId"):
                 # Mock card, same shape save_payment_method uses in dev.
                 from modules.automatedPayments import _sp_saved_methods
@@ -826,9 +941,13 @@ async def confirm_payment_intent(payload: dict):
                     "last4": "4242", "brand": "visa",
                     "expiryMonth": 12, "expiryYear": 2030,
                 })
-            return JSONResponse({"status": "succeeded", "stripePaymentIntentId": payment_intent_id, **tx}, status_code=200)
+            return JSONResponse({"status": "succeeded", "stripePaymentIntentId": payment_intent_id,
+                                 "feeMXN": mock_fee, "netCreditedMXN": mock_net, **tx}, status_code=200)
 
-        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        # expand: el balance transaction trae la comisión REAL de Stripe para
+        # acreditar la cartera con el neto y reportarla al cliente.
+        intent = stripe.PaymentIntent.retrieve(
+            payment_intent_id, expand=["latest_charge.balance_transaction"])
         # Bracket access, not .get(): stripe 15.x StripeObject is no longer a
         # dict — .get() raises AttributeError and this endpoint 500'd on every
         # call (same bug automatedPayments already fixed).
@@ -844,12 +963,23 @@ async def confirm_payment_intent(payload: dict):
         if status != "succeeded":
             return JSONResponse({"error": f"Payment status: {status}"}, status_code=400)
 
-        await _settle_wallet_top_up(tx)
+        gross_mxn = float(intent["amount"]) / 100.0
+        fee_mxn, net_mxn = _stripe_fee_and_net_mxn(intent, gross_mxn)
+        await _settle_wallet_top_up(tx, net_mxn=net_mxn)
 
         if save_pm:
             _persist_intent_payment_method(intent, tx, company_id)
 
-        return JSONResponse({"status": status, "stripePaymentIntentId": payment_intent_id, **tx}, status_code=200)
+        # Comprobante por correo en un hilo aparte — no retrasa la respuesta.
+        import threading
+        threading.Thread(
+            target=_send_transaction_receipt_email,
+            args=(tx, payment_intent_id, fee_mxn, net_mxn),
+            daemon=True,
+        ).start()
+
+        return JSONResponse({"status": status, "stripePaymentIntentId": payment_intent_id,
+                             "feeMXN": fee_mxn, "netCreditedMXN": net_mxn, **tx}, status_code=200)
 
     except stripe.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
