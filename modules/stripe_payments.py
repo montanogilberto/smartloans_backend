@@ -970,6 +970,14 @@ async def confirm_payment_intent(payload: dict):
         if save_pm:
             _persist_intent_payment_method(intent, tx, company_id)
 
+        # Comprobante por correo en un hilo aparte — no retrasa la respuesta.
+        import threading
+        threading.Thread(
+            target=_send_transaction_receipt_email,
+            args=(tx, payment_intent_id, fee_mxn, net_mxn),
+            daemon=True,
+        ).start()
+
         return JSONResponse({"status": status, "stripePaymentIntentId": payment_intent_id,
                              "feeMXN": fee_mxn, "netCreditedMXN": net_mxn, **tx}, status_code=200)
 
