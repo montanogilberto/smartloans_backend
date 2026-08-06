@@ -252,6 +252,7 @@ async def register_device_sp(json_file: dict):
         user_id = json_file.get("userId") if isinstance(json_file, dict) else None
         token = json_file.get("token") if isinstance(json_file, dict) else None
         platform = json_file.get("platform") if isinstance(json_file, dict) else None
+        app_env = json_file.get("appEnv") if isinstance(json_file, dict) else None
 
         if user_id is None or token is None or platform is None:
             return JSONResponse(
@@ -262,7 +263,7 @@ async def register_device_sp(json_file: dict):
                 status_code=400,
             )
 
-        result = await register_device_token(user_id=user_id, token=token, platform=platform)
+        result = await register_device_token(user_id=user_id, token=token, platform=platform, app_env=app_env)
 
         if result.get("success"):
             return JSONResponse(
