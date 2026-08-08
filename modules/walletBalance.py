@@ -19,6 +19,23 @@ from fastapi.responses import JSONResponse
 from databases import connection
 import json
 from datetime import datetime, timezone
+from observability.logger import log_workflow_step
+
+
+def _log_wallet_move(action: str, client_id, amount_mxn: float, move_type: str, result: dict):
+    """Rastro de dinero: cada mutación de cartera queda en workflowLogs
+    (workflow money_trail) — con esto "¿dónde está el dinero?" se responde
+    consultando observabilidad. Nunca rompe la operación."""
+    log_workflow_step(
+        f"Wallet {action}",
+        workflow_name="money_trail",
+        entity="clientWallets",
+        entity_id=int(client_id) if client_id else None,
+        action=move_type,
+        status="FAILED" if result.get("error") else "SUCCESS",
+        message=f"{action} ${amount_mxn:,.2f} MXN ({move_type}) → "
+                f"available={result.get('availableBalance')} reserved={result.get('reservedBalance')}",
+    )
 
 
 def _conn():
@@ -92,6 +109,7 @@ async def credit_wallet(payload: dict):
         "creditType": credit_type,
         "updatedAt": datetime.now(timezone.utc).isoformat(),
     })
+    _log_wallet_move("Credit", client_id, amount_mxn, credit_type, result)
     return JSONResponse({"wallet": result}, status_code=200)
 
 
@@ -113,6 +131,7 @@ async def debit_wallet(payload: dict):
         "debitType": debit_type,
         "updatedAt": datetime.now(timezone.utc).isoformat(),
     })
+    _log_wallet_move("Debit", client_id, amount_mxn, debit_type, result)
 
     if result.get("error"):
         return JSONResponse({"error": result["error"]}, status_code=400)

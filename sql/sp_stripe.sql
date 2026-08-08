@@ -38,6 +38,17 @@ IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.stripe
 ALTER TABLE [dbo].[stripeConnectedAccounts] ADD identitySubmitted BIT NOT NULL DEFAULT 0
 GO
 
+-- Backfill ToS acceptance for pre-existing databases (no-op on fresh create).
+-- Stripe itself already requires + stores tos_acceptance{date,ip} on the Custom
+-- account (legal source of truth) — these columns mirror that locally so our
+-- own DB/admin screens can show "¿aceptó los términos?" without an extra
+-- Stripe API call per client.
+IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.stripeConnectedAccounts') AND name = 'tosAccepted')
+ALTER TABLE [dbo].[stripeConnectedAccounts] ADD
+    tosAccepted    BIT NOT NULL DEFAULT 0,
+    tosAcceptedAt  DATETIME2 NULL
+GO
+
 -- ── Table: stripeTransactions ───────────────────────────────
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'stripeTransactions')
 CREATE TABLE [dbo].[stripeTransactions] (
@@ -92,6 +103,8 @@ BEGIN
         DECLARE @externalAccountLast4    NVARCHAR(4)   = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].externalAccountLast4')
         DECLARE @externalAccountType     NVARCHAR(20)  = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].externalAccountType')
         DECLARE @externalAccountBankName NVARCHAR(100) = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].externalAccountBankName')
+        DECLARE @tosAccepted             BIT           = JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].tosAccepted')
+        DECLARE @tosAcceptedAt           DATETIME2     = TRY_CONVERT(DATETIME2, JSON_VALUE(@pjsonfile, '$.stripeAccounts[0].tosAcceptedAt'), 127)
 
         IF @action = 'upsert'
         BEGIN
@@ -108,13 +121,20 @@ BEGIN
                            externalAccountLast4    = ISNULL(@externalAccountLast4,    target.externalAccountLast4),
                            externalAccountType     = ISNULL(@externalAccountType,     target.externalAccountType),
                            externalAccountBankName = ISNULL(@externalAccountBankName, target.externalAccountBankName),
+                           -- Sticky: una vez aceptado, nunca se revierte a 0 en
+                           -- upserts posteriores que no traen tosAccepted (p.ej.
+                           -- attach_external_bank_account).
+                           tosAccepted             = CASE WHEN @tosAccepted = 1 THEN 1 ELSE target.tosAccepted END,
+                           tosAcceptedAt           = ISNULL(@tosAcceptedAt,           target.tosAcceptedAt),
                            updated_at              = GETUTCDATE()
             WHEN NOT MATCHED THEN
                 INSERT (clientId, companyId, connectedAccountId, chargesEnabled, payoutsEnabled, detailsSubmitted,
-                        identitySubmitted, hasExternalAccount, externalAccountLast4, externalAccountType, externalAccountBankName)
+                        identitySubmitted, hasExternalAccount, externalAccountLast4, externalAccountType, externalAccountBankName,
+                        tosAccepted, tosAcceptedAt)
                 VALUES (@clientId, @companyId, @connectedAccountId,
                         ISNULL(@chargesEnabled, 0), ISNULL(@payoutsEnabled, 0), ISNULL(@detailsSubmitted, 0),
-                        ISNULL(@identitySubmitted, 0), ISNULL(@hasExternalAccount, 0), @externalAccountLast4, @externalAccountType, @externalAccountBankName);
+                        ISNULL(@identitySubmitted, 0), ISNULL(@hasExternalAccount, 0), @externalAccountLast4, @externalAccountType, @externalAccountBankName,
+                        ISNULL(@tosAccepted, 0), @tosAcceptedAt);
 
             SELECT (SELECT TOP 1 * FROM [dbo].[stripeConnectedAccounts]
                     WHERE clientId = @clientId AND companyId = @companyId
@@ -127,6 +147,7 @@ BEGIN
                 (SELECT TOP 1 connectedAccountId, clientId, companyId,
                         chargesEnabled, payoutsEnabled, detailsSubmitted, identitySubmitted,
                         hasExternalAccount, externalAccountLast4, externalAccountType, externalAccountBankName,
+                        tosAccepted, CONVERT(NVARCHAR, tosAcceptedAt, 127) AS tosAcceptedAt,
                         CONVERT(NVARCHAR, created_At, 127) AS created_At
                  FROM [dbo].[stripeConnectedAccounts]
                  WHERE clientId = @clientId AND companyId = @companyId

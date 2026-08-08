@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from databases import connection
 from datetime import datetime
 from modules.walletBalance import debit_wallet
+from observability.logger import log_workflow_step, log_integration
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -86,10 +87,17 @@ def _external_account_info(acct):
     return True, last4, ext_type, bank_name
 
 
-def _persist_and_serialize(acct, client_id: int, company_id: int) -> dict:
+def _persist_and_serialize(acct, client_id: int, company_id: int,
+                           tos_accepted_at: str = None) -> dict:
     """Upsert the connected account's live status into SQL (via SP) and return
     the ConnectedAccount shape the mobile app expects. `acct` must be retrieved
-    with expand=["external_accounts"]."""
+    with expand=["external_accounts"].
+
+    tos_accepted_at: ISO timestamp, passed ONLY by submit_connected_account_kyc
+    right after Stripe accepts tos_acceptance — mirrors that legal record into
+    our own DB (sp_stripe_connectedAccounts.tosAccepted/tosAcceptedAt) so it's
+    visible without a Stripe API call. Other callers (create/attach) omit it;
+    the SP's upsert is sticky and never un-sets an already-accepted flag."""
     charges   = getattr(acct, "charges_enabled", False)
     payouts   = getattr(acct, "payouts_enabled", False)
     submitted = getattr(acct, "details_submitted", False)
@@ -102,7 +110,7 @@ def _persist_and_serialize(acct, client_id: int, company_id: int) -> dict:
     # account is also attached, so it can't stand in for "identity done".
     individual = getattr(acct, "individual", None)
     identity_submitted = bool(individual and getattr(individual, "first_name", None))
-    _sp_connected_accounts({
+    upsert_payload = {
         "action": "upsert",
         "clientId": client_id,
         "companyId": company_id,
@@ -115,7 +123,11 @@ def _persist_and_serialize(acct, client_id: int, company_id: int) -> dict:
         "externalAccountLast4": ext_last4,
         "externalAccountType": ext_type,
         "externalAccountBankName": ext_bank,
-    })
+    }
+    if tos_accepted_at:
+        upsert_payload["tosAccepted"] = True
+        upsert_payload["tosAcceptedAt"] = tos_accepted_at
+    saved = _sp_connected_accounts(upsert_payload)
     return {
         "connectedAccountId": acct["id"],
         "clientId": client_id,
@@ -128,6 +140,8 @@ def _persist_and_serialize(acct, client_id: int, company_id: int) -> dict:
         "externalAccountLast4": ext_last4,
         "externalAccountType": ext_type,
         "externalAccountBankName": ext_bank,
+        "tosAccepted": saved.get("tosAccepted") if isinstance(saved, dict) else None,
+        "tosAcceptedAt": saved.get("tosAcceptedAt") if isinstance(saved, dict) else None,
     }
 
 
@@ -496,16 +510,22 @@ async def submit_connected_account_kyc(payload: dict):
         "business_type": "individual",
         "business_profile": business_profile,
     }
+    tos_accepted_at = None
     if payload.get("acceptedTos"):
+        tos_now = datetime.utcnow()
         modify_kwargs["tos_acceptance"] = {
-            "date": int(datetime.utcnow().timestamp()),
+            "date": int(tos_now.timestamp()),
             "ip":   payload.get("_ip") or "0.0.0.0",
         }
+        # Mismo instante enviado a Stripe (fuente legal) — se refleja en
+        # nuestra DB vía _persist_and_serialize más abajo.
+        tos_accepted_at = tos_now.isoformat()
 
     try:
         stripe.Account.modify(acct_id, **modify_kwargs)
         acct = stripe.Account.retrieve(acct_id, expand=["external_accounts"])
-        return JSONResponse({"account": _persist_and_serialize(acct, client_id, company_id)}, status_code=200)
+        return JSONResponse({"account": _persist_and_serialize(
+            acct, client_id, company_id, tos_accepted_at=tos_accepted_at)}, status_code=200)
     except stripe.StripeError as e:
         # oauth_not_supported here means the account is not Custom (almost
         # always an Express account created before the native-onboarding
@@ -704,6 +724,13 @@ async def create_payment_intent(payload: dict):
             "loanId": loan_id,
             "proposalId": proposal_id,
         })
+
+        # Rastro de dinero (observabilidad): integración Stripe + paso del workflow.
+        log_integration("stripe", "payment_intent_create",
+                        response={"paymentIntentId": intent["id"], "amountMXN": amount / 100.0})
+        log_workflow_step("Payment Intent Created", workflow_name="money_trail", action=payment_type,
+                          entity="stripeTransactions", entity_id=tx.get("transactionId"),
+                          message=f"${amount / 100.0:,.2f} MXN {payment_type} — intent {intent['id']}")
 
         return JSONResponse({
             "clientSecret": intent["client_secret"],
@@ -960,11 +987,21 @@ async def confirm_payment_intent(payload: dict):
             "companyId": company_id,
         })
 
+        log_integration("stripe", "payment_intent_retrieve",
+                        response={"paymentIntentId": payment_intent_id, "status": status})
+
         if status != "succeeded":
+            log_workflow_step("Charge Confirm Rejected", workflow_name="money_trail", status="FAILED",
+                              entity="stripeTransactions", entity_id=tx.get("transactionId"),
+                              message=f"intent {payment_intent_id} status={status}")
             return JSONResponse({"error": f"Payment status: {status}"}, status_code=400)
 
         gross_mxn = float(intent["amount"]) / 100.0
         fee_mxn, net_mxn = _stripe_fee_and_net_mxn(intent, gross_mxn)
+        log_workflow_step("Charge Confirmed", workflow_name="money_trail",
+                          action=tx.get("paymentType") or "charge",
+                          entity="stripeTransactions", entity_id=tx.get("transactionId"),
+                          message=f"bruto ${gross_mxn:,.2f} − comisión ${fee_mxn:,.2f} = neto ${net_mxn:,.2f} MXN")
         await _settle_wallet_top_up(tx, net_mxn=net_mxn)
 
         if save_pm:
@@ -1031,6 +1068,12 @@ async def disburse_loan(payload: dict):
                 "type": "loan_disbursement",
             },
         )
+
+        log_integration("stripe", "transfer_create",
+                        response={"transferId": transfer["id"], "amountMXN": amount_mxn})
+        log_workflow_step("Loan Disbursed via Stripe", workflow_name="money_trail", action="loan_disbursement",
+                          entity="loans", entity_id=loan_id,
+                          message=f"${amount_mxn:,.2f} MXN lender {lender_id} → borrower {borrower_id} (transfer {transfer['id']})")
 
         tx = _sp_transaction({
             "action": "insert",
@@ -1106,6 +1149,8 @@ async def withdraw_to_bank(payload: dict):
                 stripe_account=acct_id,
             )
             payout_id = payout["id"]
+            log_integration("stripe", "payout_create",
+                            response={"payoutId": payout_id, "amountMXN": amount_mxn})
 
         tx = _sp_transaction({
             "action": "insert",
@@ -1118,6 +1163,10 @@ async def withdraw_to_bank(payload: dict):
             "status": "succeeded",
             "stripePayoutId": payout_id,
         })
+
+        log_workflow_step("Withdrawal Payout", workflow_name="money_trail", action="wallet_withdrawal",
+                          entity="stripeTransactions", entity_id=tx.get("transactionId"),
+                          message=f"${amount_mxn:,.2f} MXN → banco externo de clientId {client_id} (payout {payout_id})")
 
         return JSONResponse({
             "status": "succeeded",
@@ -1190,6 +1239,10 @@ async def handle_webhook(request: Request):
         # Wallet top-ups: credit the ledger (no-op if the app's confirm call
         # already did — update_status returns prevStatus for idempotency).
         await _settle_wallet_top_up(tx)
+        log_workflow_step("Webhook Payment Succeeded", workflow_name="money_trail",
+                          entity="stripeTransactions",
+                          entity_id=tx.get("transactionId") if isinstance(tx, dict) else None,
+                          message=f"intent {intent_id}")
         print(f"[stripe][webhook] PaymentIntent succeeded: {intent_id}")
 
     elif event_type == "payment_intent.payment_failed":
