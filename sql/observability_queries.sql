@@ -162,3 +162,38 @@ WHERE  w.created_At >= DATEADD(DAY, -2, SYSUTCDATETIME())
 GROUP  BY w.workflowId
 HAVING SUM(CASE WHEN w.stepName LIKE '%Completed%' THEN 1 ELSE 0 END) = 0
 ORDER  BY lastStepAt DESC;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ¿DÓNDE ESTÁ EL DINERO? — rastro de dinero via observabilidad (2026-08)
+-- Todos los movimientos escriben workflowName='money_trail' en workflowLogs y
+-- las llamadas a Stripe/STP quedan en integrationLogs (service stripe|stp).
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- 1) Rastro cronológico de dinero (últimas 48 h): intent → cargo → cartera → SPEI/transfer
+SELECT created_At, stepName, actionName, status, entityName, entityId, message,
+       clientId, correlationId, workflowId
+FROM dbo.workflowLogs
+WHERE workflowName = 'money_trail'
+  AND created_At >= DATEADD(HOUR, -48, SYSUTCDATETIME())
+ORDER BY created_At DESC;
+
+-- 2) Rastro de UNA operación completa (por correlationId de cualquier paso)
+-- SELECT * FROM dbo.workflowLogs WHERE correlationId = '...' ORDER BY created_At;
+
+-- 3) Llamadas reales a los rieles (Stripe / STP): latencia, éxito, respuesta
+SELECT created_At, serviceName, operationName, status, latencyMs, responseJson
+FROM dbo.integrationLogs
+WHERE serviceName IN ('stripe', 'stp')
+ORDER BY created_At DESC;
+
+-- 4) Movimientos de dinero FALLIDOS (cargo rechazado, SPEI reversado)
+SELECT created_At, stepName, actionName, message, clientId, correlationId
+FROM dbo.workflowLogs
+WHERE workflowName = 'money_trail' AND status = 'FAILED'
+ORDER BY created_At DESC;
+
+-- 5) Conciliación rápida: por cliente, últimos movimientos de cartera con saldo resultante
+SELECT TOP 50 created_At, entityId AS clientId, stepName, actionName, message
+FROM dbo.workflowLogs
+WHERE workflowName = 'money_trail' AND entityName = 'clientWallets'
+ORDER BY created_At DESC;

@@ -22,6 +22,8 @@ from databases import connection
 
 from modules.stpProvider import send_spei
 from modules.walletTransactions import post_entry, get_balance
+from observability.logger import log_workflow_step
+from observability.integrations import timed_integration
 
 
 def _conn():
@@ -120,9 +122,13 @@ async def disburse_payment(payload: dict):
         return JSONResponse({"error": transfer["error"]}, status_code=500)
     transfer_id = transfer["transferId"]
 
-    # 5. The rail.
-    result = send_spei(clabe_destino=dest["clabe"], nombre_beneficiario=dest["holderName"],
-                       amount_mxn=amount, concepto=f"SmartLoans {purpose}"[:40], reference=idem_key)
+    # 5. The rail — cada llamada al proveedor queda en integrationLogs.
+    with timed_integration("stp", "send_spei",
+                           request={"amountMXN": amount, "purpose": purpose, "transferId": transfer_id}) as span:
+        result = send_spei(clabe_destino=dest["clabe"], nombre_beneficiario=dest["holderName"],
+                           amount_mxn=amount, concepto=f"SmartLoans {purpose}"[:40], reference=idem_key)
+        span.response = {"ok": result.get("ok"), "status": result.get("status"),
+                         "providerRef": result.get("providerRef"), "mock": result.get("mock")}
 
     # 6. Settle or reverse.
     if result.get("ok"):
@@ -131,6 +137,10 @@ async def disburse_payment(payload: dict):
             "status": result["status"], "providerRef": result.get("providerRef"),
             "cepUrl": result.get("cepUrl"),
         }]})
+        log_workflow_step("SPEI Sent", workflow_name="money_trail", action=purpose,
+                          entity="transfers", entity_id=transfer_id,
+                          message=f"${amount:,.2f} MXN → clientId {to_client}"
+                                  + (" (MOCK — sin dinero real)" if result.get("mock") else ""))
         print(f"[transfers] disburse SUCCESS transferId={transfer_id} status={result['status']} "
               f"providerRef={result.get('providerRef')}")
         return JSONResponse({**updated, "mock": result.get("mock", False)}, status_code=200)
@@ -143,6 +153,9 @@ async def disburse_payment(payload: dict):
         "action": 2, "transferId": transfer_id, "companyId": company_id,
         "status": "failed", "failureReason": result.get("error", "provider error"),
     }]})
+    log_workflow_step("SPEI Failed — ledger reversed", workflow_name="money_trail", action=purpose,
+                      status="FAILED", entity="transfers", entity_id=transfer_id,
+                      message=f"${amount:,.2f} MXN → clientId {to_client}: {result.get('error')}")
     print(f"[transfers] disburse FAILED transferId={transfer_id}: {result.get('error')} — ledger reversed")
     return JSONResponse({"error": result.get("error", "No se pudo enviar la transferencia."), **failed}, status_code=400)
 

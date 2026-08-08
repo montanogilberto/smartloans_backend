@@ -27,6 +27,7 @@ from datetime import datetime, timezone, date
 from dateutil.relativedelta import relativedelta
 from modules.stripe_payments import _sp_connected_accounts
 from modules.walletBalance import credit_wallet
+from observability.logger import log_workflow_step, log_integration
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 MAX_RETRY_ATTEMPTS = 3
@@ -512,6 +513,12 @@ async def charge_due_installments(payload: dict):
                     "type":          "auto_repayment",
                 },
             )
+
+            log_integration("stripe", "payment_intent_offsession_charge",
+                            response={"paymentIntentId": intent["id"], "amountMXN": amount_mxn})
+            log_workflow_step("Installment Auto-Charged", workflow_name="money_trail", action="auto_repayment",
+                              entity="loanInstallments", entity_id=inst_id,
+                              message=f"${amount_mxn:,.2f} MXN cuota #{item.get('installmentNumber')} préstamo {item.get('loanId')}")
 
             _sp_installments({
                 "action":                "update_status",
