@@ -183,6 +183,8 @@ from modules.companies import all_companies_sp
 from modules.automatedPayments import charge_due_installments
 from modules.onboardingReminders import check_onboarding_completeness
 from modules.registrationReminders import check_registration_completeness
+from modules.offerReminders import check_active_offers
+from modules.bankAccountReminders import check_missing_bank_accounts
 
 scheduler = AsyncIOScheduler()
 
@@ -215,6 +217,24 @@ async def _run_daily_onboarding_reminders():
             print(f"[scheduler] onboarding-reminders: failed for companyId={company_id}: {e}")
 
 
+async def _run_daily_offer_reminders():
+    for company_id in await _list_company_ids():
+        try:
+            await check_active_offers({"companyId": company_id})
+            print(f"[scheduler] offer-reminders: ran for companyId={company_id}")
+        except Exception as e:
+            print(f"[scheduler] offer-reminders: failed for companyId={company_id}: {e}")
+
+
+async def _run_daily_bank_account_reminders():
+    for company_id in await _list_company_ids():
+        try:
+            await check_missing_bank_accounts({"companyId": company_id})
+            print(f"[scheduler] bank-account-reminders: ran for companyId={company_id}")
+        except Exception as e:
+            print(f"[scheduler] bank-account-reminders: failed for companyId={company_id}: {e}")
+
+
 async def _run_daily_registration_reminders():
     # Not company-scoped like the two jobs above — an incomplete
     # registration may not have a company yet (that's the "Acceso" step).
@@ -235,6 +255,13 @@ async def start_scheduler():
     # and act on the notification, unlike the pre-dawn billing run above.
     scheduler.add_job(_run_daily_onboarding_reminders, "cron", hour=15, minute=0, id="daily_onboarding_reminders")
     scheduler.add_job(_run_daily_registration_reminders, "cron", hour=16, minute=0, id="daily_registration_reminders")
+    # 15:30 UTC ≈ media mañana en México — recuerda a los prestatarios el
+    # capital publicado en el marketplace mientras siga activo (solo envía
+    # si hay ofertas vivas; una notificación consolidada por compañía).
+    scheduler.add_job(_run_daily_offer_reminders, "cron", hour=15, minute=30, id="daily_offer_reminders")
+    # 15:45 UTC — invita a los clientes verificados SIN cuenta bancaria a
+    # vincular su CLABE (sin ella el desembolso SPEI se bloquea al aceptar).
+    scheduler.add_job(_run_daily_bank_account_reminders, "cron", hour=15, minute=45, id="daily_bank_account_reminders")
     scheduler.start()
 
 
