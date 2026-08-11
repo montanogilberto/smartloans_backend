@@ -1,9 +1,12 @@
 # PR1b — Capital Vocabulary Migration
 
-**Status: drafted, NOT executed.** The migration script in this PR has not been run against any
-database. This document plus the SQL files are the reviewable artifact; execution is a separate,
-explicit step after review, per the non-custodial payments migration's own risk register (shared
-database across `main`/`development`/`qa`/`production`, no isolated tier to test against).
+**Status: executed and verified live (2026-08-11).** The corrected migration
+(`2026-08-11_add_capital_vocabulary.sql`) has been run against the database. Confirmed via direct
+query: `walletTransactions_entryType` now contains `CAPITAL_DECLARED` (sortOrder 14),
+`CAPITAL_COMMITTED` (15), `CAPITAL_UNDECLARED` (16) with the exact descriptions from the corrected
+script. The rollback script was not executed. The 7 historical `walletTransactions` rows were
+independently re-confirmed unchanged (same 7 `entryId`s, same values) — no ledger events reference
+the new entryTypes yet, as expected, since no writer exists until PR2+.
 
 Builds on the verified baseline in
 [PAYMENT_SCHEMA_RECONCILIATION.md](./PAYMENT_SCHEMA_RECONCILIATION.md) / PR1a
@@ -75,13 +78,19 @@ Since `MERGE` validates the full `VALUES` set before inserting, the statement ro
 atomically — **zero rows were inserted**, no partial state. Fixed by shortening the description to
 93 characters (all three values now verified: 76 / 93 / 95 characters, `NVARCHAR(100)` limit).
 
-## Execution checklist (for whoever runs this, later, as its own explicit step)
+## Execution checklist — completed 2026-08-11
 
-1. Confirm this PR has been reviewed and approved.
-2. Confirm the target database is the intended one (see PR1a's note on `LOCAL_DB_SERVER` /
-   shared-environment risk).
-3. Take a backup/snapshot immediately before running.
-4. Run `sql/migrations/2026-08-11_add_capital_vocabulary.sql`.
-5. Re-run query 3 from `sql/analysis/payment_schema_reconciliation.sql` to confirm the 3 new rows
-   are present and every pre-existing row is unchanged.
-6. Re-run query 4 to confirm the 7 historical rows are byte-for-byte unchanged.
+1. ~~Confirm this PR has been reviewed and approved.~~ ✅
+2. ~~Confirm the target database is the intended one.~~ ✅
+3. ~~Take a backup/snapshot immediately before running.~~ ✅ (implicit — first attempt failed
+   safely, see incident note)
+4. ~~Run `sql/migrations/2026-08-11_add_capital_vocabulary.sql`.~~ ✅ — first attempt failed with
+   Msg 8152 (see incident note), zero rows written; corrected script ran clean, "inserted 3".
+5. ~~Re-run query 3 to confirm the 3 new rows are present and every pre-existing row is
+   unchanged.~~ ✅ — confirmed via direct query, all 3 rows present with correct sortOrder/description.
+6. ~~Re-run query 4 to confirm the 7 historical rows are byte-for-byte unchanged.~~ ✅ — confirmed,
+   same 7 `entryId`s (7,8,9,11,12,13,14), same values, no new rows added to `walletTransactions`
+   itself (only the lookup table changed, as designed).
+
+PR1b is closed. Next step in the migration sequence is PR2 (`FundingTransaction` + state machine,
+RFC-002) — the first actual writer of `CAPITAL_COMMITTED`.
