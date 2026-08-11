@@ -23,7 +23,7 @@ MATCHED` statement adding exactly 3 rows to `dbo.walletTransactions_entryType`:
 | entryType | sortOrder | Meaning |
 |---|---|---|
 | `CAPITAL_DECLARED` | 14 | Lender declares capital available to lend. No money changes hands. |
-| `CAPITAL_COMMITTED` | 15 | Declared capital committed to a specific loan funding — the point of no return per `docs/payment-domain-state-machines.md` §1: the lender has sent real SPEI with evidence. Money moves lender→borrower directly; SmartLoans never receives or holds it. |
+| `CAPITAL_COMMITTED` | 15 | Declared capital committed to a specific loan funding — the point of no return per `docs/payment-domain-state-machines.md` §1: the lender has sent real SPEI with evidence. Money moves lender→borrower directly; SmartLoans never receives or holds it. (Stored `description` is a shortened 93-char form — `NVARCHAR(100)`, see incident note below.) |
 | `CAPITAL_UNDECLARED` | 16 | Previously declared capital released/withdrawn. No money returned by SmartLoans, because none was ever held. |
 
 `sql/migrations/2026-08-11_add_capital_vocabulary_ROLLBACK.sql` — the reverse. Includes a mandatory
@@ -65,6 +65,15 @@ existing rows in this table (`DEPOSIT`, `LOAN_FUNDING`, etc.) describe real cash
 the old custodial model and are explicitly preserved as historical fact, unmodified. The new
 `CAPITAL_*` vocabulary describes a different concept — declared/committed capital *state* — and the
 two vocabularies coexist in the same table without one reinterpreting the other.
+
+## Incident note (2026-08-11)
+
+First execution attempt against the live DB failed: `Msg 8152 — String or binary data would be
+truncated`. Root cause: the original `CAPITAL_COMMITTED` description was ~148 characters, over the
+`description NVARCHAR(100)` column limit (confirmed against `sql/sp_walletTransactions.sql:14`).
+Since `MERGE` validates the full `VALUES` set before inserting, the statement rolled back
+atomically — **zero rows were inserted**, no partial state. Fixed by shortening the description to
+93 characters (all three values now verified: 76 / 93 / 95 characters, `NVARCHAR(100)` limit).
 
 ## Execution checklist (for whoever runs this, later, as its own explicit step)
 

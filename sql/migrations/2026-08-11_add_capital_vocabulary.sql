@@ -27,7 +27,7 @@
 MERGE [dbo].[walletTransactions_entryType] AS t
 USING (VALUES
     ('CAPITAL_DECLARED',   14, 'Lender declares capital available to lend -- no money received by SmartLoans'),
-    ('CAPITAL_COMMITTED',  15, 'Declared capital committed to a specific loan funding (point of no return: lender has sent SPEI with evidence) -- no money passes through SmartLoans'),
+    ('CAPITAL_COMMITTED',  15, 'Capital committed to a loan funding (lender sent SPEI w/ evidence) -- no money via SmartLoans'),
     ('CAPITAL_UNDECLARED', 16, 'Previously declared capital released/withdrawn by the lender -- no money returned by SmartLoans')
 ) AS s (entryType, sortOrder, description)
 ON t.entryType = s.entryType
