@@ -1,7 +1,22 @@
 # PR2 — `paymentIntents` (Hand-Authored, Documented Factory Exception)
 
-**Status: drafted, NOT executed.** `sql/sp_paymentIntents.sql` has not been run against any
-database. This document plus the SQL file are the reviewable artifact.
+**Status: executed and verified live (2026-08-11).** `sql/sp_paymentIntents.sql` has been run
+against the database and independently re-verified via direct query.
+
+## Incident note
+
+The *discarded* factory-generated version (integer actions, no `CHECK` constraints, no unique
+filtered index — the exact artifact this document says was thrown away) was mistakenly executed
+first, before this file's actual content. Caught immediately (`row_count = 0` at the time,
+confirmed via `sys.check_constraints`/`sys.indexes`/`OBJECT_DEFINITION` — no `CHECK` constraints,
+no `UQ_paymentIntents_openFunding`, integer-action SP body). Remediated with zero data loss: the
+three wrong objects (`sp_paymentIntents`, `sp_paymentIntents_all`, `sp_paymentIntents_one`) and the
+table were dropped and this file's actual content was run in their place. Re-verified via the same
+three queries: all 4 `CHECK` constraints present (`CK_paymentIntents_intentType`,
+`CK_paymentIntents_status`, `CK_paymentIntents_amount`, `CK_paymentIntents_installmentId`),
+`UQ_paymentIntents_openFunding` present, and `sp_paymentIntents`'s body confirmed to start from
+`DECLARE @action NVARCHAR(40) = JSON_VALUE(@pjsonfile, '$.paymentIntents[0].action')` — the correct
+string-action router, matching this file exactly, not the discarded integer-action CRUD version.
 
 ## Why this is hand-authored instead of posgmo-factory-generated
 
