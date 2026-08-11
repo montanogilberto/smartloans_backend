@@ -136,6 +136,69 @@ change, not optional cleanup.
 | `transfers` | None (comment-only, unenforced) | Yes — re-scoped as deferred future capability | Exclude from v1 batch; freeze as legacy |
 | `clientWallets` | N/A, no PRD | N/A | Not touched by PR1b; flagged as a required companion change before any future freeze/drop, due to `sp_loans_matchLenders` dependency |
 
+## Verified Live Baseline (2026-08-11)
+
+All 9 queries in `sql/analysis/payment_schema_reconciliation.sql` were run against the live
+database and the results independently confirm every finding above. **PR1a is fully verified.**
+
+| Query | Area | Live result |
+|---|---|---|
+| 1 | Column shapes | Match report exactly — `bankAccounts` has `clabeHash`/`rfc`/`accountStatus`; `bankAccountSnapshots` has the expected loan/party structure |
+| 2 | Foreign keys | Exactly the 3 predicted: `transfers.toBankAccountId → bankAccounts`, `walletTransactions.entryType → walletTransactions_entryType`, `transfers.status → transfers_status`. No FK from `walletTransactions` to `transfers`/loans — that link exists only at the application level via `referenceType`/`referenceId` |
+| 3 | `entryType` lookup vocabulary | 13 live values (`ADJUSTMENT, DEPOSIT, DISBURSEMENT_RECEIVED, LOAN_FUNDING, LOAN_REPAYMENT, PLATFORM_FEE, REFUND, RELEASE, REPAYMENT_INTEREST, REPAYMENT_PRINCIPAL, RESERVE, REVERSAL, WITHDRAWAL`). `CAPITAL_DECLARED`/`CAPITAL_UNDECLARED`/`CAPITAL_COMMITTED` confirmed absent |
+| 4 | Historical row counts | **7 total rows**: `DEPOSIT`×2, `LOAN_FUNDING`×2, `LOAN_REPAYMENT`×1, `REPAYMENT_INTEREST`×1, `REPAYMENT_PRINCIPAL`×1, all dated 2026-07-31/08-01. **Zero `WITHDRAWAL` rows.** Small blast radius today — the right time to do this migration before volume grows |
+| 5 | `transfers.provider` | `stp` × 2, no other values in use |
+| 6 | `clientWallets` | 8 rows, 1 with a positive balance — confirms this table is still live and small enough to plan a careful migration for, not yet frozen |
+| 7 | Wallet accounting baseline | Two clients with real activity (2165: `DEPOSIT +500, LOAN_FUNDING -635, REPAYMENT_INTEREST +4, REPAYMENT_PRINCIPAL +132.01`; 2167: `DEPOSIT +150, LOAN_REPAYMENT -136.01`). Confirms `walletTransactions` is a real financial-movement ledger today, not empty scaffolding — and confirms a naive `SUM()` is not equivalent to "available lender capital" (see semantic boundary below) |
+| 8 | `bankAccounts` lifecycle adoption | 4 total rows, all 4 have `accountStatus`, 3/4 have `clabeHash`. The D18 lifecycle implementation (`sp_bankAccountsLifecycle.sql`) is confirmed live and in active use |
+| 9 | `bankAccountSnapshots` | 4 rows |
+
+### Semantic boundary this baseline establishes for PR1b
+
+`walletTransactions` today is a **mixed historical financial ledger** — its existing rows
+(`DEPOSIT`, `LOAN_FUNDING`, `LOAN_REPAYMENT`, `REPAYMENT_INTEREST`, `REPAYMENT_PRINCIPAL`) describe
+real cash movements that happened under the old custodial model. The new `CAPITAL_*` vocabulary
+describes a categorically different thing — lender-declared capital *availability/commitment*
+state, not money SmartLoans received or holds. Concretely:
+
+- `CAPITAL_DECLARED` — a lender declares capital available to lend. No money changes hands.
+- `CAPITAL_COMMITTED` — declared capital is committed to a specific loan funding (the point of no
+  return: the lender has sent real SPEI with evidence, per
+  `docs/payment-domain-state-machines.md` §1). No money passes through SmartLoans to reach this
+  state — it's the borrower's bank receiving the lender's transfer directly.
+- `CAPITAL_UNDECLARED` — previously declared capital is released/withdrawn. Again, no money moves
+  through SmartLoans.
+
+**PR1b must not reinterpret existing rows to mean this.** `LOAN_FUNDING D -635` for client 2165 in
+query 7 stays exactly what it is — a historical financial event under the old model — and is never
+rewritten, relabeled, or migrated into a `CAPITAL_COMMITTED` row. The two vocabularies coexist in
+the same table going forward; only new writes (from PR2 onward, once `FundingTransaction`/
+`LoanPayment` modules exist) use the `CAPITAL_*` values.
+
+### Scope boundary confirmed for PR1b
+
+**In scope**: additive `entryType` lookup rows (`CAPITAL_DECLARED`, `CAPITAL_COMMITTED`,
+`CAPITAL_UNDECLARED`) only.
+
+**Explicitly out of scope for PR1b** (deferred to later PRs in the migration sequence, or entirely
+out of this migration):
+- Dropping or freezing `clientWallets` (8 live rows, 1 positive — real data, still has an active
+  reader in `sp_loans_matchLenders.sql`)
+- Rewriting, renaming, or deleting any of the 7 historical `walletTransactions` rows
+- Renaming `DEPOSIT`/`WITHDRAWAL`/`LOAN_FUNDING` or any other existing `entryType` value
+- Adding new foreign keys
+- Any change to `bankAccounts`/`bankAccountSnapshots` (the D18 lifecycle work is confirmed live
+  and complete — not recreated or modified here). The one `bankAccounts` row missing `clabeHash`
+  (3/4 have it) is a pre-existing data-quality observation, not remediated as part of this
+  migration — backfilling it here would mix an unrelated data-quality fix into a financial schema
+  migration.
+- Any change to `transfers`/STP integration or Stripe
+- The 4-bucket `available/reserved/committed/lent` balance-projection SP logic — this needs real
+  `CAPITAL_*` writers (the `FundingTransaction`/`LoanPayment` modules, later PRs) to be meaningful;
+  building it against zero real data now would be premature. Tracked as its own later step in the
+  migration sequence ("capital-availability migration").
+- Moving any real money
+
 ## Before Running PR1b
 
 Confirm what `LOCAL_DB_SERVER` in `posgmo-factory/.env` actually resolves to, and whether it is
