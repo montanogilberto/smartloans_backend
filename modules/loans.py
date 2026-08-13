@@ -89,7 +89,10 @@ def all_loans_sp(json_file: dict):
         return JSONResponse(content={"error": str(e)}, status_code=500)
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except Exception as close_err:
+                print(f"[loans] all_loans_sp: conn.close() failed (connection likely already dead): {close_err}")
 
 
 def one_loans_sp(json_file: dict):
