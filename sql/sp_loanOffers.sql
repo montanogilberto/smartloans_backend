@@ -19,7 +19,12 @@ CREATE TABLE [dbo].[loanOffers] (
     -- DATETIME (not DATETIME2): factory reviewer_agent auto-errors DATETIME2
     -- outside IOT modules
     expiresAt        DATETIME NULL,
-    created_At       DATETIME NOT NULL DEFAULT GETUTCDATE()
+    created_At       DATETIME NOT NULL DEFAULT GETUTCDATE(),
+    -- Audit record of the "Declaro que el capital indicado está disponible..."
+    -- checkbox — see sql/migrations/2026-08-13_add_offer_consent.sql for the
+    -- ALTER TABLE that adds these to an already-existing table.
+    consentAccepted   BIT NOT NULL DEFAULT 0,
+    consentAcceptedAt DATETIME NULL
 )
 GO
 -- ============================================================
@@ -44,15 +49,19 @@ BEGIN
         DECLARE @description    NVARCHAR(500)  = JSON_VALUE(@pjsonfile, '$.loanOffers[0].description')
         DECLARE @isActive       BIT            = ISNULL(JSON_VALUE(@pjsonfile, '$.loanOffers[0].isActive'), 1)
         DECLARE @expiresAt      DATETIME2      = JSON_VALUE(@pjsonfile, '$.loanOffers[0].expiresAt')
+        DECLARE @consentAccepted BIT           = ISNULL(JSON_VALUE(@pjsonfile, '$.loanOffers[0].consentAccepted'), 0)
+        DECLARE @consentAcceptedAt DATETIME2   = JSON_VALUE(@pjsonfile, '$.loanOffers[0].consentAcceptedAt')
 
         IF @action = 1 -- CREATE
         BEGIN
             INSERT INTO [dbo].[loanOffers]
                 (companyId, lenderId, availableCapital, minRate, maxRate,
-                 minTermMonths, maxTermMonths, description, isActive, expiresAt)
+                 minTermMonths, maxTermMonths, description, isActive, expiresAt,
+                 consentAccepted, consentAcceptedAt)
             VALUES
                 (@companyId, @lenderId, @availableCapital, @minRate, @maxRate,
-                 @minTermMonths, @maxTermMonths, @description, @isActive, @expiresAt)
+                 @minTermMonths, @maxTermMonths, @description, @isActive, @expiresAt,
+                 @consentAccepted, @consentAcceptedAt)
 
             SELECT (SELECT TOP 1 * FROM [dbo].[loanOffers]
                     WHERE offerId = SCOPE_IDENTITY() FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
@@ -103,7 +112,9 @@ BEGIN
             (SELECT offerId, companyId, lenderId, availableCapital, minRate, maxRate,
                     minTermMonths, maxTermMonths, description, isActive,
                     CONVERT(NVARCHAR, expiresAt, 127) AS expiresAt,
-                    CONVERT(NVARCHAR, created_At, 127) AS created_At
+                    CONVERT(NVARCHAR, created_At, 127) AS created_At,
+                    consentAccepted,
+                    CONVERT(NVARCHAR, consentAcceptedAt, 127) AS consentAcceptedAt
              FROM [dbo].[loanOffers]
              WHERE companyId = @companyId
                AND (@isActive IS NULL OR isActive = @isActive)

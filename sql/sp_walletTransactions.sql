@@ -114,6 +114,18 @@ BEGIN
 
             BEGIN TRANSACTION;
 
+            -- CAPITAL_* (CAPITAL_DECLARED/CAPITAL_COMMITTED/CAPITAL_UNDECLARED)
+            -- describe a lender's declared-capital STATE, never real money —
+            -- see MD/PR1B_CAPITAL_VOCABULARY_MIGRATION.md. They must never
+            -- join the real-money running balance: excluded here from the
+            -- @prev lookup (so a real DEPOSIT/WITHDRAWAL after one still
+            -- chains off the last REAL balance, not a virtual one) and given
+            -- balanceAfter = NULL (never a candidate tail row for anyone's
+            -- balance query) with no overdraft check (declaring/undeclaring
+            -- virtual capital can never be blocked by real available funds).
+            DECLARE @isCapitalEntry BIT = CASE WHEN @entryType IN
+                ('CAPITAL_DECLARED','CAPITAL_COMMITTED','CAPITAL_UNDECLARED') THEN 1 ELSE 0 END
+
             -- Serialize per wallet: HOLDLOCK on the owner's tail entry so two
             -- concurrent inserts can't both read the same previous balance.
             DECLARE @prev DECIMAL(12,2) = ISNULL(
@@ -121,6 +133,7 @@ BEGIN
                  FROM [dbo].[walletTransactions] WITH (UPDLOCK, HOLDLOCK)
                  WHERE companyId = @companyId
                    AND ((@clientId IS NULL AND clientId IS NULL) OR clientId = @clientId)
+                   AND entryType NOT IN ('CAPITAL_DECLARED','CAPITAL_COMMITTED','CAPITAL_UNDECLARED')
                  ORDER BY entryId DESC), 0);
 
             DECLARE @newBalance DECIMAL(12,2) =
@@ -128,7 +141,8 @@ BEGIN
 
             -- Debits cannot overdraw the wallet (RESERVE/RELEASE included:
             -- available balance is what this running figure represents).
-            IF @newBalance < 0
+            -- Virtual CAPITAL_* entries skip this entirely — not real money.
+            IF @isCapitalEntry = 0 AND @newBalance < 0
             BEGIN
                 ROLLBACK TRANSACTION;
                 SELECT '{"error":"Saldo insuficiente","available":' + CAST(@prev AS NVARCHAR(20)) + '}' AS [jsonResult]
@@ -140,7 +154,8 @@ BEGIN
                  referenceType, referenceId, idempotencyKey, balanceAfter, note)
             VALUES
                 (@companyId, @clientId, @entryType, @direction, @amountMXN,
-                 @referenceType, @referenceId, @idempotencyKey, @newBalance, @note)
+                 @referenceType, @referenceId, @idempotencyKey,
+                 CASE WHEN @isCapitalEntry = 1 THEN NULL ELSE @newBalance END, @note)
 
             COMMIT TRANSACTION;
 
@@ -200,12 +215,20 @@ BEGIN
     DECLARE @companyId INT = JSON_VALUE(@pjsonfile, '$.walletTransactions[0].companyId')
     DECLARE @clientId  INT = JSON_VALUE(@pjsonfile, '$.walletTransactions[0].clientId')
 
-    -- available = running balance (tail entry). reserved = RESERVE minus RELEASE
-    -- (already subtracted from available; shown separately for the UI).
+    -- available = running balance (tail entry among REAL-money rows only —
+    -- CAPITAL_* entries are excluded: they store balanceAfter = NULL and
+    -- never represent money SmartLoans holds, see sp_walletTransactions
+    -- INSERT above). Filtering by entryType here (not just relying on the
+    -- NULL) matters: if a CAPITAL_* row happens to be the physically-last
+    -- row, ISNULL(NULL, 0) would wrongly reset the balance to $0 instead of
+    -- carrying forward the last real one.
+    -- reserved = RESERVE minus RELEASE (already subtracted from available;
+    -- shown separately for the UI).
     DECLARE @available DECIMAL(12,2) = ISNULL(
         (SELECT TOP 1 balanceAfter FROM [dbo].[walletTransactions]
          WHERE companyId = @companyId
            AND ((@clientId IS NULL AND clientId IS NULL) OR clientId = @clientId)
+           AND entryType NOT IN ('CAPITAL_DECLARED','CAPITAL_COMMITTED','CAPITAL_UNDECLARED')
          ORDER BY entryId DESC), 0);
 
     DECLARE @reserved DECIMAL(12,2) = ISNULL(

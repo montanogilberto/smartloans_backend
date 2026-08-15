@@ -10,7 +10,9 @@ router = APIRouter()
     description="""
 Create, update, or close a lender's capital offer broadcast.
 
-action 1 — create (publish offer + triggers push notification from frontend):
+action 1 — create (publish offer; frontend triggers the push notification to
+borrowers; backend fires an email + WhatsApp "capital publicado" ticket to the
+lender in a background thread — best-effort, see modules/loanOffers.py):
   { "loanOffers": [{ "action": 1, "companyId": int, "lenderId": int,
     "availableCapital": float, "minRate": float, "maxRate": float,
     "minTermMonths": int, "maxTermMonths": int,
