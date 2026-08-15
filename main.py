@@ -26,6 +26,7 @@ from routes_ import (
     document_intelligence, geocoding, onboardingReminders, registrationReminders,
     clientFollowUps,
     bankAccounts, walletTransactions, transfers,
+    paymentIntents, fundingTransactions, transferEvidence,
 )
 
 app = FastAPI(
@@ -153,6 +154,9 @@ app.include_router(clientFollowUps.router)
 app.include_router(loanProposals.router)
 app.include_router(loanOffers.router)
 app.include_router(stripe_payments.router)
+app.include_router(paymentIntents.router)
+app.include_router(fundingTransactions.router)
+app.include_router(transferEvidence.router)
 # Banking-first Phase 1 (docs/payment-banking-first-redesign.md):
 # CLABEs verificadas + ledger inmutable + dispersión SPEI (STP, mock hasta contrato)
 app.include_router(bankAccounts.router)
