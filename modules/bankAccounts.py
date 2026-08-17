@@ -168,3 +168,15 @@ def all_bank_accounts_sp(json_file: dict):
         return JSONResponse(_sp("sp_bankAccounts_all", json_file), status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def bank_accounts_lifecycle_sp(json_file: dict):
+    """add_pending | promote_primary | archive | snapshot_for_loan |
+    reveal_counterparty | check_duplicate via sp_bankAccountsLifecycle
+    (RFC-001, sql/sp_bankAccountsLifecycle.sql). Was defined in SQL since
+    RFC-001 landed but never had a Python/route wiring until RFC-002 Phase 1
+    needed snapshot_for_loan for paymentIntents.create's beneficiarySnapshotId."""
+    try:
+        return JSONResponse(_sp("sp_bankAccountsLifecycle", json_file), status_code=200)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
