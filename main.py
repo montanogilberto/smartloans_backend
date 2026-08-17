@@ -26,7 +26,8 @@ from routes_ import (
     document_intelligence, geocoding, onboardingReminders, registrationReminders,
     clientFollowUps,
     bankAccounts, walletTransactions, transfers,
-    paymentIntents, fundingTransactions, transferEvidence,
+    paymentIntents, fundingTransactions, transferEvidence, paymentHistory,
+    featureFlags,
 )
 
 app = FastAPI(
@@ -157,6 +158,8 @@ app.include_router(stripe_payments.router)
 app.include_router(paymentIntents.router)
 app.include_router(fundingTransactions.router)
 app.include_router(transferEvidence.router)
+app.include_router(paymentHistory.router)
+app.include_router(featureFlags.router)
 # Banking-first Phase 1 (docs/payment-banking-first-redesign.md):
 # CLABEs verificadas + ledger inmutable + dispersión SPEI (STP, mock hasta contrato)
 app.include_router(bankAccounts.router)
@@ -189,6 +192,8 @@ from modules.onboardingReminders import check_onboarding_completeness
 from modules.registrationReminders import check_registration_completeness
 from modules.offerReminders import check_active_offers
 from modules.bankAccountReminders import check_missing_bank_accounts
+from modules.paymentIntents import payment_intents_sp
+from modules.fundingTransactions import funding_transactions_sp
 
 scheduler = AsyncIOScheduler()
 
@@ -249,6 +254,29 @@ async def _run_daily_registration_reminders():
         print(f"[scheduler] registration-reminders: failed: {e}")
 
 
+# RFC-002 Phase 1: global sweeps (no companyId loop — both SPs already accept
+# an optional companyId and default to a global sweep when omitted, matching
+# how sp_paymentIntents.expire_due/sp_fundingTransactions.escalate_due are
+# written). Interval, not daily-cron: these bound a 5-day expiry (D12) and a
+# 2-day-default escalation window (D5) — a once-a-day check risks sitting on
+# a stale OPEN/PENDING_CONFIRMATION row for up to 24h past its threshold,
+# which matters more here than for the once-daily reminder jobs above.
+async def _run_payment_intents_expire_due():
+    try:
+        payment_intents_sp({"paymentIntents": [{"action": "expire_due"}]})
+        print("[scheduler] paymentIntents.expire_due: ran")
+    except Exception as e:
+        print(f"[scheduler] paymentIntents.expire_due: failed: {e}")
+
+
+async def _run_funding_transactions_escalate_due():
+    try:
+        funding_transactions_sp({"fundingTransactions": [{"action": "escalate_due"}]})
+        print("[scheduler] fundingTransactions.escalate_due: ran")
+    except Exception as e:
+        print(f"[scheduler] fundingTransactions.escalate_due: failed: {e}")
+
+
 @app.on_event("startup")
 async def start_scheduler():
     # Start the observability background log writer (async best-effort path).
@@ -266,6 +294,10 @@ async def start_scheduler():
     # 15:45 UTC — invita a los clientes verificados SIN cuenta bancaria a
     # vincular su CLABE (sin ella el desembolso SPEI se bloquea al aceptar).
     scheduler.add_job(_run_daily_bank_account_reminders, "cron", hour=15, minute=45, id="daily_bank_account_reminders")
+    # Every 6h — RFC-002 Phase 1 funding sweeps (see functions above for why
+    # these run more often than the daily jobs).
+    scheduler.add_job(_run_payment_intents_expire_due, "interval", hours=6, id="payment_intents_expire_due")
+    scheduler.add_job(_run_funding_transactions_escalate_due, "interval", hours=6, id="funding_transactions_escalate_due")
     scheduler.start()
 
 

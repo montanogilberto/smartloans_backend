@@ -97,6 +97,66 @@ BEGIN
             DELETE FROM [dbo].[loans] WHERE loanId = @loanId AND companyId = @companyId
             SELECT '{"message":"deleted","loanId":' + CAST(@loanId AS NVARCHAR) + '}' AS [jsonResult]
         END
+
+        -- ── transition (D6/D13) ──────────────────────────────────
+        -- p2p-direct-payments-architecture.md D6: "Máquinas de estado
+        -- persistidas + transiciones solo vía SP con matriz de validez — la
+        -- consistencia no depende del frontend." §8 Loan state machine:
+        -- draft -> ready_for_disbursement -> pending_funding -> funded ->
+        -- active -> paid_off, with pending_funding -> expired (D12) /
+        -- cancelled, active <-> in_dispute, active -> defaulted.
+        -- FUNDED and ACTIVE are deliberately not the same instant
+        -- (payment-domain-state-machines.md §2.1 footnote 1) — funded is set
+        -- as soon as fundingTransactions.confirm() succeeds, active only
+        -- after PaymentSchedule generation succeeds; the calling Python
+        -- module drives that two-step, this SP only validates each hop.
+        ELSE IF @action = 4
+        BEGIN
+            DECLARE @toStatus NVARCHAR(30) = JSON_VALUE(@pjsonfile, '$.loans[0].toStatus')
+            DECLARE @currentStatus NVARCHAR(30)
+            SELECT @currentStatus = loanStatus FROM [dbo].[loans]
+            WHERE loanId = @loanId AND companyId = @companyId
+
+            IF @currentStatus IS NULL
+            BEGIN
+                SELECT '{"error":"Loan not found."}' AS [jsonResult]
+                RETURN
+            END
+
+            DECLARE @validTransitions TABLE (fromStatus NVARCHAR(30), toStatus NVARCHAR(30))
+            INSERT INTO @validTransitions (fromStatus, toStatus) VALUES
+                ('draft', 'ready_for_disbursement'),
+                ('ready_for_disbursement', 'pending_funding'),
+                ('pending_funding', 'funded'),
+                ('pending_funding', 'expired'),
+                ('pending_funding', 'cancelled'),
+                ('funded', 'active'),
+                ('active', 'in_dispute'),
+                ('in_dispute', 'active'),
+                ('active', 'defaulted'),
+                ('active', 'paid_off')
+
+            IF NOT EXISTS (
+                SELECT 1 FROM @validTransitions
+                WHERE fromStatus = @currentStatus AND toStatus = @toStatus
+            )
+            BEGIN
+                SELECT '{"error":"Illegal transition: ' + @currentStatus + ' -> ' + ISNULL(@toStatus, 'NULL') + '"}' AS [jsonResult]
+                RETURN
+            END
+
+            UPDATE [dbo].[loans]
+            SET loanStatus = @toStatus,
+                disbursementDate = CASE WHEN @toStatus = 'active' AND disbursementDate IS NULL
+                                        THEN GETUTCDATE() ELSE disbursementDate END,
+                updated_at = GETUTCDATE()
+            WHERE loanId = @loanId AND companyId = @companyId
+
+            SELECT (
+                SELECT @loanId AS loanId, @currentStatus AS fromStatus, @toStatus AS toStatus
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ) AS [jsonResult]
+        END
     END TRY
     BEGIN CATCH
         SELECT ('{"error":"' + REPLACE(ERROR_MESSAGE(),'"','\"') + '"}') AS [jsonResult]
