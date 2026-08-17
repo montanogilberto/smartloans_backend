@@ -15,7 +15,7 @@ RFC-002 Phase 1 rollout gate (docs/payments-action-plan.md). Controls whether
 acceptProposal() uses paymentIntents/fundingTransactions declare/confirm
 instead of the legacy disbursePayment(). Default false; enabled via
 ENABLE_NON_CUSTODIAL_FUNDING_FLOW=true (global) or by adding companyId/
-clientId to NON_CUSTODIAL_FUNDING_TEST_COMPANY_IDS / _TEST_CLIENT_IDS
+clientId to NON_CUSTODIAL_FUNDING_PILOT_COMPANY_IDS / _PILOT_CLIENT_IDS
 (comma-separated env vars, Azure App Service config) — no deploy needed,
 just a config change + app restart.
 """,
