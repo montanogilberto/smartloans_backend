@@ -31,12 +31,39 @@
 --   - transferEvidence (clave de rastreo, bank, optional CEP/screenshot) --
 --     RFC-002 §3 pairs this with every declare; declare below accepts a
 --     bare @transferDate/@amountMXN only until that table exists.
---   - paymentHistory (D16 append-only audit of every status change) -- each
---     action below is commented with where that INSERT will go.
 --   - sp_loans transition matrix (pending_funding -> funded -> active) and
 --     the LoanActivated event -- orchestration lives in the Python module
 --     that calls this SP, not in the SP itself.
+--
+-- paymentHistory (D16, added in the Phase-1 migration that follows PR2):
+-- append-only audit of every status change on this table (and, later,
+-- loanPayments -- shared table, RFC-003). Every action below that changes
+-- `status` inserts one row here in the SAME transaction. NEVER UPDATE/DELETE
+-- this table from application code.
 -- ============================================================
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'paymentHistory')
+CREATE TABLE [dbo].[paymentHistory] (
+    historyId    INT IDENTITY(1,1) NOT NULL,
+    companyId    INT NOT NULL,
+    subjectType  NVARCHAR(10) NOT NULL,   -- FUNDING | PAYMENT
+    subjectId    INT NOT NULL,
+    oldStatus    NVARCHAR(25) NULL,
+    newStatus    NVARCHAR(25) NOT NULL,
+    actorUserId  INT NULL,                -- NULL = cron/sistema
+    reason       NVARCHAR(300) NULL,
+    ipAddress    NVARCHAR(50) NULL,
+    deviceInfo   NVARCHAR(200) NULL,
+    created_At   DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    CONSTRAINT PK_paymentHistory PRIMARY KEY CLUSTERED (historyId ASC),
+    CONSTRAINT CK_paymentHistory_subjectType CHECK (subjectType IN ('FUNDING', 'PAYMENT'))
+)
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_paymentHistory_subject')
+    CREATE NONCLUSTERED INDEX IX_paymentHistory_subject
+        ON dbo.paymentHistory (subjectType, subjectId);
+GO
 
 -- ── Table ────────────────────────────────────────────────────
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'fundingTransactions')
@@ -128,6 +155,7 @@ BEGIN
         DECLARE @borrowerClientId INT           = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].borrowerClientId')
         DECLARE @amountMXN        DECIMAL(18,2) = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].amountMXN')
         DECLARE @transferDate     DATETIME2     = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].transferDate')
+        DECLARE @declareActorUserId INT         = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].actorUserId')
 
         IF NOT EXISTS (
             SELECT 1 FROM dbo.paymentIntents
@@ -164,8 +192,10 @@ BEGIN
         SET status = 'DECLARED', updated_at = GETUTCDATE()
         WHERE paymentIntentId = @intentId
 
-        -- TODO(paymentHistory, D16): INSERT audit row here once that table
-        -- exists — entity='fundingTransactions', action='DECLARE'.
+        INSERT INTO dbo.paymentHistory
+            (companyId, subjectType, subjectId, oldStatus, newStatus, actorUserId, reason)
+        VALUES
+            (@companyId, 'FUNDING', @newFundingId, NULL, 'PENDING_CONFIRMATION', @declareActorUserId, 'declare')
 
         COMMIT TRANSACTION;
 
@@ -188,6 +218,13 @@ BEGIN
     BEGIN
         DECLARE @confirmId       INT = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].fundingTransactionId')
         DECLARE @confirmByClient INT = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].confirmedByClientId')
+        -- actorUserId is a userId (audit/push identity), distinct from
+        -- confirmedByClientId (business identity, checked below) — this SP
+        -- doesn't resolve clientId -> userId itself (no such lookup exists
+        -- in this codebase's SQL layer; callers already resolve it, see
+        -- loanDisbursements' borrowerUserId/lenderUserId params for
+        -- precedent) — so the caller supplies both.
+        DECLARE @confirmActorUserId INT = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].actorUserId')
 
         DECLARE @confirmBorrowerId INT, @confirmLoanId INT
         SELECT @confirmBorrowerId = borrowerClientId, @confirmLoanId = loanId
@@ -205,14 +242,23 @@ BEGIN
             RETURN
         END
 
+        BEGIN TRANSACTION;
+
         UPDATE dbo.fundingTransactions
         SET status = 'CONFIRMED', confirmedAt = GETUTCDATE(),
             confirmedByClientId = @confirmByClient, updated_at = GETUTCDATE()
         WHERE fundingTransactionId = @confirmId
 
-        -- TODO(paymentHistory, D16) + TODO(sp_loans transition, D13):
-        -- orchestrated by the calling Python module, not here — this SP
-        -- stays scoped to its own table.
+        INSERT INTO dbo.paymentHistory
+            (companyId, subjectType, subjectId, oldStatus, newStatus, actorUserId, reason)
+        VALUES
+            (@companyId, 'FUNDING', @confirmId, 'PENDING_CONFIRMATION', 'CONFIRMED', @confirmActorUserId, 'confirm')
+
+        COMMIT TRANSACTION;
+
+        -- sp_loans transition (pending_funding -> funded -> active) and the
+        -- LoanActivated event are orchestrated by the calling Python module,
+        -- not here — this SP stays scoped to its own table (D13).
 
         SELECT (
             SELECT @confirmId AS fundingTransactionId, @confirmLoanId AS loanId, 'CONFIRMED' AS status
@@ -228,6 +274,7 @@ BEGIN
         DECLARE @rejectId       INT           = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].fundingTransactionId')
         DECLARE @rejectByClient INT           = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].rejectedByClientId')
         DECLARE @rejectReason   NVARCHAR(300) = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].rejectReason')
+        DECLARE @rejectActorUserId INT        = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].actorUserId')
 
         DECLARE @rejectBorrowerId INT
         SELECT @rejectBorrowerId = borrowerClientId
@@ -245,9 +292,18 @@ BEGIN
             RETURN
         END
 
+        BEGIN TRANSACTION;
+
         UPDATE dbo.fundingTransactions
         SET status = 'REJECTED', rejectReason = @rejectReason, updated_at = GETUTCDATE()
         WHERE fundingTransactionId = @rejectId
+
+        INSERT INTO dbo.paymentHistory
+            (companyId, subjectType, subjectId, oldStatus, newStatus, actorUserId, reason)
+        VALUES
+            (@companyId, 'FUNDING', @rejectId, 'PENDING_CONFIRMATION', 'REJECTED', @rejectActorUserId, @rejectReason)
+
+        COMMIT TRANSACTION;
 
         SELECT (
             SELECT @rejectId AS fundingTransactionId, 'REJECTED' AS status
@@ -269,6 +325,8 @@ BEGIN
         DECLARE @escalateAfterDays INT = ISNULL(JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].escalateAfterDays'), 2)
         DECLARE @escalated TABLE (fundingTransactionId INT, loanId INT)
 
+        BEGIN TRANSACTION;
+
         UPDATE dbo.fundingTransactions
         SET status = 'ESCALATED', escalatedAt = GETUTCDATE(), updated_at = GETUTCDATE()
         OUTPUT inserted.fundingTransactionId, inserted.loanId INTO @escalated
@@ -276,6 +334,17 @@ BEGIN
           AND declaredAt IS NOT NULL
           AND declaredAt <= DATEADD(DAY, -@escalateAfterDays, GETUTCDATE())
           AND (@companyId IS NULL OR companyId = @companyId)
+
+        -- Bulk audit insert, one row per escalated transaction this sweep
+        -- caught — actorUserId NULL (D16: NULL = cron/sistema).
+        INSERT INTO dbo.paymentHistory
+            (companyId, subjectType, subjectId, oldStatus, newStatus, actorUserId, reason)
+        SELECT ft.companyId, 'FUNDING', e.fundingTransactionId, 'PENDING_CONFIRMATION', 'ESCALATED', NULL,
+               'escalate_due: ' + CAST(@escalateAfterDays AS NVARCHAR) + 'd sin respuesta'
+        FROM @escalated e
+        JOIN dbo.fundingTransactions ft ON ft.fundingTransactionId = e.fundingTransactionId
+
+        COMMIT TRANSACTION;
 
         SELECT ISNULL(
             (SELECT fundingTransactionId, loanId FROM @escalated FOR JSON PATH),
@@ -290,6 +359,12 @@ BEGIN
     BEGIN
         DECLARE @resolveId         INT          = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].fundingTransactionId')
         DECLARE @resolution        NVARCHAR(20) = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].resolution')
+        DECLARE @resolutionNote    NVARCHAR(300) = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].resolutionNote')
+        -- Authorization (support/admin only) is enforced by the FastAPI
+        -- layer before this SP is ever called (see modules/fundingTransactions.py)
+        -- — this SP only records who: @resolverUserId is trusted input from
+        -- that already-authorized caller, not re-checked here.
+        DECLARE @resolverUserId    INT          = JSON_VALUE(@pjsonfile, '$.fundingTransactions[0].resolverUserId')
 
         IF @resolution NOT IN ('CONFIRMED', 'CANCELLED')
         BEGIN
@@ -305,11 +380,20 @@ BEGIN
             RETURN
         END
 
+        BEGIN TRANSACTION;
+
         UPDATE dbo.fundingTransactions
         SET status = @resolution,
             confirmedAt = CASE WHEN @resolution = 'CONFIRMED' THEN GETUTCDATE() ELSE confirmedAt END,
             updated_at = GETUTCDATE()
         WHERE fundingTransactionId = @resolveId
+
+        INSERT INTO dbo.paymentHistory
+            (companyId, subjectType, subjectId, oldStatus, newStatus, actorUserId, reason)
+        VALUES
+            (@companyId, 'FUNDING', @resolveId, 'ESCALATED', @resolution, @resolverUserId, @resolutionNote)
+
+        COMMIT TRANSACTION;
 
         SELECT (
             SELECT @resolveId AS fundingTransactionId, @resolution AS status
@@ -366,6 +450,42 @@ BEGIN
             SELECT '{"error":"Este préstamo ya tiene una declaración de fondeo."}' AS [jsonResult]
         ELSE
             SELECT '{"error":"' + REPLACE(ERROR_MESSAGE(), '"', '\"') + '"}' AS [jsonResult]
+    END CATCH
+END
+GO
+
+-- ============================================================
+-- sp_paymentHistory_all — read-only audit trail for one subject
+-- (FUNDING today; PAYMENT once loanPayments/RFC-003 lands, same table).
+-- ============================================================
+IF OBJECT_ID('dbo.sp_paymentHistory_all', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_paymentHistory_all;
+GO
+
+CREATE PROCEDURE [dbo].[sp_paymentHistory_all]
+    @pjsonfile NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRY
+        DECLARE @companyId   INT          = JSON_VALUE(@pjsonfile, '$.paymentHistory[0].companyId')
+        DECLARE @subjectType NVARCHAR(10) = JSON_VALUE(@pjsonfile, '$.paymentHistory[0].subjectType')
+        DECLARE @subjectId   INT          = JSON_VALUE(@pjsonfile, '$.paymentHistory[0].subjectId')
+
+        SELECT ISNULL(
+            (SELECT historyId, companyId, subjectType, subjectId, oldStatus, newStatus,
+                    actorUserId, reason, ipAddress, deviceInfo,
+                    CONVERT(NVARCHAR, created_At, 127) AS created_At
+             FROM dbo.paymentHistory
+             WHERE companyId = @companyId
+               AND (@subjectType IS NULL OR subjectType = @subjectType)
+               AND (@subjectId IS NULL OR subjectId = @subjectId)
+             ORDER BY created_At ASC
+             FOR JSON PATH),
+            '[]'
+        ) AS [jsonResult]
+    END TRY
+    BEGIN CATCH
+        SELECT ('{"error":"' + REPLACE(ERROR_MESSAGE(), '"', '\"') + '"}') AS [jsonResult]
     END CATCH
 END
 GO
