@@ -144,16 +144,29 @@ BEGIN
     DECLARE @companyId INT = JSON_VALUE(@pjsonfile, '$.bankAccounts[0].companyId')
     DECLARE @clientId  INT = JSON_VALUE(@pjsonfile, '$.bankAccounts[0].clientId')
 
+    -- D18 (RFC-001, sql/sp_bankAccountsLifecycle.sql): accountStatus =
+    -- PRIMARY | PENDING_VERIFICATION | ARCHIVED. An ARCHIVED account was
+    -- superseded by a newer CLABE and is no longer a valid SPEI
+    -- destination -- isActive alone doesn't capture that (a soft-delete
+    -- flag, orthogonal to the D18 lifecycle state), so callers that only
+    -- filtered on isActive (this SP, and everything downstream of it --
+    -- acceptProposal()'s "borrower has a verified CLABE" precondition,
+    -- snapshot_for_loan's own separate accountStatus='PRIMARY' filter)
+    -- could disagree about whether an account is usable. Excluding
+    -- ARCHIVED here makes this list consistent with what snapshot_for_loan
+    -- actually accepts.
     SELECT ISNULL(
         (SELECT bankAccountId, companyId, clientId,
                 RIGHT(clabe, 4) AS clabeLast4, bankCode, bankName, holderName,
                 isVerified, verificationMethod, isDefault, isActive,
+                accountStatus,
                 CONVERT(NVARCHAR, verifiedAt, 127) AS verifiedAt,
                 CONVERT(NVARCHAR, created_At, 127) AS created_At
          FROM [dbo].[bankAccounts]
          WHERE companyId = @companyId
            AND (@clientId IS NULL OR clientId = @clientId)
            AND isActive = 1
+           AND accountStatus <> 'ARCHIVED'
          ORDER BY isDefault DESC, created_At DESC
          FOR JSON PATH, ROOT('bankAccounts')),
         '{"bankAccounts":[]}'

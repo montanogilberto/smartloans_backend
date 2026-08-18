@@ -20,7 +20,11 @@ USING (VALUES
     ('accepted',  2, 'Proposal accepted, loan proceeds',   1),
     ('rejected',  3, 'Proposal declined',                  1),
     ('expired',   4, 'Lapsed past expiresAt',              1),
-    ('cancelled', 5, 'Withdrawn by the initiator',         1)
+    ('cancelled', 5, 'Withdrawn by the initiator',         1),
+    -- Lender proposed different terms (single-cycle negotiation, no loop):
+    -- borrower can only accept (-> pending, terms already updated, ready for
+    -- the lender to approve/fund) or reject (terminal) -- never counter back.
+    ('countered', 6, 'Lender proposed different terms',    0)
 ) AS s (statusCode, sortOrder, description, isTerminal)
 ON t.statusCode = s.statusCode
 WHEN NOT MATCHED THEN
@@ -39,15 +43,40 @@ CREATE TABLE [dbo].[loanProposals] (
     proposedRate        DECIMAL(5,2)   NOT NULL,
     termMonths          INT            NOT NULL,
     status              NVARCHAR(20)   NOT NULL DEFAULT 'pending',
-                        -- pending | accepted | rejected | expired | cancelled
+                        -- pending | accepted | rejected | expired | cancelled | countered
     lenderNote          NVARCHAR(500)  NULL,
     borrowerNote        NVARCHAR(500)  NULL,
     pushNotificationId  INT            NULL,
     respondedAt         DATETIME2      NULL,
     expiresAt           DATETIME2      NULL,
+    -- requestedAmount/proposedRate/termMonths above are the BORROWER's
+    -- original ask and are never overwritten -- a permanent historical
+    -- record (negotiation-outcome data, e.g. for a future model on what
+    -- terms get accepted). counteredAt/Amount/Rate/TermMonths below record
+    -- the lender's counter-offer separately, if any -- also never
+    -- overwritten once set, so the full negotiation (ask -> counter ->
+    -- outcome) stays reconstructable from one row.
+    counteredAmount     DECIMAL(18,2)  NULL,
+    counteredRate       DECIMAL(5,2)   NULL,
+    counteredTermMonths INT            NULL,
+    counteredAt         DATETIME2      NULL,
     created_At          DATETIME2      NOT NULL DEFAULT GETUTCDATE(),
     updated_at          DATETIME2      NULL
 )
+GO
+
+-- Existing production table predates these columns (idempotent ALTER).
+IF COL_LENGTH('dbo.loanProposals', 'counteredAmount') IS NULL
+    ALTER TABLE [dbo].[loanProposals] ADD counteredAmount DECIMAL(18,2) NULL;
+GO
+IF COL_LENGTH('dbo.loanProposals', 'counteredRate') IS NULL
+    ALTER TABLE [dbo].[loanProposals] ADD counteredRate DECIMAL(5,2) NULL;
+GO
+IF COL_LENGTH('dbo.loanProposals', 'counteredTermMonths') IS NULL
+    ALTER TABLE [dbo].[loanProposals] ADD counteredTermMonths INT NULL;
+GO
+IF COL_LENGTH('dbo.loanProposals', 'counteredAt') IS NULL
+    ALTER TABLE [dbo].[loanProposals] ADD counteredAt DATETIME2 NULL;
 GO
 
 -- Indexes matching the read patterns in sp_loanProposals_all / sp_creditScore_data
@@ -91,6 +120,9 @@ BEGIN
         DECLARE @pushNotificationId INT         = JSON_VALUE(@pjsonfile, '$.loanProposals[0].pushNotificationId')
         DECLARE @respondedAt    DATETIME2       = JSON_VALUE(@pjsonfile, '$.loanProposals[0].respondedAt')
         DECLARE @expiresAt      DATETIME2       = JSON_VALUE(@pjsonfile, '$.loanProposals[0].expiresAt')
+        DECLARE @counteredAmount     DECIMAL(18,2) = JSON_VALUE(@pjsonfile, '$.loanProposals[0].counteredAmount')
+        DECLARE @counteredRate       DECIMAL(5,2)  = JSON_VALUE(@pjsonfile, '$.loanProposals[0].counteredRate')
+        DECLARE @counteredTermMonths INT           = JSON_VALUE(@pjsonfile, '$.loanProposals[0].counteredTermMonths')
 
         IF @action = 1 -- CREATE
         BEGIN
@@ -104,18 +136,29 @@ BEGIN
             SELECT (SELECT TOP 1 proposalId, companyId, lenderId, borrowerId,
                            requestedAmount, proposedRate, termMonths, status,
                            borrowerNote, lenderNote,
+                           counteredAmount, counteredRate, counteredTermMonths,
+                           CONVERT(NVARCHAR, counteredAt, 127) AS counteredAt,
                            CONVERT(NVARCHAR, created_At, 127) AS created_At
                     FROM [dbo].[loanProposals]
                     WHERE proposalId = SCOPE_IDENTITY()
                     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
         END
 
-        ELSE IF @action = 2 -- UPDATE (accept / reject / cancel)
+        ELSE IF @action = 2 -- UPDATE (accept / reject / cancel / counter)
         BEGIN
+            -- counteredAt is set server-side, once, the first time this row
+            -- goes to 'countered' -- never overwritten on a later update
+            -- (e.g. borrower accepting flips status back to 'pending' but
+            -- must not erase when the counter itself happened).
             UPDATE [dbo].[loanProposals]
             SET status       = ISNULL(@status, status),
                 lenderNote   = ISNULL(@lenderNote, lenderNote),
                 respondedAt  = ISNULL(@respondedAt, respondedAt),
+                counteredAmount     = ISNULL(@counteredAmount, counteredAmount),
+                counteredRate       = ISNULL(@counteredRate, counteredRate),
+                counteredTermMonths = ISNULL(@counteredTermMonths, counteredTermMonths),
+                counteredAt = CASE WHEN @status = 'countered' AND counteredAt IS NULL
+                                   THEN GETUTCDATE() ELSE counteredAt END,
                 updated_at   = GETUTCDATE()
             WHERE proposalId = @proposalId
 
@@ -155,6 +198,8 @@ BEGIN
             (SELECT proposalId, companyId, lenderId, borrowerId,
                     requestedAmount, proposedRate, termMonths, status,
                     borrowerNote, lenderNote, pushNotificationId,
+                    counteredAmount, counteredRate, counteredTermMonths,
+                    CONVERT(NVARCHAR, counteredAt, 127)  AS counteredAt,
                     CONVERT(NVARCHAR, respondedAt, 127) AS respondedAt,
                     CONVERT(NVARCHAR, expiresAt, 127)   AS expiresAt,
                     CONVERT(NVARCHAR, created_At, 127)  AS created_At,

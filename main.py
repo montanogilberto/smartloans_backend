@@ -1,9 +1,19 @@
 import json
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 load_dotenv()
+
+# TEMPORARY diagnostic (remove once the non-custodial funding pilot rollout
+# is confirmed working) — prints at process startup, visible in the Azure
+# Log stream, so the actual value this process sees is directly observable
+# instead of inferred from a portal screenshot or a possibly-different Kudu
+# SSH console context.
+print(f"[featureFlags][startup] NON_CUSTODIAL_FUNDING_PILOT_COMPANY_IDS = {os.getenv('NON_CUSTODIAL_FUNDING_PILOT_COMPANY_IDS')!r}")
+print(f"[featureFlags][startup] NON_CUSTODIAL_FUNDING_PILOT_CLIENT_IDS = {os.getenv('NON_CUSTODIAL_FUNDING_PILOT_CLIENT_IDS')!r}")
+print(f"[featureFlags][startup] ENABLE_NON_CUSTODIAL_FUNDING_FLOW = {os.getenv('ENABLE_NON_CUSTODIAL_FUNDING_FLOW')!r}")
 
 from observability import ObservabilityMiddleware, writer
 
