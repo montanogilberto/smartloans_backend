@@ -38,6 +38,7 @@ from routes_ import (
     bankAccounts, walletTransactions, transfers,
     paymentIntents, fundingTransactions, transferEvidence, paymentHistory,
     featureFlags,
+    arcade,
 )
 
 app = FastAPI(
@@ -170,6 +171,7 @@ app.include_router(fundingTransactions.router)
 app.include_router(transferEvidence.router)
 app.include_router(paymentHistory.router)
 app.include_router(featureFlags.router)
+app.include_router(arcade.router)
 # Banking-first Phase 1 (docs/payment-banking-first-redesign.md):
 # CLABEs verificadas + ledger inmutable + dispersión SPEI (STP, mock hasta contrato)
 app.include_router(bankAccounts.router)

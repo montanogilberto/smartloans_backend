@@ -235,6 +235,19 @@ BEGIN
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
     END
 
+    -- ── close_conversation ─────────────────────────────────────
+    -- Archives the thread (open|accepted|rejected -> closed). Doesn't touch
+    -- loanProposals/loans -- this is chat-thread housekeeping only, not a
+    -- loan-state transition.
+    ELSE IF @action = 'close_conversation'
+    BEGIN
+        UPDATE loanConversations SET status = 'closed', updated_at = GETUTCDATE()
+        WHERE conversationId = @conversationId
+
+        SELECT (SELECT @conversationId AS conversationId, 'closed' AS status
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
+    END
+
     -- ── list_conversations ────────────────────────────────────
     ELSE IF @action = 'list_conversations'
     BEGIN
