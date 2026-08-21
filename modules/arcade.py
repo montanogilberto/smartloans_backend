@@ -533,6 +533,23 @@ def arcade_rounds_all_sp(json_file: dict):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+def arcade_live_wins_sp(json_file: dict):
+    """
+    Ganancias recientes de la compania para el ticker del dashboard.
+
+    ANONIMO: no devuelve clientId ni nombre. En una app de prestamos, decir
+    quien esta jugando es un problema de privacidad que el ticker no necesita
+    tener — con juego, multiplicador y fichas basta.
+    """
+    try:
+        data = _exec_sp("sp_arcadeRounds_liveWins", json_file)
+        if "error" in data:
+            return _error_response(data)
+        return JSONResponse(content=data, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 def arcade_transactions_all_sp(json_file: dict):
     """Libro mayor de fichas del jugador."""
     try:

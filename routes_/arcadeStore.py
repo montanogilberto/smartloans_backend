@@ -2,6 +2,8 @@ from fastapi import APIRouter
 from modules.arcadeStore import (
     arcade_chip_packs_all_sp, arcade_purchase_sp, arcade_purchases_all_sp,
     arcade_checkout_sp, arcade_confirm_sp, arcade_quick_buy_sp, arcade_saved_card_sp,
+    arcade_spei_order_sp, arcade_spei_declare_sp, arcade_spei_confirm_sp,
+    arcade_spei_orders_all_sp,
 )
 
 router = APIRouter()
@@ -130,6 +132,76 @@ Returns: { status: 'credited'|'already_credited', chipsCredited, coinBalance }
 )
 def arcade_confirm(json: dict):
     return arcade_confirm_sp(json)
+
+
+@router.post(
+    "/arcade/speiOrder",
+    summary="Abrir orden de compra de fichas por SPEI",
+    description="""
+SPEI no se cobra, se RECIBE: devuelve CLABE, monto y una REFERENCIA unica que
+el usuario debe escribir en el concepto para poder casar el deposito.
+
+NO acredita fichas. Solo abre la orden (vence en 48 h).
+
+Body: { "arcadeChipOrders": [{ companyId, clientId, packKey, chips?: int }] }
+Returns: { orderId, reference, amountMXN, chips, expiresAt,
+           destination: { clabe, bankName, beneficiary } }
+
+503 spei_unavailable (falta ARCADE_SPEI_CLABE)
+""",
+)
+def arcade_spei_order(json: dict):
+    return arcade_spei_order_sp(json)
+
+
+@router.post(
+    "/arcade/speiDeclare",
+    summary="El cliente declara su clave de rastreo",
+    description="""
+Deja constancia de la transferencia. NO acredita fichas — lo que afirma quien
+paga no es comprobante. Una misma claveRastreo no puede usarse en dos ordenes.
+
+Body: { "arcadeChipOrders": [{ orderId, clientId, claveRastreo }] }
+
+409 clave_already_used / order_not_open    400 bad_clave
+""",
+)
+def arcade_spei_declare(json: dict):
+    return arcade_spei_declare_sp(json)
+
+
+@router.post(
+    "/arcade/speiConfirm",
+    summary="Conciliar la orden y ACREDITAR las fichas",
+    description="""
+⚠️ SOLO CONCILIACION / ADMINISTRACION. Este es el unico punto donde una compra
+por SPEI entrega fichas, y debe llamarse contra el estado de cuenta — nunca
+por el propio pagador. La puerta de rol va en la capa que expone esta ruta.
+
+Idempotente: reconfirmar no vuelve a acreditar (UX_arcadePurchases_tx sobre
+platform='spei' + 'spei:<claveRastreo>').
+
+Body: { "arcadeChipOrders": [{ orderId, confirmedBy, receivedMXN?: number }] }
+Returns: { status: 'credited'|'already_confirmed'|'already_credited',
+           folio, chipsCredited, coinBalance }
+
+409 amount_mismatch (el deposito no cubre el monto)
+""",
+)
+def arcade_spei_confirm(json: dict):
+    return arcade_spei_confirm_sp(json)
+
+
+@router.post(
+    "/all_arcadeChipOrders",
+    summary="Ordenes SPEI del cliente o bandeja de conciliacion",
+    description="""
+Body: { "arcadeChipOrders": [{ companyId, clientId?: int, status?: str, top?: int }] }
+Filtrar por status='declared' da la bandeja de lo que falta conciliar.
+""",
+)
+def all_arcade_chip_orders(json: dict):
+    return arcade_spei_orders_all_sp(json)
 
 
 @router.post(

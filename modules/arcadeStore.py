@@ -19,6 +19,7 @@ se RECHAZA la compra en vez de regalar fichas.
 
 import json
 import os
+import secrets
 import time
 import uuid
 
@@ -904,3 +905,155 @@ def arcade_saved_card_sp(json_file: dict):
         }}, status_code=200)
     except Exception as e:
         return JSONResponse(content={"card": None, "error": str(e)}, status_code=200)
+
+
+# ---------------------------------------------------------------------------
+# SPEI — comprar fichas por transferencia
+# ---------------------------------------------------------------------------
+# SPEI NO SE COBRA, SE RECIBE: el usuario empuja la transferencia desde su
+# banco y nosotros solo podemos detectarla. De ahi el flujo orden -> declarar
+# -> conciliar, y que las fichas se acrediten SOLO al conciliar.
+#
+# QUIEN PAGA NO CONFIRMA. Si bastara con que el cliente dijera "ya transferi",
+# cualquiera se regalaria fichas inventando una clave de rastreo. Confirma la
+# conciliacion bancaria o un administrador contra el estado de cuenta.
+#
+# La CLABE de destino vive en configuracion. Deberia mudarse a ajustes por
+# compania cuando exista esa tabla: bankAccounts es por CLIENTE (clientId NOT
+# NULL) y no tiene donde guardar la cuenta receptora del negocio.
+# ---------------------------------------------------------------------------
+
+def _spei_destination() -> dict:
+    return {
+        "clabe": os.getenv("ARCADE_SPEI_CLABE", ""),
+        "bankName": os.getenv("ARCADE_SPEI_BANK", ""),
+        "beneficiary": os.getenv("ARCADE_SPEI_BENEFICIARY", ""),
+    }
+
+
+def arcade_spei_order_sp(json_file: dict):
+    """
+    Abre una orden de compra por SPEI y devuelve los datos de la transferencia.
+
+    NO acredita fichas: solo aparta la intencion con una referencia unica que
+    el usuario debe escribir en el concepto para poder casar el deposito.
+    """
+    body = _first(json_file, "arcadeChipOrders")
+    company_id = body.get("companyId")
+    client_id = body.get("clientId")
+    pack_key = body.get("packKey")
+
+    if not (company_id and client_id and pack_key):
+        return JSONResponse(
+            content={"error": "missing_fields", "message": "Faltan datos de la compra"},
+            status_code=400,
+        )
+
+    destination = _spei_destination()
+    if not destination["clabe"]:
+        # Falla cerrado: sin CLABE de destino no hay adonde transferir y una
+        # orden sin cuenta solo generaria depositos perdidos.
+        return JSONResponse(
+            content={"error": "spei_unavailable",
+                     "message": "El pago por transferencia no esta configurado"},
+            status_code=503,
+        )
+
+    pack = _pack_row(pack_key)
+    if not pack:
+        return JSONResponse(
+            content={"error": "unknown_pack", "message": "Ese paquete no existe"},
+            status_code=400,
+        )
+
+    amount_cents, chips, err = _pack_amount(pack, body.get("chips"))
+    if err:
+        return JSONResponse(content={
+            "error": err, "message": "Cantidad de fichas fuera del rango permitido",
+            "minChips": pack.get("minChips"), "maxChips": pack.get("maxChips"),
+        }, status_code=400)
+
+    # Referencia corta y aleatoria: entra en el concepto de SPEI y no se puede
+    # adivinar la de otro cliente.
+    reference = f"ARC{secrets.token_hex(4).upper()}"
+
+    try:
+        created = _exec_sp("sp_arcadeChipOrders_create", {"arcadeChipOrders": [{
+            "companyId": company_id, "clientId": client_id, "packKey": pack_key,
+            "chips": chips, "amountMXN": round(amount_cents / 100, 2),
+            "reference": reference, "expiresInHours": 48,
+        }]})
+    except Exception as e:
+        # Sin este guardia un error de base salia como traceback sin manejar.
+        print(f"[arcadeStore] no se pudo abrir la orden SPEI: {type(e).__name__}: {e}")
+        return JSONResponse(
+            content={"error": "order_failed", "message": "No se pudo abrir la orden"},
+            status_code=500,
+        )
+    if "error" in created:
+        return JSONResponse(content=created, status_code=400)
+
+    log_workflow_step(
+        "Chip SPEI Order Opened", workflow_name=WORKFLOW, action="spei",
+        entity="arcadeChipOrders", entity_id=created.get("orderId"),
+        message=f"{pack_key} — ${amount_cents / 100:,.2f} MXN ref {reference}",
+    )
+
+    return JSONResponse(content={**created, "destination": destination}, status_code=200)
+
+
+def arcade_spei_declare_sp(json_file: dict):
+    """
+    El cliente declara su clave de rastreo.
+
+    Deja constancia y NADA MAS: lo que afirma quien paga no acredita fichas.
+    """
+    try:
+        data = _exec_sp("sp_arcadeChipOrders_declare", json_file)
+        code = data.get("error")
+        if code:
+            status = 409 if code in ("clave_already_used", "order_not_open") else 400
+            return JSONResponse(content=data, status_code=status)
+        return JSONResponse(content=data, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+def arcade_spei_confirm_sp(json_file: dict):
+    """
+    Concilia la orden y acredita las fichas.
+
+    SOLO para conciliacion/administracion — la ruta lo advierte y la puerta de
+    rol va en la capa de arriba. Es idempotente: reconfirmar no vuelve a
+    acreditar.
+    """
+    try:
+        data = _exec_sp("sp_arcadeChipOrders_confirm", json_file)
+        code = data.get("error")
+        if code:
+            status = 409 if code == "amount_mismatch" else 400 if code in (
+                "order_not_found", "no_clave") else 500
+            return JSONResponse(content=data, status_code=status)
+
+        if data.get("status") == "credited":
+            log_workflow_step(
+                "Chip SPEI Confirmed", workflow_name=WORKFLOW, action="spei",
+                entity="arcadeChipOrders", entity_id=data.get("orderId"),
+                message=f"{data.get('chipsCredited')} fichas — folio {data.get('folio')}",
+            )
+            log_audit("arcadeChipOrders", data.get("orderId"), "status",
+                      "declared", "confirmed", action="CONFIRM")
+        return JSONResponse(content=data, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+def arcade_spei_orders_all_sp(json_file: dict):
+    """Ordenes del cliente, o bandeja de conciliacion filtrando por status."""
+    try:
+        data = _exec_sp("sp_arcadeChipOrders_all", json_file)
+        if "error" in data:
+            return JSONResponse(content=data, status_code=500)
+        return JSONResponse(content=data, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)

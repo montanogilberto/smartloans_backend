@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from modules.arcade import (
     arcade_games_all_sp, arcade_wallet_one_sp, arcade_daily_bonus_sp,
     arcade_bet_sp, arcade_action_sp, arcade_rounds_all_sp, arcade_transactions_all_sp,
-    arcade_round_one_sp,
+    arcade_round_one_sp, arcade_live_wins_sp,
 )
 
 router = APIRouter()
@@ -130,6 +130,23 @@ Returns: { "arcadeRounds": ArcadeRound[] }
 )
 def all_arcade_rounds(json: dict):
     return arcade_rounds_all_sp(json)
+
+
+@router.post(
+    "/arcade/liveWins",
+    summary="Ganancias recientes (ticker del dashboard)",
+    description="""
+Rondas ganadoras recientes de la compania, ANONIMAS: no sale clientId ni
+nombre. Es una app de prestamos y publicar quien juega revelaria algo que el
+ticker no necesita.
+
+Body: { "arcadeRounds": [{ "companyId": int, "top"?: int }] }   (top max 50)
+Returns: { "arcadeRounds": [{ roundId, gameKey, gameName, betAmount,
+           payoutAmount, multiplier, settledAt }] }
+""",
+)
+def arcade_live_wins(json: dict):
+    return arcade_live_wins_sp(json)
 
 
 @router.post(

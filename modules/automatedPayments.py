@@ -392,6 +392,14 @@ async def pay_installment_spei(payload: dict):
         "attemptCount":  int(inst.get("attemptCount", 0)) + 1,
     })
 
+    # Puntos por pagar puntual. Import perezoso e idempotente por cuota; si
+    # falla no se toca el pago, que ya movio dinero.
+    try:
+        from modules.rewardBenefits import award_on_time_payment
+        award_on_time_payment(company_id, borrower_id, inst_id, amount)
+    except Exception as _e:
+        print(f"[rewards] puntos de cuota {inst_id} omitidos: {_e}")
+
     try:
         # Hub tags are user_{userId}; lender_id is a CLIENT id — resolve first
         # or the push targets an empty tag and vanishes silently.
@@ -528,6 +536,12 @@ async def charge_due_installments(payload: dict):
                 "paidAt":                datetime.now(timezone.utc).isoformat(),
                 "attemptCount":          attempts + 1,
             })
+
+            try:
+                from modules.rewardBenefits import award_on_time_payment
+                award_on_time_payment(company_id, client_id, inst_id, amount_mxn)
+            except Exception as _e:
+                print(f"[rewards] puntos de cuota {inst_id} omitidos: {_e}")
             charged += 1
             transfer_note = None
             try:
