@@ -1,3 +1,4 @@
+import os
 import ssl, smtplib, certifi
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -17,13 +18,21 @@ def send_contact_email(json_file: dict):
         if not nombre or not email or not mensaje:
             return JSONResponse(content={"error": "Faltan campos obligatorios: nombre, email, mensaje"}, status_code=400)
 
-        smtp_server     = "smtp.office365.com"
-        #smtp_server     = "smtp.secureserver.net"
-        port            = 587
-        sender_email    = "administracion@rpmtoolsmx.com"
-        sender_password = "Rpmadmin#05"  # ideal: usar variable de entorno
+        # Credenciales SOLO por entorno. La contrasena estuvo escrita aqui en un
+        # repo publico: hay que darla por comprometida y rotarla en Office 365,
+        # porque sigue en el historial de git aunque ya no este en el codigo.
+        smtp_server     = os.getenv("SMTP_SERVER", "smtp.office365.com")
+        port            = int(os.getenv("SMTP_PORT", "587"))
+        sender_email    = os.getenv("SMTP_USER", "")
+        sender_password = os.getenv("SMTP_PASSWORD", "")
 
-        to_email = "administracion@rpmtoolsmx.com"
+        if not sender_email or not sender_password:
+            return JSONResponse(
+                content={"error": "SMTP no configurado: falta SMTP_USER / SMTP_PASSWORD"},
+                status_code=503,
+            )
+
+        to_email = os.getenv("CONTACT_TO_EMAIL", sender_email)
         subject = f"Nuevo mensaje de contacto - {nombre}"
         body = (
             "Has recibido un nuevo mensaje desde el formulario de contacto:\n\n"
