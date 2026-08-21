@@ -44,63 +44,12 @@ def _conn():
 # Motor de juego limpio (provably fair)
 # ---------------------------------------------------------------------------
 
-def new_server_seed() -> str:
-    """32 bytes de entropia criptografica en hex (64 chars)."""
-    return secrets.token_hex(32)
-
-
-def seed_hash(server_seed: str) -> str:
-    """El compromiso que ve el jugador ANTES de jugar."""
-    return hashlib.sha256(server_seed.encode()).hexdigest()
-
-
-def _byte_stream(server_seed: str, client_seed: str):
-    """
-    Chorro determinista e ilimitado de bytes: HMAC-SHA256(serverSeed, clientSeed:n)
-    concatenado sobre n. Mismas semillas -> misma secuencia, que es justo lo que
-    permite al jugador re-derivar la partida y auditarla.
-    """
-    counter = 0
-    while True:
-        block = hmac.new(
-            server_seed.encode(),
-            f"{client_seed}:{counter}".encode(),
-            hashlib.sha256,
-        ).digest()
-        for byte in block:
-            yield byte
-        counter += 1
-
-
-def _rand_below(stream, n: int) -> int:
-    """
-    Entero uniforme en [0, n) por muestreo con rechazo.
-    El `% n` directo sobre 32 bits sesga los valores bajos: con n=52 el sesgo es
-    minusculo pero real, y en un juego con ventaja de casa declarada no se vale
-    meter un sesgo que nadie audito.
-    """
-    if n <= 1:
-        return 0
-    limit = (2 ** 32 // n) * n
-    while True:
-        value = int.from_bytes(bytes(next(stream) for _ in range(4)), "big")
-        if value < limit:
-            return value % n
-
-
-def shuffle(items: list, server_seed: str, client_seed: str) -> list:
-    """Fisher-Yates con el chorro de la semilla — barajada reproducible y sin sesgo."""
-    stream = _byte_stream(server_seed, client_seed)
-    deck = list(items)
-    for i in range(len(deck) - 1, 0, -1):
-        j = _rand_below(stream, i + 1)
-        deck[i], deck[j] = deck[j], deck[i]
-    return deck
-
-
-def verify_round(server_seed: str, server_seed_hash: str) -> bool:
-    """Lo mismo que puede correr el jugador con los datos que le devolvimos."""
-    return hmac.compare_digest(seed_hash(server_seed), server_seed_hash)
+# Las primitivas de juego limpio viven en arcadeFair para que arcadeGames
+# pueda usarlas sin cerrar un ciclo de imports. Se re-exportan aqui porque
+# el resto del modulo (y los tests) las llaman por este nombre.
+from modules.arcadeFair import (  # noqa: E402
+    new_server_seed, seed_hash, _byte_stream, _rand_below, shuffle, verify_round,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -393,18 +342,45 @@ def mole_settle(state: dict, hits: list) -> tuple:
 # Los ocho juegos que salen con comingSoon='1' en el catalogo aterrizan en este
 # diccionario: mientras no tengan motor, sp_arcadeRounds_open ya los rechaza
 # con game_unavailable, asi que no hay forma de apostarles por accidente.
+def _bj_engine_apply(state: dict, action: str, payload: dict) -> tuple:
+    """Adapta blackjack al contrato comun (state, action, payload) -> 5-tupla."""
+    state, finished, outcome, multiplier = bj_apply(state, action)
+    return state, finished, outcome, multiplier, None
+
+
+def _mole_engine_apply(state: dict, action: str, payload: dict) -> tuple:
+    """Adapta el topo: 'finish' liquida con los golpes reportados."""
+    score, multiplier, detail = mole_settle(state, (payload or {}).get("hits"))
+    state["finished"] = True
+    return state, True, ("win" if multiplier > 0 else "lose"), multiplier, detail
+
+
 ENGINES = {
     "blackjack": {
-        "new_round": bj_new_round,
+        "new_round": lambda ss, cs, opt: bj_new_round(ss, cs),
         "public_state": bj_public_state,
+        "apply": _bj_engine_apply,
         "actions": ("hit", "stand", "double"),
+        # Doblar duplica la exposicion: cobra una segunda apuesta.
+        "stake_actions": ("double",),
+        "can_stake": lambda st: len(st["player"]) == 2 and not st.get("doubled"),
     },
     "mole": {
-        "new_round": mole_new_round,
+        "new_round": lambda ss, cs, opt: mole_new_round(ss, cs),
         "public_state": mole_public_state,
+        "apply": _mole_engine_apply,
         "actions": ("finish",),
+        # 80% de la ronda: liquidar antes significa que nadie jugo.
+        "min_elapsed_ms": int(MOLE_ROUND_MS * 0.8),
     },
 }
+
+# Los otros ocho juegos. Ya no hay ciclo (las primitivas viven en arcadeFair),
+# asi que el import va arriba y un fallo revienta de inmediato en vez de dejar
+# el arcade a medias en silencio.
+from modules.arcadeGames import GAME_ENGINES  # noqa: E402
+
+ENGINES.update(GAME_ENGINES)
 
 # Codigos que devuelven las SPs cuando la jugada es invalida por reglas de
 # negocio, no por una falla del servidor. 409 y no 500: el cliente puede
@@ -659,7 +635,15 @@ def arcade_bet_sp(json_file: dict):
 
         server_seed = new_server_seed()
         client_seed = (body.get("clientSeed") or secrets.token_hex(8))[:64]
-        state = engine["new_round"](server_seed, client_seed)
+
+        # Opciones que el jugador elige ANTES de conocer el resultado (numero
+        # de los dados, aguila o sol, cuantas minas). Van al motor, que las
+        # valida: si vinieran despues, se podrian ajustar viendo la jugada.
+        options = body.get("options") or {}
+        try:
+            state = engine["new_round"](server_seed, client_seed, options)
+        except ValueError as err:
+            return _error_response({"error": str(err), "message": "Opciones no validas"})
 
         opened = _exec_sp("sp_arcadeRounds_open", {"arcadeRounds": [{
             "companyId": body.get("companyId"),
@@ -689,29 +673,67 @@ def arcade_bet_sp(json_file: dict):
 
         # Blackjack se reparte al abrir, asi que un natural cierra la mano sin
         # que el jugador toque nada — se liquida en el mismo viaje.
-        if game_key == "blackjack":
-            state, finished, outcome, multiplier = bj_apply(state, "deal")
-            if finished:
-                return _settle_round(round_row, state, outcome, multiplier, game)
+        # ── Despacho generico ────────────────────────────────────────────
+        # Cada juego expone el MISMO contrato (ver ENGINES), asi que agregar un
+        # juego es agregar una entrada al registro, no otra rama aqui. Antes
+        # esto era un if por juego y con diez juegos se volvia inmanejable.
 
+        # 1. Acciones que cobran una apuesta EXTRA (doblar en blackjack).
+        #    Se cobra despues de validar la jugada — al reves, un doble
+        #    invalido dejaria al jugador cobrado por algo que nunca ocurrio.
+        if action in (engine.get("stake_actions") or ()):
+            legal = engine.get("can_stake")
+            if legal and not legal(state):
+                return _error_response({"error": "cannot_double", "message": "Jugada no valida"})
+            charged = _exec_sp("sp_arcadeRounds_double", {"arcadeRounds": [{
+                "roundId": round_id, "clientId": client_id,
+            }]})
+            if "error" in charged:
+                return _error_response(charged)
+
+        # 2. Juegos con ventana de tiempo (los de reflejos): liquidar antes de
+        #    que la ronda pueda haber terminado significa que nadie jugo.
+        min_ms = engine.get("min_elapsed_ms")
+        if min_ms:
+            opened_at = _parse_utc(row.get("created_At"))
+            if opened_at is not None:
+                elapsed = datetime.now(timezone.utc) - opened_at
+                if elapsed < timedelta(milliseconds=min_ms):
+                    return _error_response({
+                        "error": "too_early", "message": "La ronda todavia no termina",
+                    })
+
+        # 3. La jugada la resuelve el motor del juego.
+        try:
+            state, finished, outcome, multiplier, detail = engine["apply"](state, action, payload)
+        except ValueError as err:
+            return _error_response({"error": str(err), "message": "Jugada no valida"})
+
+        if finished:
+            return _settle_round(round_row, state, outcome, multiplier, game, detail)
+
+        saved = _exec_sp("sp_arcadeRounds_state", {"arcadeRounds": [{
+            "roundId": round_id, "clientId": client_id, "state": state,
+        }]})
+        if "error" in saved:
+            return _error_response(saved)
         return JSONResponse(content={
-            "roundId": opened["roundId"],
             "roundStatus": "open",
-            "serverSeedHash": opened["serverSeedHash"],
-            "clientSeed": client_seed,
-            "nonce": opened["nonce"],
-            "coinBalance": opened["coinBalance"],
-            "betAmount": round_row["betAmount"],
             "state": engine["public_state"](state),
         }, status_code=200)
+
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 def arcade_action_sp(json_file: dict):
     """
     Aplica una jugada sobre una ronda abierta. El cliente declara la INTENCION;
     el resultado lo calcula el servidor con el estado que guardo al abrir.
+
+    El despacho es GENERICO: cada juego expone el mismo contrato en ENGINES, asi
+    que agregar uno es agregar una entrada al registro y no otra rama aqui.
     """
     try:
         body = _first(json_file, "arcadeRounds")
@@ -748,58 +770,49 @@ def arcade_action_sp(json_file: dict):
             "betAmount": int(row["betAmount"]),
         }
 
-        if game_key == "blackjack":
-            # Doblar cobra una SEGUNDA apuesta. El orden importa: primero se
-            # comprueba que la jugada sea LEGAL y solo despues se cobra — al
-            # reves, un doble invalido (mano de 3 cartas, o doblar dos veces)
-            # dejaria al jugador cobrado por algo que nunca ocurrio.
-            if action == "double":
-                if len(state.get("player") or []) != 2 or state.get("doubled"):
-                    return _error_response({
-                        "error": "cannot_double",
-                        "message": "Solo puedes doblar con tus dos primeras cartas",
-                    })
-                charged = _exec_sp("sp_arcadeRounds_double", {"arcadeRounds": [{
-                    "roundId": round_id, "clientId": client_id,
-                }]})
-                if "error" in charged:
-                    return _error_response(charged)
-
-            try:
-                state, finished, outcome, multiplier = bj_apply(state, action)
-            except ValueError as err:
-                return _error_response({"error": str(err), "message": "Jugada no valida"})
-
-            if finished:
-                return _settle_round(round_row, state, outcome, multiplier, game)
-
-            saved = _exec_sp("sp_arcadeRounds_state", {"arcadeRounds": [{
-                "roundId": round_id, "clientId": client_id, "state": state,
+        # 1. Acciones que cobran una apuesta EXTRA (doblar en blackjack). Se
+        #    cobra DESPUES de validar que la jugada es legal: al reves, un
+        #    doble invalido dejaria al jugador cobrado por algo que no ocurrio.
+        if action in (engine.get("stake_actions") or ()):
+            legal = engine.get("can_stake")
+            if legal and not legal(state):
+                return _error_response({"error": "cannot_double", "message": "Jugada no valida"})
+            charged = _exec_sp("sp_arcadeRounds_double", {"arcadeRounds": [{
+                "roundId": round_id, "clientId": client_id,
             }]})
-            if "error" in saved:
-                return _error_response(saved)
-            return JSONResponse(content={
-                "roundStatus": "open",
-                "state": engine["public_state"](state),
-            }, status_code=200)
+            if "error" in charged:
+                return _error_response(charged)
 
-        if game_key == "mole":
-            # Una ronda de topos dura 20 s de reloj. Si la liquidacion llega
-            # antes, nadie jugo: el cliente mando el marcador sin esperar.
+        # 2. Juegos con ventana de tiempo (reflejos): liquidar antes de que la
+        #    ronda pueda haber terminado significa que nadie jugo.
+        min_ms = engine.get("min_elapsed_ms")
+        if min_ms:
             opened_at = _parse_utc(row.get("created_At"))
             if opened_at is not None:
                 elapsed = datetime.now(timezone.utc) - opened_at
-                if elapsed < timedelta(milliseconds=MOLE_ROUND_MS * 0.8):
+                if elapsed < timedelta(milliseconds=min_ms):
                     return _error_response({
-                        "error": "too_early",
-                        "message": "La ronda todavia no termina",
+                        "error": "too_early", "message": "La ronda todavia no termina",
                     })
 
-            score, multiplier, detail = mole_settle(state, payload.get("hits"))
-            state["finished"] = True
-            outcome = "win" if multiplier > 0 else "lose"
+        # 3. La jugada la resuelve el motor del juego.
+        try:
+            state, finished, outcome, multiplier, detail = engine["apply"](state, action, payload)
+        except ValueError as err:
+            return _error_response({"error": str(err), "message": "Jugada no valida"})
+
+        if finished:
             return _settle_round(round_row, state, outcome, multiplier, game, detail)
 
-        return _error_response({"error": "unknown_action", "message": "Juego sin motor"})
+        saved = _exec_sp("sp_arcadeRounds_state", {"arcadeRounds": [{
+            "roundId": round_id, "clientId": client_id, "state": state,
+        }]})
+        if "error" in saved:
+            return _error_response(saved)
+
+        return JSONResponse(content={
+            "roundStatus": "open",
+            "state": engine["public_state"](state),
+        }, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)

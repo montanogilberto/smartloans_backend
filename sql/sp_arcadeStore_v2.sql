@@ -229,3 +229,41 @@ BEGIN
     END CATCH
 END
 GO
+
+-- ============================================================
+-- sp_arcadePurchases_all — v2: ahora devuelve folio y ticket
+-- ============================================================
+-- Se agregaron folio/receiptUrl a la tabla pero esta SP seguia con la lista
+-- de columnas vieja, asi que el historial nunca mostraba el ticket aunque
+-- estuviera guardado.
+-- ============================================================
+IF OBJECT_ID('dbo.sp_arcadePurchases_all', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_arcadePurchases_all;
+GO
+
+CREATE PROCEDURE [dbo].[sp_arcadePurchases_all]
+    @pjsonfile NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRY
+        DECLARE @companyId INT = JSON_VALUE(@pjsonfile, '$.arcadePurchases[0].companyId')
+        DECLARE @clientId  INT = JSON_VALUE(@pjsonfile, '$.arcadePurchases[0].clientId')
+        DECLARE @top       INT = ISNULL(TRY_CAST(JSON_VALUE(@pjsonfile, '$.arcadePurchases[0].top') AS INT), 50)
+
+        SELECT ISNULL(
+            (SELECT TOP (@top) purchaseId, folio, packKey, platform, chipsCredited,
+                    priceCharged, currency, environment, receiptUrl,
+                    CONVERT(NVARCHAR, receiptSentAt, 127) AS receiptSentAt,
+                    CONVERT(NVARCHAR, created_At, 127)    AS created_At
+             FROM [dbo].[arcadePurchases]
+             WHERE companyId = @companyId AND clientId = @clientId
+             ORDER BY created_At DESC
+             FOR JSON PATH, ROOT('arcadePurchases')),
+            '{"arcadePurchases":[]}'
+        ) AS [jsonResult]
+    END TRY
+    BEGIN CATCH
+        SELECT ('{"error":"' + REPLACE(ERROR_MESSAGE(),'"','\"') + '"}') AS [jsonResult]
+    END CATCH
+END
+GO
