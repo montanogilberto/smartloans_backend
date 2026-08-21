@@ -578,11 +578,21 @@ def send_recovery_email(json_file: dict):
         except Exception:
             pass
 
-    # Gmail SMTP settings
-    smtp_server = "smtp.gmail.com"
-    port = 587
-    sender_email = "contreras.9999@gmail.com"
-    sender_password = "kpkihuhxbzrkzpur"  # Contraseña de aplicación sin espacios
+    # Credenciales SOLO por entorno. Esta contrasena de aplicacion estuvo
+    # escrita aqui en un repo publico: darla por comprometida y revocarla en
+    # la cuenta de Google, porque sigue en el historial de git.
+    smtp_server = os.getenv("GMAIL_SMTP_SERVER", "smtp.gmail.com")
+    port = int(os.getenv("GMAIL_SMTP_PORT", "587"))
+    sender_email = os.getenv("GMAIL_SMTP_USER", "")
+    sender_password = os.getenv("GMAIL_SMTP_PASSWORD", "")
+
+    if not sender_email or not sender_password:
+        # La funcion contesta JSONResponse, no un bool: devolver False aqui
+        # rompia el contrato de la ruta.
+        return JSONResponse(
+            content={"error": "SMTP no configurado: falta GMAIL_SMTP_USER / GMAIL_SMTP_PASSWORD"},
+            status_code=503,
+        )
 
     # Email content
     subject = "Recuperación de Contraseña"

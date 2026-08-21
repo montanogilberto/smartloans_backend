@@ -1230,6 +1230,24 @@ async def handle_webhook(request: Request):
     if event_type == "payment_intent.succeeded":
         intent_id = data_obj.get("id")
         metadata  = data_obj.get("metadata", {})
+
+        # Compra de FICHAS del arcade: no es dinero del usuario sino ingreso
+        # por un bien virtual, asi que no tiene fila en stripeTransactions ni
+        # toca el ledger de la billetera. Se acredita aparte y se corta aqui.
+        #
+        # Este camino existe para cuando el navegador se cierra justo despues
+        # de pagar: sin webhook el usuario quedaria cobrado y sin fichas. Si la
+        # pestana si alcanzo a confirmar, el indice unico de arcadePurchases
+        # hace que este segundo intento no acredite de nuevo.
+        if metadata.get("kind") == "arcade_chips":
+            from modules.arcadeStore import credit_stripe_chip_purchase
+            result = credit_stripe_chip_purchase(data_obj)
+            log_workflow_step("Webhook Chip Purchase", workflow_name="arcade_store",
+                              entity="arcadePurchases",
+                              message=f"intent {intent_id} -> {result.get('status') or result.get('error')}")
+            print(f"[stripe][webhook] Arcade chips: {intent_id} -> {result.get('status') or result.get('error')}")
+            return JSONResponse({"received": True}, status_code=200)
+
         tx = _sp_transaction({
             "action": "update_status",
             "stripePaymentIntentId": intent_id,
