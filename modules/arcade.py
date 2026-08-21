@@ -688,54 +688,30 @@ def arcade_bet_sp(json_file: dict):
             message=f"apuesta {round_row['betAmount']} fichas",
         )
 
-        # Blackjack se reparte al abrir, asi que un natural cierra la mano sin
-        # que el jugador toque nada — se liquida en el mismo viaje.
-        # ── Despacho generico ────────────────────────────────────────────
-        # Cada juego expone el MISMO contrato (ver ENGINES), asi que agregar un
-        # juego es agregar una entrada al registro, no otra rama aqui. Antes
-        # esto era un if por juego y con diez juegos se volvia inmanejable.
+        # Blackjack se reparte AL ABRIR: si sale un natural la mano termina
+        # sin que el jugador toque nada, asi que se liquida en este mismo viaje.
+        if game_key == "blackjack":
+            state, finished, outcome, multiplier = bj_apply(state, "deal")
+            if finished:
+                return _settle_round(round_row, state, outcome, multiplier, game)
 
-        # 1. Acciones que cobran una apuesta EXTRA (doblar en blackjack).
-        #    Se cobra despues de validar la jugada — al reves, un doble
-        #    invalido dejaria al jugador cobrado por algo que nunca ocurrio.
-        if action in (engine.get("stake_actions") or ()):
-            legal = engine.get("can_stake")
-            if legal and not legal(state):
-                return _error_response({"error": "cannot_double", "message": "Jugada no valida"})
-            charged = _exec_sp("sp_arcadeRounds_double", {"arcadeRounds": [{
-                "roundId": round_id, "clientId": client_id,
-            }]})
-            if "error" in charged:
-                return _error_response(charged)
+        # Juegos de un solo tiro (volado, dados, ruleta, raspadito): el
+        # resultado ya quedo fijado por la semilla al abrir la ronda, asi que
+        # se liquidan aqui y no dejan ronda abierta que atender.
+        if engine.get("instant"):
+            state, finished, outcome, multiplier, detail = engine["apply"](state, "reveal", {})
+            if finished:
+                return _settle_round(round_row, state, outcome, multiplier, game, detail)
 
-        # 2. Juegos con ventana de tiempo (los de reflejos): liquidar antes de
-        #    que la ronda pueda haber terminado significa que nadie jugo.
-        min_ms = engine.get("min_elapsed_ms")
-        if min_ms:
-            opened_at = _parse_utc(row.get("created_At"))
-            if opened_at is not None:
-                elapsed = datetime.now(timezone.utc) - opened_at
-                if elapsed < timedelta(milliseconds=min_ms):
-                    return _error_response({
-                        "error": "too_early", "message": "La ronda todavia no termina",
-                    })
-
-        # 3. La jugada la resuelve el motor del juego.
-        try:
-            state, finished, outcome, multiplier, detail = engine["apply"](state, action, payload)
-        except ValueError as err:
-            return _error_response({"error": str(err), "message": "Jugada no valida"})
-
-        if finished:
-            return _settle_round(round_row, state, outcome, multiplier, game, detail)
-
-        saved = _exec_sp("sp_arcadeRounds_state", {"arcadeRounds": [{
-            "roundId": round_id, "clientId": client_id, "state": state,
-        }]})
-        if "error" in saved:
-            return _error_response(saved)
+        # Juegos por turnos: la ronda queda abierta esperando acciones.
         return JSONResponse(content={
+            "roundId": opened["roundId"],
             "roundStatus": "open",
+            "serverSeedHash": opened["serverSeedHash"],
+            "clientSeed": client_seed,
+            "nonce": opened["nonce"],
+            "coinBalance": opened["coinBalance"],
+            "betAmount": round_row["betAmount"],
             "state": engine["public_state"](state),
         }, status_code=200)
 
