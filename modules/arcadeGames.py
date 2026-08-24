@@ -304,6 +304,16 @@ def hl_public(state: dict) -> dict:
         "multiplier": round(state["multiplier"], 4),
         "streak": state["streak"],
         "cardsLeft": len(state["deck"]) - state["cursor"],
+        # Probabilidades REALES con las cartas que quedan.
+        #
+        # Exponerlas no filtra nada: se calculan sobre las cartas NO salidas, y
+        # el jugador ya vio cuales salieron — puede sacar la cuenta con papel.
+        # Publicarlas iguala el conocimiento sin revelar la baraja, y evita que
+        # el frontend invente una aproximacion que contradiga al servidor.
+        "higherChance": round(p_hi, 4),
+        "lowerChance": round(p_lo, 4),
+        # El empate PIERDE; decirlo es parte de jugar limpio.
+        "tieChance": round(max(0.0, 1 - p_hi - p_lo), 4),
         # Adonde subiria el acumulado si acierta, no el pago del paso suelto.
         "higherPays": _payout(state["fair"] / p_hi, HL_RTP, HL_MAX_MULT) if p_hi > 0 else 0.0,
         "lowerPays": _payout(state["fair"] / p_lo, HL_RTP, HL_MAX_MULT) if p_lo > 0 else 0.0,

@@ -2,8 +2,15 @@
 -- transferEvidence — HAND-AUTHORED (documented posgmo-factory exception)
 -- Table:    transferEvidence
 -- SP:       sp_transferEvidence
--- Actions:  create | list | one
+-- Actions:  create | list | one | validate
 -- ============================================================
+-- validate (added later): persists the evidence_validation_agent's verdict
+-- (LoanAgents_SmartLoans POST /validate-transfer-evidence) onto the row the
+-- photo belongs to. Advisory only -- this never moves the funding status
+-- machine itself (D5: only the borrower's own confirmFunding does that);
+-- it just records whether the photo matched what was declared, so support
+-- can see it and a NEEDS_REVIEW/INVALID verdict can trigger a push asking
+-- for a clearer photo instead of silently trusting an unread receipt.
 -- Why hand-authored: two posgmo-factory export-only runs (2026-08-15)
 -- failed before reaching database generation at all -- run 1 hard-blocked
 -- on a false-positive "FK target 'companies' does not exist" (companies
@@ -71,6 +78,31 @@ IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_transferEvidence_compa
 GO
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_transferEvidence_reference')
     CREATE NONCLUSTERED INDEX IX_transferEvidence_reference ON dbo.transferEvidence (referenceType, referenceId);
+GO
+
+-- ── AI validation columns (added for evidence_validation_agent) ──
+-- PENDING until an agent verdict lands; NEEDS_REVIEW is the fail-closed
+-- landing spot for CANNOT_ASSESS/ambiguous, same convention as
+-- face_validation's REVIEW_MANUALLY -- never silently treated as VALID.
+IF COL_LENGTH('dbo.transferEvidence', 'validationStatus') IS NULL
+    ALTER TABLE [dbo].[transferEvidence] ADD validationStatus NVARCHAR(20) NOT NULL DEFAULT 'PENDING';
+GO
+IF COL_LENGTH('dbo.transferEvidence', 'aiConfidence') IS NULL
+    ALTER TABLE [dbo].[transferEvidence] ADD aiConfidence DECIMAL(5,2) NULL;
+GO
+IF COL_LENGTH('dbo.transferEvidence', 'aiReasoning') IS NULL
+    ALTER TABLE [dbo].[transferEvidence] ADD aiReasoning NVARCHAR(1000) NULL;
+GO
+IF COL_LENGTH('dbo.transferEvidence', 'aiMismatches') IS NULL
+    ALTER TABLE [dbo].[transferEvidence] ADD aiMismatches NVARCHAR(1000) NULL;
+GO
+IF COL_LENGTH('dbo.transferEvidence', 'aiValidatedAt') IS NULL
+    ALTER TABLE [dbo].[transferEvidence] ADD aiValidatedAt DATETIME2 NULL;
+GO
+IF NOT EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_transferEvidence_validationStatus')
+    ALTER TABLE [dbo].[transferEvidence] ADD CONSTRAINT CK_transferEvidence_validationStatus CHECK (
+        validationStatus IN ('PENDING','VALID','NEEDS_REVIEW','INVALID')
+    );
 GO
 
 -- ── SP ───────────────────────────────────────────────────────
@@ -159,6 +191,8 @@ BEGIN
             SELECT transferEvidenceId, companyId, referenceType, referenceId, claveRastreo,
                    CONVERT(NVARCHAR, transferDate, 127) AS transferDate,
                    bankFrom, amountMXN, evidenceFileUrl, evidenceHash, uploadedByClientId,
+                   validationStatus, aiConfidence, aiReasoning, aiMismatches,
+                   CONVERT(NVARCHAR, aiValidatedAt, 127) AS aiValidatedAt,
                    CONVERT(NVARCHAR, created_At, 127) AS created_At
             FROM dbo.transferEvidence WHERE transferEvidenceId = @newEvidenceId
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
@@ -175,6 +209,8 @@ BEGIN
             (SELECT transferEvidenceId, companyId, referenceType, referenceId, claveRastreo,
                     CONVERT(NVARCHAR, transferDate, 127) AS transferDate,
                     bankFrom, amountMXN, evidenceFileUrl, evidenceHash, uploadedByClientId,
+                    validationStatus, aiConfidence, aiReasoning, aiMismatches,
+                    CONVERT(NVARCHAR, aiValidatedAt, 127) AS aiValidatedAt,
                     CONVERT(NVARCHAR, created_At, 127) AS created_At
              FROM dbo.transferEvidence
              WHERE companyId = @companyId
@@ -195,9 +231,68 @@ BEGIN
             SELECT transferEvidenceId, companyId, referenceType, referenceId, claveRastreo,
                    CONVERT(NVARCHAR, transferDate, 127) AS transferDate,
                    bankFrom, amountMXN, evidenceFileUrl, evidenceHash, uploadedByClientId,
+                   validationStatus, aiConfidence, aiReasoning, aiMismatches,
+                   CONVERT(NVARCHAR, aiValidatedAt, 127) AS aiValidatedAt,
                    CONVERT(NVARCHAR, created_At, 127) AS created_At
             FROM dbo.transferEvidence
             WHERE transferEvidenceId = @oneId AND companyId = @companyId
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        ) AS [jsonResult]
+    END
+
+    -- ── validate ─────────────────────────────────────────────
+    -- Persists the evidence_validation_agent's verdict. Advisory only: never
+    -- touches fundingTransactions/loans status (D5 stays intact — only the
+    -- borrower's own confirmFunding activates a loan). NEEDS_REVIEW/INVALID
+    -- rows are still visible via list/one so support can act on them.
+    ELSE IF @action = 'validate'
+    BEGIN
+        DECLARE @validateId         INT           = JSON_VALUE(@pjsonfile, '$.transferEvidence[0].transferEvidenceId')
+        DECLARE @validationStatus   NVARCHAR(20)  = JSON_VALUE(@pjsonfile, '$.transferEvidence[0].validationStatus')
+        DECLARE @aiConfidence       DECIMAL(5,2)  = JSON_VALUE(@pjsonfile, '$.transferEvidence[0].aiConfidence')
+        DECLARE @aiReasoning        NVARCHAR(1000) = JSON_VALUE(@pjsonfile, '$.transferEvidence[0].aiReasoning')
+        DECLARE @aiMismatches       NVARCHAR(1000) = JSON_VALUE(@pjsonfile, '$.transferEvidence[0].aiMismatches')
+
+        IF @validationStatus NOT IN ('VALID','NEEDS_REVIEW','INVALID')
+        BEGIN
+            SELECT '{"error":"validationStatus debe ser VALID, NEEDS_REVIEW o INVALID."}' AS [jsonResult]
+            RETURN
+        END
+
+        DECLARE @evidenceReferenceType NVARCHAR(12), @evidenceReferenceId INT
+        SELECT @evidenceReferenceType = referenceType, @evidenceReferenceId = referenceId
+        FROM dbo.transferEvidence WHERE transferEvidenceId = @validateId AND companyId = @companyId
+
+        IF @evidenceReferenceType IS NULL
+        BEGIN
+            SELECT '{"error":"transferEvidenceId no encontrado."}' AS [jsonResult]
+            RETURN
+        END
+
+        UPDATE dbo.transferEvidence
+        SET validationStatus = @validationStatus,
+            aiConfidence     = @aiConfidence,
+            aiReasoning      = @aiReasoning,
+            aiMismatches     = @aiMismatches,
+            aiValidatedAt    = GETUTCDATE()
+        WHERE transferEvidenceId = @validateId AND companyId = @companyId
+
+        -- Audit trail: only meaningful for FUNDING today (paymentHistory's
+        -- subjectType CHECK is FUNDING|PAYMENT, and loanPayments doesn't
+        -- exist yet for INSTALLMENT/PARTIAL/PAYOFF evidence). Depends on
+        -- dbo.paymentHistory existing -- created in sp_fundingTransactions.sql,
+        -- run that script first if deploying to a fresh database.
+        IF @evidenceReferenceType = 'FUNDING'
+            INSERT INTO dbo.paymentHistory
+                (companyId, subjectType, subjectId, oldStatus, newStatus, reason)
+            VALUES
+                (@companyId, 'FUNDING', @evidenceReferenceId, NULL, @validationStatus, 'evidence_ai_validation')
+
+        SELECT (
+            SELECT transferEvidenceId, companyId, referenceType, referenceId,
+                   validationStatus, aiConfidence, aiReasoning, aiMismatches,
+                   CONVERT(NVARCHAR, aiValidatedAt, 127) AS aiValidatedAt
+            FROM dbo.transferEvidence WHERE transferEvidenceId = @validateId
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
         ) AS [jsonResult]
     END
