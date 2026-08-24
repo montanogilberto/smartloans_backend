@@ -1,7 +1,16 @@
 from fastapi import APIRouter
-from modules.transferEvidence import transfer_evidence_sp
+from modules.transferEvidence import transfer_evidence_sp, upload_transfer_evidence_connector
 
 router = APIRouter()
+
+
+@router.post(
+    "/transferEvidence/upload-image",
+    summary="Upload a comprobante (SPEI transfer receipt) photo",
+    tags=["connector"],
+)
+async def upload_transfer_evidence(json: dict):
+    return await upload_transfer_evidence_connector(json)
 
 
 @router.post(
@@ -23,6 +32,14 @@ action "create": { "transferEvidence": [{ "action": "create", "companyId": int,
 action "list": { "transferEvidence": [{ "action": "list", "companyId": int,
   "referenceType"?: str, "referenceId"?: int }] }
 action "one": { "transferEvidence": [{ "action": "one", "companyId": int, "transferEvidenceId": int }] }
+
+action "validate": { "transferEvidence": [{ "action": "validate", "companyId": int,
+  "transferEvidenceId": int, "validationStatus": "VALID"|"NEEDS_REVIEW"|"INVALID",
+  "aiConfidence"?: float, "aiReasoning"?: str, "aiMismatches"?: str }] }
+  Persists the evidence_validation_agent's verdict (LoanAgents_SmartLoans
+  POST /validate-transfer-evidence) onto the row. Advisory only -- never
+  touches fundingTransactions/loans status; the borrower's own confirmFunding
+  still activates the loan.
 """,
 )
 def transfer_evidence(json: dict):

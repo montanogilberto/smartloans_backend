@@ -129,6 +129,9 @@ BLOB_FOLDER_PRESENCE   = "presence"
 BLOB_FOLDER_CONTRACTS  = "contracts"
 BLOB_FOLDER_PAGARES    = "pagares"
 BLOB_FOLDER_SIGNATURES = "signatures"
+# SPEI transfer receipts (comprobantes) declared against a fundingTransactions
+# row — see modules/transferEvidence.py::upload_transfer_evidence_connector.
+BLOB_FOLDER_FUNDING_EVIDENCE = "funding_evidence"
 
 
 def client_blob_path(client_id, folder: str, filename: str) -> str:

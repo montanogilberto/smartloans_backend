@@ -631,6 +631,31 @@ def _settle_round(round_row: dict, state: dict, outcome: str, multiplier: float,
     }, status_code=200)
 
 
+def _void_round(round_id: int, reason: str) -> dict:
+    """
+    Anula una ronda y devuelve la apuesta.
+
+    Se usa cuando la ronda se abrio (y se cobro) pero nunca llego a jugarse.
+    Best-effort y ruidoso: si falla, deja rastro para poder repararlo a mano —
+    lo que no puede hacer es tragarse el problema en silencio.
+    """
+    try:
+        result = _exec_sp("sp_arcadeRounds_void", {"arcadeRounds": [{
+            "roundId": round_id, "reason": reason,
+        }]})
+        log_workflow_step(
+            "Arcade Round Voided", workflow_name=WORKFLOW, action="void",
+            status="FAILURE", entity="arcadeRounds", entity_id=round_id,
+            message=reason,
+        )
+        print(f"[arcade] ronda {round_id} anulada y devuelta: {reason}")
+        return result
+    except Exception as e:
+        print(f"[arcade] NO SE PUDO ANULAR la ronda {round_id} ({reason}): "
+              f"{type(e).__name__}: {e}")
+        return {"error": str(e)}
+
+
 def arcade_bet_sp(json_file: dict):
     """
     Abre una ronda: deriva la partida de la semilla, debita la apuesta de forma
@@ -688,20 +713,28 @@ def arcade_bet_sp(json_file: dict):
             message=f"apuesta {round_row['betAmount']} fichas",
         )
 
-        # Blackjack se reparte AL ABRIR: si sale un natural la mano termina
-        # sin que el jugador toque nada, asi que se liquida en este mismo viaje.
-        if game_key == "blackjack":
-            state, finished, outcome, multiplier = bj_apply(state, "deal")
-            if finished:
-                return _settle_round(round_row, state, outcome, multiplier, game)
+        # A partir de aqui la apuesta YA ESTA COBRADA y la ronda abierta. Si algo
+        # falla antes de liquidar, hay que ANULAR y devolver: si no, la ronda
+        # queda abierta para siempre y sp_arcadeRounds_open rechazara toda
+        # apuesta futura de ese juego con round_in_progress. En los juegos
+        # instantaneos eso deja al jugador encerrado sin accion que ofrecerle.
+        try:
+            # Blackjack se reparte AL ABRIR: si sale un natural la mano termina
+            # sin que el jugador toque nada, y se liquida en este mismo viaje.
+            if game_key == "blackjack":
+                state, finished, outcome, multiplier = bj_apply(state, "deal")
+                if finished:
+                    return _settle_round(round_row, state, outcome, multiplier, game)
 
-        # Juegos de un solo tiro (volado, dados, ruleta, raspadito): el
-        # resultado ya quedo fijado por la semilla al abrir la ronda, asi que
-        # se liquidan aqui y no dejan ronda abierta que atender.
-        if engine.get("instant"):
-            state, finished, outcome, multiplier, detail = engine["apply"](state, "reveal", {})
-            if finished:
-                return _settle_round(round_row, state, outcome, multiplier, game, detail)
+            # Juegos de un solo tiro: el resultado ya quedo fijado por la
+            # semilla, asi que se liquidan aqui y no dejan ronda que atender.
+            if engine.get("instant"):
+                state, finished, outcome, multiplier, detail = engine["apply"](state, "reveal", {})
+                if finished:
+                    return _settle_round(round_row, state, outcome, multiplier, game, detail)
+        except Exception as e:
+            _void_round(opened["roundId"], f"Fallo al liquidar {game_key}: {type(e).__name__}")
+            raise
 
         # Juegos por turnos: la ronda queda abierta esperando acciones.
         return JSONResponse(content={
