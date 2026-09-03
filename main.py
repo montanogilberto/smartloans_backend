@@ -41,6 +41,7 @@ from routes_ import (
     arcade,
     arcadeStore,
     rewardBenefits,
+    chartOfAccounts, journalEntries,
 )
 
 app = FastAPI(
@@ -176,6 +177,8 @@ app.include_router(featureFlags.router)
 app.include_router(arcade.router)
 app.include_router(arcadeStore.router)
 app.include_router(rewardBenefits.router)
+app.include_router(chartOfAccounts.router)
+app.include_router(journalEntries.router)
 # Banking-first Phase 1 (docs/payment-banking-first-redesign.md):
 # CLABEs verificadas + ledger inmutable + dispersión SPEI (STP, mock hasta contrato)
 app.include_router(bankAccounts.router)
