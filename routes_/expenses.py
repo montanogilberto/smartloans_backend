@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.expenses import expense_sp, all_expense_sp
+from modules.expenses import expense_sp, all_expense_sp, upload_expense_receipt_connector
 
 router = APIRouter()
 
@@ -9,6 +9,14 @@ with open("./docs_description/expense_all.txt", "r") as file:
 @router.get("/all_expense",  summary="all expense", description=expense_all_docstring)
 def all_expense():
     return  all_expense_sp()
+
+@router.post(
+    "/expenses/upload-image",
+    summary="Upload a ticket/receipt photo as evidence for an expense",
+    tags=["connector"],
+)
+async def upload_expense_receipt(json: dict):
+    return await upload_expense_receipt_connector(json)
 
 # Descripción general de expense
 with open("./docs_description/expense.txt", "r") as file:

@@ -132,6 +132,9 @@ BLOB_FOLDER_SIGNATURES = "signatures"
 # SPEI transfer receipts (comprobantes) declared against a fundingTransactions
 # row — see modules/transferEvidence.py::upload_transfer_evidence_connector.
 BLOB_FOLDER_FUNDING_EVIDENCE = "funding_evidence"
+# Photos of a physical receipt/ticket, attached as evidence to a POS expense —
+# see modules/expenses.py::upload_expense_receipt_connector.
+BLOB_FOLDER_EXPENSE_RECEIPTS = "expense_receipts"
 
 
 def client_blob_path(client_id, folder: str, filename: str) -> str:
@@ -155,6 +158,14 @@ def client_blob_path(client_id, folder: str, filename: str) -> str:
     """
     safe_client = str(client_id or "unknown").strip() or "unknown"
     return f"{safe_client}/{folder}/{filename}"
+
+
+def company_blob_path(company_id, folder: str, filename: str) -> str:
+    """Same scheme as client_blob_path, for assets that belong to a company
+    rather than a specific client (e.g. expense receipts):
+    {companyId}/{folder}/{filename}."""
+    safe_company = str(company_id or "unknown").strip() or "unknown"
+    return f"{safe_company}/{folder}/{filename}"
 
 
 async def upload_id_image_connector(payload: dict) -> JSONResponse:
