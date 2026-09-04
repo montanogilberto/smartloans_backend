@@ -3,6 +3,8 @@ from fastapi.responses import JSONResponse
 from databases import connection
 import json
 
+from modules.journalEntries import post_income_journal_entry
+
 app = FastAPI()
 
 def income_sp(json_file: dict):
@@ -23,6 +25,21 @@ def income_sp(json_file: dict):
                     "msg": row[1],
                     "error": row[2]
                 })
+
+            # Best-effort: mirror a successful INSERT into the ledger (Módulo
+            # Contabilidad). Never blocks/fails the income response — see
+            # modules/journalEntries.py::post_income_journal_entry.
+            try:
+                first_row = (json_file.get("income") or [{}])[0]
+                if str(first_row.get("action")) == "1" and result and not result[0].get("error"):
+                    company_id = first_row.get("companyId")
+                    total = first_row.get("total")
+                    if company_id and total:
+                        post_income_journal_entry(
+                            company_id, int(result[0]["value"]), float(total), first_row.get("paymentDate")
+                        )
+            except Exception as e:
+                print(f"[income] accounting auto-post hook failed: {e}")
 
             return JSONResponse(content={"result": result}, status_code=200)
         else:

@@ -10,6 +10,7 @@ from modules.clientFaceRecognitions import (
 )
 from observability import log_workflow_step, log_audit
 from observability.integrations import timed_integration
+from modules.journalEntries import post_expense_journal_entry
 
 app = FastAPI()
 
@@ -67,6 +68,17 @@ def expense_sp(json_file: dict):
                     "expenses", entity_id, "total", None, total,
                     action="INSERT" if action == 1 else "UPDATE",
                 )
+
+            # Best-effort: mirror a successful INSERT into the ledger (Módulo
+            # Contabilidad), regardless of expenseType. Never blocks/fails the
+            # expense response — see modules/journalEntries.py::post_expense_journal_entry.
+            if not failed and action == 1 and entity_id is not None:
+                try:
+                    company_id = first_in.get("companyId")
+                    if company_id and total:
+                        post_expense_journal_entry(company_id, entity_id, float(total), first_in.get("paymentDate"))
+                except Exception as e:
+                    print(f"[expenses] accounting auto-post hook failed: {e}")
 
             return JSONResponse(content={"result": result}, status_code=200)
         else:
