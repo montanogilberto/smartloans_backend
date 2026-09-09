@@ -125,6 +125,30 @@ def _get_policy(cursor, event_name: str):
     return {"channels": channels, "allow_sms_fallback": bool(allow_sms_fallback)}
 
 
+def _resolve_push_user_id(cursor, recipient_type: str, recipient_id):
+    """
+    Azure Notification Hub tags devices as user_{userId} -- never clientId
+    (see modules/azure_notifications.py). If recipientType is already "user",
+    recipientId IS the userId. If recipientType is "client", resolve the
+    linked app account the same way the rest of this backend already does
+    (modules/pushNotifications.py:128, modules/automatedPayments.py:408):
+    dbo.clients has no userId column, so the only path is
+    `SELECT TOP 1 userId FROM users WHERE clientId = %s`.
+
+    Returns the userId to target, or None if this recipient has no linked
+    user account at all (the real "no push possible" case -- NOT the same as
+    "has an account but no device installed", which this system has no way
+    to detect: Azure NH returns 2xx for a tag with zero matching devices, so
+    a successful push call here is fire-and-hope, same as everywhere else in
+    this backend -- not a stronger guarantee than existing push call sites.
+    """
+    if recipient_type == "user":
+        return recipient_id
+    cursor.execute("SELECT TOP 1 userId FROM users WHERE clientId = %s", (recipient_id,))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
 def _existing_resolved_dispatch(cursor, company_id, source_type, source_id, event_name):
     cursor.execute(
         """
@@ -152,15 +176,22 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
     """
     Push -> WhatsApp -> SMS cost-minimizing cascade for one notification event.
 
-    IMPORTANT, honest limitation (not something this connector can fix on its
-    own): Azure Notification Hub tags devices as user_{userId} only -- never
-    clientId (see modules/azure_notifications.py::_send_single). There is no
-    installations/device table for POS customers. So push is only ever
-    attempted when recipientType == "user" (internal staff). For
-    recipientType == "client" (the normal case for income/expense/ticket
-    events -- the recipient is the customer), push is skipped immediately
-    with fallbackReason=NO_DEVICE and the cascade starts at whatsapp. This is
-    a real system constraint today, not a bug in this connector.
+    Push eligibility for recipientType == "client": Azure Notification Hub
+    tags devices as user_{userId} only -- never clientId (see
+    modules/azure_notifications.py::_send_single), and dbo.clients has no
+    userId column. So _resolve_push_user_id() looks up the linked app
+    account via `SELECT TOP 1 userId FROM users WHERE clientId = %s` -- the
+    same idiom already used at modules/pushNotifications.py:128 and
+    modules/automatedPayments.py:408 -- and only skips push (fallbackReason=
+    NO_DEVICE) when that client has no linked user account at all.
+
+    IMPORTANT, honest limitation this connector cannot fix on its own: there
+    is no local device/installation table anywhere in this backend. Azure NH
+    returns 2xx for a tag with zero matching devices, so a "sent" push here
+    is fire-and-hope -- exactly like every other push call site in this
+    codebase -- not a stronger delivery guarantee. A resolved userId means
+    "this recipient has an app account," not "this recipient's phone is
+    definitely holding a live push token right now."
 
     Body: {
       companyId, sourceType, sourceId, recipientType, recipientId, eventName,
@@ -234,17 +265,18 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
 
         for channel in channels:
             if channel == "push":
-                if recipient_type != "user":
+                push_user_id = _resolve_push_user_id(cursor, recipient_type, recipient_id)
+                if push_user_id is None:
                     attempted.append({"channel": "push", "outcome": "NO_DEVICE", "at": _now_iso()})
                     fallback_reason = fallback_reason or "NO_DEVICE"
                     continue
                 try:
                     with timed_integration(
                         "azure_notification_hub", "dispatch",
-                        request={"targetUserId": recipient_id, "title": push_title},
+                        request={"targetUserId": push_user_id, "title": push_title},
                     ) as span:
                         result = await send_azure_push(
-                            title=push_title, message=push_message, target_user_id=recipient_id,
+                            title=push_title, message=push_message, target_user_id=push_user_id,
                             data={"navigationRoute": None, "sourceType": source_type, "sourceId": source_id},
                         )
                         span.response = result
