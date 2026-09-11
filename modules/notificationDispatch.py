@@ -254,14 +254,13 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
         fallback_reason = None
         status = "failed"
 
-        with log_workflow_step(
+        log_workflow_step(
             f"NotificationDispatch cascade start ({event_name})",
             workflow_name="notification_dispatch",
             action="DISPATCH",
             status="STARTED",
             entity="notificationDispatches",
-        ):
-            pass
+        )
 
         for channel in channels:
             if channel == "push":

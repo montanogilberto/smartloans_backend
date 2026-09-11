@@ -10,9 +10,9 @@ azure-ai-vision-imageanalysis==1.0.0b2
 azure-cognitiveservices-speech==1.36.0
 azure-cognitiveservices-vision-computervision==0.9.0
 azure-common==1.1.28
-azure-core==1.30.1
+azure-core==1.41.0
 twilio
-python-dotenv==1.0.1
+python-dotenv==1.2.3
 azure-storage-blob==12.22.0
 httpx
 stripe~=15.2.1
