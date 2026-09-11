@@ -1,15 +1,12 @@
 from fastapi.responses import JSONResponse
 from databases import connection
 import json
-import logging
 from datetime import datetime, timezone
 
 from observability import log_workflow_step, log_audit
 from observability.integrations import timed_integration
 from modules.ticket_notifications import send_sms, send_whatsapp
 from modules.azure_notifications import send_azure_push
-
-logger = logging.getLogger("notification_dispatch")
 
 # sp_notificationDispatches action codes -> a human label for workflow/audit logs.
 _ACTION_LABELS = {1: "Insert", 2: "Update", 3: "Delete"}
@@ -238,15 +235,10 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
         # first and then discovering the insert would have been rejected.
         existing = _existing_resolved_dispatch(cursor, company_id, source_type, source_id, event_name)
         if existing:
-            logger.info(
-                "[dispatch] already resolved, not re-sending | company=%s source=%s/%s event=%s selectedChannel=%s",
-                company_id, source_type, source_id, event_name, existing.get("selectedChannel"),
-            )
             return JSONResponse(content={"result": existing, "note": "already resolved, not re-sent"}, status_code=200)
 
         policy = _get_policy(cursor, event_name)
         if not policy or not policy["channels"]:
-            logger.warning("[dispatch] no policy row for eventName=%s | company=%s source=%s/%s", event_name, company_id, source_type, source_id)
             return JSONResponse(
                 content={"error": f"No notificationDispatch_policy row for eventName '{event_name}'"},
                 status_code=400,
@@ -254,10 +246,6 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
 
         channels = policy["channels"]
         allow_sms_fallback = policy["allow_sms_fallback"]
-        logger.info(
-            "[dispatch] cascade start | company=%s source=%s/%s recipient=%s/%s event=%s channels=%s allow_sms_fallback=%s",
-            company_id, source_type, source_id, recipient_type, recipient_id, event_name, channels, allow_sms_fallback,
-        )
         preferred_channel = channels[0]
         attempted = []
         selected_channel = None
@@ -278,14 +266,9 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
             if channel == "push":
                 push_user_id = _resolve_push_user_id(cursor, recipient_type, recipient_id)
                 if push_user_id is None:
-                    logger.info(
-                        "[dispatch] push skipped, no linked user account | recipient=%s/%s -> falling back to whatsapp",
-                        recipient_type, recipient_id,
-                    )
                     attempted.append({"channel": "push", "outcome": "NO_DEVICE", "at": _now_iso()})
                     fallback_reason = fallback_reason or "NO_DEVICE"
                     continue
-                logger.info("[dispatch] attempting push | targetUserId=%s title=%r", push_user_id, push_title)
                 try:
                     with timed_integration(
                         "azure_notification_hub", "dispatch",
@@ -302,14 +285,11 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                         provider_name = "azure_notification_hub"
                         status = "sent"
                         attempted.append({"channel": "push", "outcome": "SENT", "at": _now_iso()})
-                        logger.info("[dispatch] push SENT | targetUserId=%s", push_user_id)
                         break
                     outcome = "PUSH_TIMEOUT" if result.get("reason") == "timeout" else "PUSH_REJECTED"
-                    logger.warning("[dispatch] push %s | targetUserId=%s result=%s -> falling back to whatsapp", outcome, push_user_id, result)
                     attempted.append({"channel": "push", "outcome": outcome, "at": _now_iso()})
                     fallback_reason = fallback_reason or outcome
                 except Exception as e:
-                    logger.error("[dispatch] push raised exception | targetUserId=%s error=%s -> falling back to whatsapp", push_user_id, e)
                     attempted.append({"channel": "push", "outcome": "PUSH_TIMEOUT", "at": _now_iso(), "error": str(e)})
                     fallback_reason = fallback_reason or "PUSH_TIMEOUT"
                 # Per PRD business rule: a push-stage failure (any of the three
@@ -318,11 +298,9 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
 
             if channel == "whatsapp":
                 if not phone:
-                    logger.warning("[dispatch] whatsapp skipped, no phone on payload -> falling back to sms")
                     attempted.append({"channel": "whatsapp", "outcome": "WHATSAPP_UNAVAILABLE", "at": _now_iso(), "error": "no phone"})
                     fallback_reason = fallback_reason or "WHATSAPP_UNAVAILABLE"
                     continue
-                logger.info("[dispatch] attempting whatsapp | to=%s", phone)
                 try:
                     with timed_integration(
                         "twilio_whatsapp", "dispatch", request={"to": phone},
@@ -335,25 +313,20 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                     provider_message_id = result.get("messageSid")
                     status = "sent"
                     attempted.append({"channel": "whatsapp", "outcome": "SENT", "at": _now_iso()})
-                    logger.info("[dispatch] whatsapp SENT | to=%s messageSid=%s", phone, provider_message_id)
                     break
                 except Exception as e:
                     # Covers a Twilio 24h-window freeform rejection (error 63016) same as any other Twilio failure.
-                    logger.warning("[dispatch] whatsapp failed | to=%s error=%s -> falling back to sms", phone, e)
                     attempted.append({"channel": "whatsapp", "outcome": "WHATSAPP_UNAVAILABLE", "at": _now_iso(), "error": str(e)})
                     fallback_reason = fallback_reason or "WHATSAPP_UNAVAILABLE"
                 continue
 
             if channel == "sms":
                 if not allow_sms_fallback:
-                    logger.info("[dispatch] sms skipped by policy (allow_sms_fallback=False) | event=%s", event_name)
                     attempted.append({"channel": "sms", "outcome": "SKIPPED_POLICY", "at": _now_iso()})
                     continue
                 if not phone:
-                    logger.warning("[dispatch] sms skipped, no phone on payload")
                     attempted.append({"channel": "sms", "outcome": "FAILED", "at": _now_iso(), "error": "no phone"})
                     continue
-                logger.info("[dispatch] attempting sms | to=%s", phone)
                 try:
                     with timed_integration(
                         "twilio_sms", "dispatch", request={"to": phone},
@@ -366,20 +339,13 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                     provider_message_id = result.get("messageSid")
                     status = "sent"
                     attempted.append({"channel": "sms", "outcome": "SENT", "at": _now_iso()})
-                    logger.info("[dispatch] sms SENT | to=%s messageSid=%s", phone, provider_message_id)
                     break
                 except Exception as e:
-                    logger.error("[dispatch] sms failed | to=%s error=%s", phone, e)
                     attempted.append({"channel": "sms", "outcome": "FAILED", "at": _now_iso(), "error": str(e)})
                 continue
 
         if selected_channel is None:
             selected_channel = channels[-1]
-
-        logger.info(
-            "[dispatch] cascade resolved | event=%s status=%s selectedChannel=%s fallbackReason=%s attempted=%s",
-            event_name, status, selected_channel, fallback_reason, attempted,
-        )
 
         now_iso = _now_iso()
         insert_payload = {
