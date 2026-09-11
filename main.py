@@ -1,10 +1,23 @@
 import json
+import logging
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 load_dotenv()
+
+# No logging.basicConfig() existed anywhere in this backend, so the root
+# logger stayed at Python's default WARNING level -- every logger.info() call
+# across the whole app (ticket_notifications, azure_notifications, the
+# notificationDispatch cascade, etc.) was silently dropped rather than
+# reaching the Azure Log stream. This is why the feature-flag diagnostic
+# above uses print() instead of a logger -- someone already hit this and
+# worked around it locally instead of fixing the root cause.
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 # TEMPORARY diagnostic (remove once the non-custodial funding pilot rollout
 # is confirmed working) — prints at process startup, visible in the Azure
