@@ -56,6 +56,7 @@ from routes_ import (
     rewardBenefits,
     chartOfAccounts, journalEntries,
     notificationDispatch,
+    posSupportChat,
 )
 
 app = FastAPI(
@@ -206,6 +207,7 @@ app.include_router(signatureUpload.router)
 app.include_router(manufacturing.router)
 app.include_router(rewards.router)
 app.include_router(loanChat.router)
+app.include_router(posSupportChat.router)
 app.include_router(digitalContracts.router)
 app.include_router(legalCases.router)
 app.include_router(disbursement.router)
