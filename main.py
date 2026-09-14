@@ -57,6 +57,7 @@ from routes_ import (
     chartOfAccounts, journalEntries,
     notificationDispatch,
     posSupportChat,
+    client_login,
 )
 
 app = FastAPI(
@@ -215,6 +216,7 @@ app.include_router(document_intelligence.router)
 app.include_router(geocoding.router)
 app.include_router(onboardingReminders.router)
 app.include_router(registrationReminders.router)
+app.include_router(client_login.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job

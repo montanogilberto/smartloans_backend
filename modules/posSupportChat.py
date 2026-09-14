@@ -5,14 +5,17 @@ from fastapi.responses import JSONResponse
 from databases import connection
 
 # LoanAgents_SmartLoans — independent ADK service, same one loanChat.py calls
-# for /negotiate. Different route per topic; only 'clients' exists so far.
+# for /negotiate. Different route per topic.
 POS_SUPPORT_AGENT_URL = os.environ.get("NEGOTIATION_AGENT_URL", "").rstrip("/")
 
-# topic -> agent route. Add an entry here (and its agent in
-# LoanAgents_SmartLoans) for income/expenses/accounting later — no schema or
-# route changes needed on this side.
+# topic -> agent route. Each maps to its own pos_{topic}_support_agent in
+# LoanAgents_SmartLoans (agents/pos_income_support, pos_expenses_support,
+# pos_accounting_support) — no schema or route changes needed on this side.
 _TOPIC_ROUTES = {
     "clients": "/support/pos-clients",
+    "income": "/support/pos-income",
+    "expenses": "/support/pos-expenses",
+    "accounting": "/support/pos-accounting",
 }
 
 
