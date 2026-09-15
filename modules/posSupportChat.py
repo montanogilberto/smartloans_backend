@@ -6,6 +6,8 @@ import httpx
 from fastapi.responses import JSONResponse
 from databases import connection
 from modules.clients import clients_sp
+from modules.income import income_sp
+from modules.expenses import expense_sp
 
 # LoanAgents_SmartLoans — independent ADK service, same one loanChat.py calls
 # for /negotiate. Different route per topic.
@@ -53,13 +55,37 @@ def _classify_confirmation(body: str) -> str | None:
     return None
 
 
+def _sp_row_result(response) -> dict:
+    """Parses the {"result":[{"value","msg","error"}]} shape shared by
+    sp_income/sp_expense (most other upsert SPs) into the common ok/error
+    shape _execute_pending_action returns. error="0" (or empty) means
+    success — same convention modules/income.py and modules/expenses.py
+    already use to detect their own auto-post hooks."""
+    try:
+        body = json.loads(response.body)
+    except Exception:
+        return {"error": "unexpected response from stored procedure"}
+    if isinstance(body, dict) and body.get("error"):
+        return {"error": body["error"]}
+    rows = (body or {}).get("result") or []
+    row0 = rows[0] if rows else {}
+    if str(row0.get("error") or "") not in ("", "0"):
+        return {"error": row0.get("msg") or row0.get("error")}
+    return {"ok": True, "result": row0}
+
+
 def _execute_pending_action(pending: dict) -> dict:
     """The ONLY place a proposed action is actually executed. Dispatches to
-    the SAME function every other client-creation path in this backend
-    uses (modules.clients.clients_sp) — never a parallel write path."""
+    the SAME functions every other create path in this backend uses
+    (modules.clients.clients_sp / modules.income.income_sp /
+    modules.expenses.expense_sp) — never a parallel write path. companyId
+    and userId come from the pending record (set server-side when the
+    proposal was stored, never from agent-supplied fields) — see
+    posSupportChat_sp below."""
     capability = pending["capability"]
     fields = pending["fields"]
     company_id = pending["companyId"]
+    user_id = pending["userId"]
 
     if capability == "CREATE_CLIENT":
         response = clients_sp({"clients": [{"action": 1, "companyId": company_id, **fields}]})
@@ -71,7 +97,36 @@ def _execute_pending_action(pending: dict) -> dict:
             return {"error": body["error"]}
         return {"ok": True, "result": body}
 
+    if capability == "CREATE_INCOME":
+        response = income_sp({"income": [
+            {"action": 1, "companyId": company_id, "userId": user_id, **fields}
+        ]})
+        return _sp_row_result(response)
+
+    if capability == "CREATE_EXPENSE":
+        response = expense_sp({"expenses": [
+            {"action": 1, "companyId": company_id, "userId": user_id, **fields}
+        ]})
+        return _sp_row_result(response)
+
     return {"error": f"no executor wired for capability={capability!r}"}
+
+
+_SUCCESS_MESSAGES = {
+    "CREATE_CLIENT": "Listo, cliente creado correctamente.",
+    "CREATE_INCOME": "Listo, ingreso registrado correctamente.",
+    "CREATE_EXPENSE": "Listo, gasto registrado correctamente.",
+}
+_FAILURE_PREFIXES = {
+    "CREATE_CLIENT": "No se pudo crear el cliente",
+    "CREATE_INCOME": "No se pudo registrar el ingreso",
+    "CREATE_EXPENSE": "No se pudo registrar el gasto",
+}
+_CANCEL_MESSAGES = {
+    "CREATE_CLIENT": "Cancelado, no se creó el cliente.",
+    "CREATE_INCOME": "Cancelado, no se registró el ingreso.",
+    "CREATE_EXPENSE": "Cancelado, no se registró el gasto.",
+}
 
 
 def _sp(payload: dict):
@@ -158,20 +213,23 @@ async def posSupportChat_sp(payload: dict):
 
         if pending and owned:
             intent = _classify_confirmation(user_message)
+            capability = pending["capability"]
             if intent == "confirm":
                 exec_result = _execute_pending_action(pending)
                 _PENDING_ACTIONS.pop(conv_id, None)
-                reply_text = (
-                    "Listo, cliente creado correctamente." if exec_result.get("ok")
-                    else f"No se pudo crear el cliente: {exec_result.get('error')}"
-                )
+                if exec_result.get("ok"):
+                    reply_text = _SUCCESS_MESSAGES.get(capability, "Listo, hecho correctamente.")
+                else:
+                    prefix = _FAILURE_PREFIXES.get(capability, "No se pudo completar la acción")
+                    reply_text = f"{prefix}: {exec_result.get('error')}"
                 _sp({"action": "send_message", "conversationId": conv_id,
                      "senderRole": "agent", "body": reply_text})
                 return JSONResponse(content=result, status_code=200)
             if intent == "cancel":
                 _PENDING_ACTIONS.pop(conv_id, None)
                 _sp({"action": "send_message", "conversationId": conv_id,
-                     "senderRole": "agent", "body": "Cancelado, no se creó el cliente."})
+                     "senderRole": "agent",
+                     "body": _CANCEL_MESSAGES.get(capability, "Cancelado, no se realizó la acción.")})
                 return JSONResponse(content=result, status_code=200)
             # Ambiguous reply to a pending proposal — drop it rather than
             # risk a later unrelated "sí" confirming something stale.
