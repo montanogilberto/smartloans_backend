@@ -6,6 +6,7 @@ import json
 
 from modules.journalEntries import post_income_journal_entry
 from modules.notificationDispatch import dispatch_notification_connector
+from modules.rewards import earn_points_for_income
 
 app = FastAPI()
 
@@ -76,6 +77,20 @@ def income_sp(json_file: dict):
                         )
             except Exception as e:
                 print(f"[income] accounting auto-post hook failed: {e}")
+
+            # Best-effort: auto-earn loyalty points for this sale, linked to
+            # the real incomeId (see modules/rewards.py::earn_points_for_income
+            # for why this matters -- rewardTransactions.referenceId was
+            # never populated with a real incomeId before this).
+            try:
+                if is_new_income:
+                    company_id = first_row.get("companyId")
+                    client_id = first_row.get("clientId")
+                    total = first_row.get("total")
+                    if company_id and client_id and total:
+                        earn_points_for_income(company_id, client_id, int(result[0]["value"]), total)
+            except Exception as e:
+                print(f"[income] rewards auto-earn hook failed: {e}")
 
             # Best-effort: fire the Push -> WhatsApp -> SMS cascade for the
             # client on a successful income. Never blocks/fails the income

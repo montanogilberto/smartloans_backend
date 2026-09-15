@@ -1,4 +1,4 @@
-Manage contractor records with the provided JSON.
+Manage client records with the provided JSON.
 
 Parameters:
     ```
