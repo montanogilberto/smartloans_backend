@@ -58,6 +58,7 @@ from routes_ import (
     notificationDispatch,
     posSupportChat,
     client_login,
+    posRewards,
 )
 
 app = FastAPI(
@@ -217,6 +218,7 @@ app.include_router(geocoding.router)
 app.include_router(onboardingReminders.router)
 app.include_router(registrationReminders.router)
 app.include_router(client_login.router)
+app.include_router(posRewards.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job

@@ -8,6 +8,7 @@ from databases import connection
 from modules.clients import clients_sp
 from modules.income import income_sp
 from modules.expenses import expense_sp
+from observability.integrations import timed_integration
 
 # LoanAgents_SmartLoans — independent ADK service, same one loanChat.py calls
 # for /negotiate. Different route per topic.
@@ -161,19 +162,27 @@ async def _generate_agent_reply(conversation_id: int, company_id: int, topic: st
     if not POS_SUPPORT_AGENT_URL:
         raise ValueError("NEGOTIATION_AGENT_URL env var is not set.")
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.post(
-            f"{POS_SUPPORT_AGENT_URL}{route}",
-            json={
-                "conversationId": conversation_id,
-                "companyId": company_id,
-                "message": user_message,
-                "clientId": client_id,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["reply"], data.get("pendingAction")
+    request_body = {
+        "conversationId": conversation_id,
+        "companyId": company_id,
+        "message": user_message,
+        "clientId": client_id,
+    }
+    # This call was previously bare -- a failure only ever printed to
+    # ephemeral container stdout (see posSupportChat_sp's except block
+    # below), with no durable record of WHY. That made a real production
+    # failure (2026-09-15, topic=clients, a long-lived conversation)
+    # undiagnosable after the fact -- had to be reproduced by hand instead
+    # of read back from a log table. This wraps the call the same way
+    # every other external-service call in this codebase already does.
+    with timed_integration("loanagents_smartloans", f"support_{topic}", request=request_body) as span:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(f"{POS_SUPPORT_AGENT_URL}{route}", json=request_body)
+            span.http_status = resp.status_code
+            resp.raise_for_status()
+            data = resp.json()
+            span.response = data
+            return data["reply"], data.get("pendingAction")
 
 
 async def posSupportChat_sp(payload: dict):
