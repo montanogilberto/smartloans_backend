@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from databases import connection
 from observability import log_workflow_step
 
-from modules.users import _normalize_phone, _send_sms_otp, _users_sp_raw
+from modules.users import _normalize_phone, _send_sms_otp, _users_sp_raw, one_users_sp
 
 
 def _client_login_codes_sp(payload: dict) -> dict:
@@ -124,6 +124,13 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
             }]
         })
 
+        # sp_users_one already selects u.password -- reused here (not a new
+        # raw query) just to know whether the client has ever set one, so
+        # the frontend can gate the first-login "create a password" step.
+        snapshot = json.loads(one_users_sp({"users": [{"userId": user_id}]}).body)
+        snapshot_users = snapshot.get("users") or []
+        has_password = bool(snapshot_users and snapshot_users[0].get("password"))
+
         log_workflow_step(
             "Client Login Verified", workflow_name="client_login",
             action="VERIFY", status="SUCCESS", entity="users",
@@ -139,6 +146,7 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
             "roleName": "Cliente",
             "firstName": first_name,
             "lastName": last_name,
+            "hasPassword": has_password,
         }, status_code=200)
     except Exception as e:
         log_workflow_step(
@@ -146,3 +154,38 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
             status="FAILED", message=str(e),
         )
         return JSONResponse(content={"valid": False, "error": str(e)}, status_code=500)
+
+
+def set_client_password(json_file: dict) -> JSONResponse:
+    """First-login onboarding step: client sets a password after verifying
+    their OTP. Reuses sp_users action=2 (same UPDATE branch already called
+    above for companyId/roleCode) -- no new SP, dbo.users.password already
+    exists and is varchar(50), same storage as staff passwords today."""
+    try:
+        payload = (json_file.get("setClientPassword") or [{}])[0]
+        user_id = payload.get("userId")
+        password = str(payload.get("password") or "").strip()
+        if not user_id:
+            return JSONResponse(content={"success": False, "error": "userId es requerido"}, status_code=400)
+        if len(password) < 6 or len(password) > 50:
+            return JSONResponse(
+                content={"success": False, "error": "La contraseña debe tener entre 6 y 50 caracteres"},
+                status_code=400,
+            )
+
+        result = _users_sp_raw({"users": [{"action": 2, "user_id": user_id, "password": password}]})
+        if str(result.get("error") or "") not in (None, "", "0"):
+            return JSONResponse(content={"success": False, "error": "No se pudo guardar la contraseña"}, status_code=500)
+
+        log_workflow_step(
+            "Client Password Set", workflow_name="client_login",
+            action="UPDATE", status="SUCCESS", entity="users",
+            entity_id=int(user_id) if str(user_id or "").isdigit() else None,
+        )
+        return JSONResponse(content={"success": True}, status_code=200)
+    except Exception as e:
+        log_workflow_step(
+            "Client Password Set Error", workflow_name="client_login",
+            status="FAILED", message=str(e),
+        )
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
