@@ -146,6 +146,15 @@ GO
 
 IF OBJECT_ID('dbo.sp_workflowLog', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_workflowLog;
 GO
+-- NOTE: columns are extracted via OPENJSON's WITH schema, not per-column
+-- JSON_VALUE(value, '$.x') calls. JSON_VALUE silently returns NULL (no error)
+-- for any scalar longer than 4000 chars -- confirmed 2026-09-18 after a
+-- posSupportChat/loanagents_smartloans timeout logged with exception=NULL
+-- despite traceback.format_exc() being non-empty at the Python call site.
+-- OPENJSON ... WITH (col NVARCHAR(MAX) '$.path') has no such cap. Never
+-- revert the NVARCHAR(MAX) columns (message/exception/requestJson/
+-- responseJson/requestSummary/responseSummary/oldValue/newValue) back to
+-- bare JSON_VALUE.
 CREATE PROCEDURE [dbo].[sp_workflowLog] @pjsonfile NVARCHAR(MAX)
 AS
 BEGIN
@@ -156,27 +165,32 @@ BEGIN
              workflowName, stepName, actionName, status, message, durationMs,
              requestJson, responseJson, exception, ipAddress, deviceInfo, appVersion, apiEndpoint)
         SELECT
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.workflowId')),
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.correlationId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.companyId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.clientId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.userId')),
-            JSON_VALUE(value, '$.entityName'),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.entityId')),
-            JSON_VALUE(value, '$.workflowName'),
-            JSON_VALUE(value, '$.stepName'),
-            JSON_VALUE(value, '$.actionName'),
-            JSON_VALUE(value, '$.status'),
-            JSON_VALUE(value, '$.message'),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.durationMs')),
-            JSON_VALUE(value, '$.requestJson'),
-            JSON_VALUE(value, '$.responseJson'),
-            JSON_VALUE(value, '$.exception'),
-            JSON_VALUE(value, '$.ipAddress'),
-            JSON_VALUE(value, '$.deviceInfo'),
-            JSON_VALUE(value, '$.appVersion'),
-            JSON_VALUE(value, '$.apiEndpoint')
+            workflowId, correlationId, companyId, clientId, userId, entityName, entityId,
+            workflowName, stepName, actionName, status, message, durationMs,
+            requestJson, responseJson, exception, ipAddress, deviceInfo, appVersion, apiEndpoint
         FROM OPENJSON(@pjsonfile, '$.logs')
+        WITH (
+            workflowId    UNIQUEIDENTIFIER '$.workflowId',
+            correlationId UNIQUEIDENTIFIER '$.correlationId',
+            companyId     INT              '$.companyId',
+            clientId      INT              '$.clientId',
+            userId        INT              '$.userId',
+            entityName    VARCHAR(100)     '$.entityName',
+            entityId      INT              '$.entityId',
+            workflowName  VARCHAR(100)     '$.workflowName',
+            stepName      VARCHAR(100)     '$.stepName',
+            actionName    VARCHAR(100)     '$.actionName',
+            status        VARCHAR(30)      '$.status',
+            message       NVARCHAR(MAX)    '$.message',
+            durationMs    INT              '$.durationMs',
+            requestJson   NVARCHAR(MAX)    '$.requestJson',
+            responseJson  NVARCHAR(MAX)    '$.responseJson',
+            exception     NVARCHAR(MAX)    '$.exception',
+            ipAddress     VARCHAR(50)      '$.ipAddress',
+            deviceInfo    VARCHAR(200)     '$.deviceInfo',
+            appVersion    VARCHAR(50)      '$.appVersion',
+            apiEndpoint   VARCHAR(200)     '$.apiEndpoint'
+        )
         SELECT '{"message":"ok"}' AS [jsonResult]
     END TRY
     BEGIN CATCH
@@ -196,19 +210,23 @@ BEGIN
             (correlationId, companyId, actorUserId, actorClientId, entityName, entityId,
              fieldName, oldValue, newValue, action, ipAddress, deviceInfo)
         SELECT
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.correlationId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.companyId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.actorUserId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.actorClientId')),
-            JSON_VALUE(value, '$.entityName'),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.entityId')),
-            JSON_VALUE(value, '$.fieldName'),
-            JSON_VALUE(value, '$.oldValue'),
-            JSON_VALUE(value, '$.newValue'),
-            JSON_VALUE(value, '$.action'),
-            JSON_VALUE(value, '$.ipAddress'),
-            JSON_VALUE(value, '$.deviceInfo')
+            correlationId, companyId, actorUserId, actorClientId, entityName, entityId,
+            fieldName, oldValue, newValue, action, ipAddress, deviceInfo
         FROM OPENJSON(@pjsonfile, '$.logs')
+        WITH (
+            correlationId UNIQUEIDENTIFIER '$.correlationId',
+            companyId     INT              '$.companyId',
+            actorUserId   INT              '$.actorUserId',
+            actorClientId INT              '$.actorClientId',
+            entityName    VARCHAR(100)     '$.entityName',
+            entityId      INT              '$.entityId',
+            fieldName     VARCHAR(100)     '$.fieldName',
+            oldValue      NVARCHAR(MAX)    '$.oldValue',
+            newValue      NVARCHAR(MAX)    '$.newValue',
+            action        VARCHAR(30)      '$.action',
+            ipAddress     VARCHAR(50)      '$.ipAddress',
+            deviceInfo    VARCHAR(200)     '$.deviceInfo'
+        )
         SELECT '{"message":"ok"}' AS [jsonResult]
     END TRY
     BEGIN CATCH
@@ -228,18 +246,22 @@ BEGIN
             (correlationId, workflowId, companyId, [level], source, message, exception,
              apiEndpoint, httpStatus, durationMs, ipAddress)
         SELECT
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.correlationId')),
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.workflowId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.companyId')),
-            ISNULL(JSON_VALUE(value, '$.level'), 'INFO'),
-            JSON_VALUE(value, '$.source'),
-            JSON_VALUE(value, '$.message'),
-            JSON_VALUE(value, '$.exception'),
-            JSON_VALUE(value, '$.apiEndpoint'),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.httpStatus')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.durationMs')),
-            JSON_VALUE(value, '$.ipAddress')
+            correlationId, workflowId, companyId, ISNULL([level], 'INFO'), source, message, exception,
+            apiEndpoint, httpStatus, durationMs, ipAddress
         FROM OPENJSON(@pjsonfile, '$.logs')
+        WITH (
+            correlationId UNIQUEIDENTIFIER '$.correlationId',
+            workflowId    UNIQUEIDENTIFIER '$.workflowId',
+            companyId     INT              '$.companyId',
+            [level]       VARCHAR(20)      '$.level',
+            source        VARCHAR(150)     '$.source',
+            message       NVARCHAR(MAX)    '$.message',
+            exception     NVARCHAR(MAX)    '$.exception',
+            apiEndpoint   VARCHAR(200)     '$.apiEndpoint',
+            httpStatus    INT              '$.httpStatus',
+            durationMs    INT              '$.durationMs',
+            ipAddress     VARCHAR(50)      '$.ipAddress'
+        )
         SELECT '{"message":"ok"}' AS [jsonResult]
     END TRY
     BEGIN CATCH
@@ -259,18 +281,22 @@ BEGIN
             (correlationId, workflowId, companyId, service, operation, status, httpStatus,
              latencyMs, requestSummary, responseSummary, exception)
         SELECT
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.correlationId')),
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.workflowId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.companyId')),
-            JSON_VALUE(value, '$.service'),
-            JSON_VALUE(value, '$.operation'),
-            JSON_VALUE(value, '$.status'),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.httpStatus')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.latencyMs')),
-            JSON_VALUE(value, '$.requestSummary'),
-            JSON_VALUE(value, '$.responseSummary'),
-            JSON_VALUE(value, '$.exception')
+            correlationId, workflowId, companyId, service, operation, status, httpStatus,
+            latencyMs, requestSummary, responseSummary, exception
         FROM OPENJSON(@pjsonfile, '$.logs')
+        WITH (
+            correlationId    UNIQUEIDENTIFIER '$.correlationId',
+            workflowId       UNIQUEIDENTIFIER '$.workflowId',
+            companyId        INT              '$.companyId',
+            service          VARCHAR(50)      '$.service',
+            operation        VARCHAR(100)     '$.operation',
+            status           VARCHAR(30)      '$.status',
+            httpStatus       INT              '$.httpStatus',
+            latencyMs        INT              '$.latencyMs',
+            requestSummary   NVARCHAR(MAX)    '$.requestSummary',
+            responseSummary  NVARCHAR(MAX)    '$.responseSummary',
+            exception        NVARCHAR(MAX)    '$.exception'
+        )
         SELECT '{"message":"ok"}' AS [jsonResult]
     END TRY
     BEGIN CATCH
@@ -298,82 +324,107 @@ BEGIN
              workflowName, stepName, actionName, status, message, durationMs,
              requestJson, responseJson, exception, ipAddress, deviceInfo, appVersion, apiEndpoint)
         SELECT
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.workflowId')),
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.correlationId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.companyId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.clientId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.userId')),
-            JSON_VALUE(value, '$.entityName'),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.entityId')),
-            JSON_VALUE(value, '$.workflowName'),
-            JSON_VALUE(value, '$.stepName'),
-            JSON_VALUE(value, '$.actionName'),
-            JSON_VALUE(value, '$.status'),
-            JSON_VALUE(value, '$.message'),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.durationMs')),
-            JSON_VALUE(value, '$.requestJson'),
-            JSON_VALUE(value, '$.responseJson'),
-            JSON_VALUE(value, '$.exception'),
-            JSON_VALUE(value, '$.ipAddress'),
-            JSON_VALUE(value, '$.deviceInfo'),
-            JSON_VALUE(value, '$.appVersion'),
-            JSON_VALUE(value, '$.apiEndpoint')
-        FROM OPENJSON(@pjsonfile, '$.logs') WHERE JSON_VALUE(value, '$.logType') = 'workflow';
+            workflowId, correlationId, companyId, clientId, userId, entityName, entityId,
+            workflowName, stepName, actionName, status, message, durationMs,
+            requestJson, responseJson, exception, ipAddress, deviceInfo, appVersion, apiEndpoint
+        FROM OPENJSON(@pjsonfile, '$.logs')
+        WITH (
+            logType       VARCHAR(20)      '$.logType',
+            workflowId    UNIQUEIDENTIFIER '$.workflowId',
+            correlationId UNIQUEIDENTIFIER '$.correlationId',
+            companyId     INT              '$.companyId',
+            clientId      INT              '$.clientId',
+            userId        INT              '$.userId',
+            entityName    VARCHAR(100)     '$.entityName',
+            entityId      INT              '$.entityId',
+            workflowName  VARCHAR(100)     '$.workflowName',
+            stepName      VARCHAR(100)     '$.stepName',
+            actionName    VARCHAR(100)     '$.actionName',
+            status        VARCHAR(30)      '$.status',
+            message       NVARCHAR(MAX)    '$.message',
+            durationMs    INT              '$.durationMs',
+            requestJson   NVARCHAR(MAX)    '$.requestJson',
+            responseJson  NVARCHAR(MAX)    '$.responseJson',
+            exception     NVARCHAR(MAX)    '$.exception',
+            ipAddress     VARCHAR(50)      '$.ipAddress',
+            deviceInfo    VARCHAR(200)     '$.deviceInfo',
+            appVersion    VARCHAR(50)      '$.appVersion',
+            apiEndpoint   VARCHAR(200)     '$.apiEndpoint'
+        )
+        WHERE logType = 'workflow';
 
         -- application
         INSERT INTO [dbo].[applicationLogs]
             (correlationId, workflowId, companyId, [level], source, message, exception,
              apiEndpoint, httpStatus, durationMs, ipAddress)
         SELECT
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.correlationId')),
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.workflowId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.companyId')),
-            ISNULL(JSON_VALUE(value, '$.level'), 'INFO'),
-            JSON_VALUE(value, '$.source'),
-            JSON_VALUE(value, '$.message'),
-            JSON_VALUE(value, '$.exception'),
-            JSON_VALUE(value, '$.apiEndpoint'),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.httpStatus')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.durationMs')),
-            JSON_VALUE(value, '$.ipAddress')
-        FROM OPENJSON(@pjsonfile, '$.logs') WHERE JSON_VALUE(value, '$.logType') = 'application';
+            correlationId, workflowId, companyId, ISNULL([level], 'INFO'), source, message, exception,
+            apiEndpoint, httpStatus, durationMs, ipAddress
+        FROM OPENJSON(@pjsonfile, '$.logs')
+        WITH (
+            logType       VARCHAR(20)      '$.logType',
+            correlationId UNIQUEIDENTIFIER '$.correlationId',
+            workflowId    UNIQUEIDENTIFIER '$.workflowId',
+            companyId     INT              '$.companyId',
+            [level]       VARCHAR(20)      '$.level',
+            source        VARCHAR(150)     '$.source',
+            message       NVARCHAR(MAX)    '$.message',
+            exception     NVARCHAR(MAX)    '$.exception',
+            apiEndpoint   VARCHAR(200)     '$.apiEndpoint',
+            httpStatus    INT              '$.httpStatus',
+            durationMs    INT              '$.durationMs',
+            ipAddress     VARCHAR(50)      '$.ipAddress'
+        )
+        WHERE logType = 'application';
 
         -- integration
         INSERT INTO [dbo].[integrationLogs]
             (correlationId, workflowId, companyId, service, operation, status, httpStatus,
              latencyMs, requestSummary, responseSummary, exception)
         SELECT
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.correlationId')),
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.workflowId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.companyId')),
-            JSON_VALUE(value, '$.service'),
-            JSON_VALUE(value, '$.operation'),
-            JSON_VALUE(value, '$.status'),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.httpStatus')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.latencyMs')),
-            JSON_VALUE(value, '$.requestSummary'),
-            JSON_VALUE(value, '$.responseSummary'),
-            JSON_VALUE(value, '$.exception')
-        FROM OPENJSON(@pjsonfile, '$.logs') WHERE JSON_VALUE(value, '$.logType') = 'integration';
+            correlationId, workflowId, companyId, service, operation, status, httpStatus,
+            latencyMs, requestSummary, responseSummary, exception
+        FROM OPENJSON(@pjsonfile, '$.logs')
+        WITH (
+            logType          VARCHAR(20)      '$.logType',
+            correlationId    UNIQUEIDENTIFIER '$.correlationId',
+            workflowId       UNIQUEIDENTIFIER '$.workflowId',
+            companyId        INT              '$.companyId',
+            service          VARCHAR(50)      '$.service',
+            operation        VARCHAR(100)     '$.operation',
+            status           VARCHAR(30)      '$.status',
+            httpStatus       INT              '$.httpStatus',
+            latencyMs        INT              '$.latencyMs',
+            requestSummary   NVARCHAR(MAX)    '$.requestSummary',
+            responseSummary  NVARCHAR(MAX)    '$.responseSummary',
+            exception        NVARCHAR(MAX)    '$.exception'
+        )
+        WHERE logType = 'integration';
 
         -- audit (also accepted via batch when non-critical; durable path uses sp_auditLog)
         INSERT INTO [dbo].[auditLogs]
             (correlationId, companyId, actorUserId, actorClientId, entityName, entityId,
              fieldName, oldValue, newValue, action, ipAddress, deviceInfo)
         SELECT
-            TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(value, '$.correlationId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.companyId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.actorUserId')),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.actorClientId')),
-            JSON_VALUE(value, '$.entityName'),
-            TRY_CONVERT(INT, JSON_VALUE(value, '$.entityId')),
-            JSON_VALUE(value, '$.fieldName'),
-            JSON_VALUE(value, '$.oldValue'),
-            JSON_VALUE(value, '$.newValue'),
-            JSON_VALUE(value, '$.action'),
-            JSON_VALUE(value, '$.ipAddress'),
-            JSON_VALUE(value, '$.deviceInfo')
-        FROM OPENJSON(@pjsonfile, '$.logs') WHERE JSON_VALUE(value, '$.logType') = 'audit';
+            correlationId, companyId, actorUserId, actorClientId, entityName, entityId,
+            fieldName, oldValue, newValue, action, ipAddress, deviceInfo
+        FROM OPENJSON(@pjsonfile, '$.logs')
+        WITH (
+            logType       VARCHAR(20)      '$.logType',
+            correlationId UNIQUEIDENTIFIER '$.correlationId',
+            companyId     INT              '$.companyId',
+            actorUserId   INT              '$.actorUserId',
+            actorClientId INT              '$.actorClientId',
+            entityName    VARCHAR(100)     '$.entityName',
+            entityId      INT              '$.entityId',
+            fieldName     VARCHAR(100)     '$.fieldName',
+            oldValue      NVARCHAR(MAX)    '$.oldValue',
+            newValue      NVARCHAR(MAX)    '$.newValue',
+            action        VARCHAR(30)      '$.action',
+            ipAddress     VARCHAR(50)      '$.ipAddress',
+            deviceInfo    VARCHAR(200)     '$.deviceInfo'
+        )
+        WHERE logType = 'audit';
 
         SELECT '{"message":"ok"}' AS [jsonResult]
     END TRY
