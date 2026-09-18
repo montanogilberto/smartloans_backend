@@ -120,7 +120,7 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
         _users_sp_raw({
             "users": [{
                 "action": 2, "user_id": user_id, "companyId": company_id,
-                "roleCode": "client", "identityVerified": 1,
+                "roleCode": "pos", "identityVerified": 1,
             }]
         })
 
@@ -135,7 +135,7 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
             "userId": user_id,
             "companyId": company_id,
             "clientId": client_id,
-            "roleCode": "client",
+            "roleCode": "pos",
             "roleName": "Cliente",
             "firstName": first_name,
             "lastName": last_name,
