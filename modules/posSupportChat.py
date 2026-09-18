@@ -82,14 +82,24 @@ def _execute_pending_action(pending: dict) -> dict:
     modules.expenses.expense_sp) — never a parallel write path. companyId
     and userId come from the pending record (set server-side when the
     proposal was stored, never from agent-supplied fields) — see
-    posSupportChat_sp below."""
+    posSupportChat_sp below.
+
+    action/companyId/userId are spread into each dict AFTER **fields (not
+    before) so they always win a key collision. This used to be the other
+    way around, which meant a "companyId"/"userId" key inside an agent's
+    `fields` would have silently overridden the trusted value here -- e.g.
+    an income record posted to the wrong company's ledger. retrieval/
+    contracts.py in LoanAgents_SmartLoans now also rejects those keys at
+    proposal time (no prompt should ever produce them), but this ordering
+    is the actual enforcement point and must hold regardless of what any
+    prompt says."""
     capability = pending["capability"]
     fields = pending["fields"]
     company_id = pending["companyId"]
     user_id = pending["userId"]
 
     if capability == "CREATE_CLIENT":
-        response = clients_sp({"clients": [{"action": 1, "companyId": company_id, **fields}]})
+        response = clients_sp({"clients": [{**fields, "action": 1, "companyId": company_id}]})
         try:
             body = json.loads(response.body)
         except Exception:
@@ -100,13 +110,13 @@ def _execute_pending_action(pending: dict) -> dict:
 
     if capability == "CREATE_INCOME":
         response = income_sp({"income": [
-            {"action": 1, "companyId": company_id, "userId": user_id, **fields}
+            {**fields, "action": 1, "companyId": company_id, "userId": user_id}
         ]})
         return _sp_row_result(response)
 
     if capability == "CREATE_EXPENSE":
         response = expense_sp({"expenses": [
-            {"action": 1, "companyId": company_id, "userId": user_id, **fields}
+            {**fields, "action": 1, "companyId": company_id, "userId": user_id}
         ]})
         return _sp_row_result(response)
 

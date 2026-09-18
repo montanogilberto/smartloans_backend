@@ -57,7 +57,7 @@ UPDATE [dbo].[roles] SET name = N'Borrower',      description = N'Request loans 
 UPDATE [dbo].[roles] SET name = N'Lender',        description = N'Offer loans and receive payments.',      emoji = N'💼'      WHERE code = 'lender';
 UPDATE [dbo].[roles] SET name = N'Business',      description = N'POS, sales and reward points.',          emoji = N'🏪'      WHERE code = 'business';
 UPDATE [dbo].[roles] SET name = N'Viewer',        description = N'Read-only access to reports.',           emoji = N'👁️'      WHERE code = 'viewer';
-UPDATE [dbo].[roles] SET name = N'Client',        description = N'View my account, purchases and rewards.', emoji = N'🛍️'      WHERE code = 'client';
+UPDATE [dbo].[roles] SET name = N'POS Customer',  description = N'View my account, purchases and rewards.', emoji = N'🛍️'      WHERE code = 'pos';
 GO
 
 -- ── Table: uiFeatures (catalog -- replaces free-form ROLE_UI strings) ──
@@ -205,7 +205,7 @@ FROM (VALUES
     ('viewer',   'ingresos'),   ('viewer',   'egresos'),            ('viewer',   'clientDashboards'),
     ('viewer',   'game'),       ('viewer',   'arcade'),
 
-    ('client',   'game'),       ('client',   'arcade'),         ('client',   'myRewards')
+    ('pos',      'game'),       ('pos',      'arcade'),         ('pos',      'myRewards')
 ) v(roleCode, featureCode)
 JOIN [dbo].[roles]      r ON r.code = v.roleCode
 JOIN [dbo].[uiFeatures] f ON f.featureCode = v.featureCode
