@@ -248,7 +248,13 @@ async def posSupportChat_sp(payload: dict):
             reply_text, pending_action = await _generate_agent_reply(
                 conv_id, company_id, topic, user_message, client_id)
         except Exception as e:
-            print(f"[posSupportChat] agent reply generation failed: {e}")
+            # str(e) is EMPTY for httpx timeout/connect errors (ReadTimeout,
+            # ConnectTimeout, ConnectError commonly carry no message), which
+            # is why this used to print a bare trailing colon with nothing
+            # after it. type(e).__name__ + repr(e) always shows something.
+            # The full traceback also goes to integrationLogs via
+            # timed_integration in _generate_agent_reply.
+            print(f"[posSupportChat] agent reply generation failed: {type(e).__name__}: {e!r}")
             reply_text, pending_action = "Lo siento, no puedo responder en este momento. Intenta de nuevo más tarde.", None
 
         if pending_action:
