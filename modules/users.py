@@ -197,12 +197,14 @@ def _normalize_phone(phone: str) -> str:
     return phone  # pass through; Twilio will reject if still wrong
 
 
-def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False):
+def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str = "SmartLoans"):
     """Send OTP via Twilio SMS or WhatsApp, reusing the same Twilio module
-    that sends ticket/income receipts (modules/ticket_notifications.py)."""
+    that sends ticket/income receipts (modules/ticket_notifications.py).
+    `brand` lets callers with a known companyId (e.g. client_login.py) show
+    that company's name instead of always saying SmartLoans."""
     from modules.ticket_notifications import send_sms, send_whatsapp
     normalized = _normalize_phone(phone)
-    message = f"Tu código SmartLoans es: {code}. Expira en 10 min."
+    message = f"Tu código {brand} es: {code}. Expira en 10 min."
     logger.info("[_send_sms_otp] raw=%s normalized=%s whatsapp=%s", phone, normalized, via_whatsapp)
     if via_whatsapp:
         send_whatsapp(normalized, message)
