@@ -9,6 +9,12 @@ Deliberately separate from modules/users.py's send_verification_code/verify_code
 pair (in-memory, used to re-verify an EXISTING account's identity) -- this is
 a different trust model (persisted, phone-is-the-identity, may create a user)
 and mixing the two would blur what each one guarantees.
+
+Per this backend's layered architecture (Python modules = business logic,
+sql/*.sql stored procedures = the only layer that touches tables), every
+lookup/comparison here goes through sp_clientLoginCodes (actions 1-4, see
+sql/migrations/2026-09-12_add_client_login_codes.sql) -- this file never
+runs a raw SELECT against dbo.clients/dbo.users itself.
 """
 import json
 import random
@@ -18,7 +24,7 @@ from fastapi.responses import JSONResponse
 from databases import connection
 from observability import log_workflow_step
 
-from modules.users import _normalize_phone, _send_sms_otp, _users_sp_raw, one_users_sp
+from modules.users import _normalize_phone, _send_sms_otp, _users_sp_raw
 
 
 def _client_login_codes_sp(payload: dict) -> dict:
@@ -44,13 +50,18 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
             return JSONResponse(content={"error": "phone is required"}, status_code=400)
         phone = _normalize_phone(raw_phone)
 
-        conn = connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT TOP 1 clientId FROM dbo.clients WHERE cellphone = %s", (phone,))
-        found = cursor.fetchone()
-        conn.close()
-        if not found:
+        status_result = _client_login_codes_sp({"clientLoginCodes": [{"action": 3, "phone": phone}]})
+        status_first = (status_result.get("result") or [{}])[0]
+        if str(status_first.get("error") or "") == "1":
             return JSONResponse(content={"found": False}, status_code=200)
+        status_client = status_first.get("client") or {}
+
+        # Returning client (already finished password onboarding once) --
+        # no SMS this time. Frontend shows the password field directly
+        # instead of an OTP screen. See dbo.users.firstLoginCompleted,
+        # set by set_client_password below.
+        if status_client.get("firstLoginCompleted"):
+            return JSONResponse(content={"found": True, "firstLoginCompleted": True}, status_code=200)
 
         code = "".join(random.choices(string.digits, k=6))
         expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
@@ -68,7 +79,7 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
             "Client Login Code Sent", workflow_name="client_login",
             action="SEND", status="SUCCESS", entity="clientLoginCodes",
         )
-        return JSONResponse(content={"found": True, "message": "Código enviado"}, status_code=200)
+        return JSONResponse(content={"found": True, "firstLoginCompleted": False, "message": "Código enviado"}, status_code=200)
     except Exception as e:
         log_workflow_step(
             "Client Login Code Send Error", workflow_name="client_login",
@@ -99,6 +110,7 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
         first_name = client.get("first_name") or ""
         last_name = client.get("last_name") or ""
         existing_user_id = client.get("existingUserId")
+        first_login_completed = bool(client.get("firstLoginCompleted"))
 
         if existing_user_id:
             user_id = existing_user_id
@@ -124,13 +136,6 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
             }]
         })
 
-        # sp_users_one already selects u.password -- reused here (not a new
-        # raw query) just to know whether the client has ever set one, so
-        # the frontend can gate the first-login "create a password" step.
-        snapshot = json.loads(one_users_sp({"users": [{"userId": user_id}]}).body)
-        snapshot_users = snapshot.get("users") or []
-        has_password = bool(snapshot_users and snapshot_users[0].get("password"))
-
         log_workflow_step(
             "Client Login Verified", workflow_name="client_login",
             action="VERIFY", status="SUCCESS", entity="users",
@@ -146,7 +151,7 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
             "roleName": "Cliente",
             "firstName": first_name,
             "lastName": last_name,
-            "hasPassword": has_password,
+            "firstLoginCompleted": first_login_completed,
         }, status_code=200)
     except Exception as e:
         log_workflow_step(
@@ -173,7 +178,9 @@ def set_client_password(json_file: dict) -> JSONResponse:
                 status_code=400,
             )
 
-        result = _users_sp_raw({"users": [{"action": 2, "user_id": user_id, "password": password}]})
+        result = _users_sp_raw({
+            "users": [{"action": 2, "user_id": user_id, "password": password, "firstLoginCompleted": 1}]
+        })
         if str(result.get("error") or "") not in (None, "", "0"):
             return JSONResponse(content={"success": False, "error": "No se pudo guardar la contraseña"}, status_code=500)
 
@@ -189,3 +196,57 @@ def set_client_password(json_file: dict) -> JSONResponse:
             status="FAILED", message=str(e),
         )
         return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+def verify_client_password(json_file: dict) -> JSONResponse:
+    """Returning-client login: phone+password, no OTP/SMS at all. Only ever
+    reachable once send_client_login_code has reported
+    firstLoginCompleted=True for this phone. Hardcodes roleCode='pos'/
+    roleName='Cliente' same as the OTP path above -- every self-service
+    client account is always that role, so there's nothing to look up.
+    Password comparison happens in sp_clientLoginCodes action=4, not here."""
+    try:
+        payload = (json_file.get("clientPasswordLogin") or [{}])[0]
+        raw_phone = str(payload.get("phone") or "").strip()
+        password = str(payload.get("password") or "").strip()
+        if not raw_phone or not password:
+            return JSONResponse(content={"valid": False, "error": "phone y password son requeridos"}, status_code=400)
+        phone = _normalize_phone(raw_phone)
+
+        result = _client_login_codes_sp({
+            "clientLoginCodes": [{"action": 4, "phone": phone, "password": password}]
+        })
+        first = (result.get("result") or [{}])[0]
+        if str(first.get("error") or "") == "1":
+            return JSONResponse(
+                content={"valid": False, "error": first.get("msg") or "Teléfono o contraseña incorrectos"},
+                status_code=200,
+            )
+
+        client = first.get("client") or {}
+        user_id = client.get("userId")
+        if not user_id:
+            return JSONResponse(content={"valid": False, "error": "Teléfono o contraseña incorrectos"}, status_code=200)
+
+        log_workflow_step(
+            "Client Password Login", workflow_name="client_login",
+            action="VERIFY", status="SUCCESS", entity="users",
+            entity_id=int(user_id) if str(user_id).isdigit() else None,
+        )
+
+        return JSONResponse(content={
+            "valid": True,
+            "userId": user_id,
+            "companyId": client.get("companyId"),
+            "clientId": client.get("clientId"),
+            "roleCode": "pos",
+            "roleName": "Cliente",
+            "firstName": client.get("first_name") or "",
+            "lastName": client.get("last_name") or "",
+        }, status_code=200)
+    except Exception as e:
+        log_workflow_step(
+            "Client Password Login Error", workflow_name="client_login",
+            status="FAILED", message=str(e),
+        )
+        return JSONResponse(content={"valid": False, "error": str(e)}, status_code=500)

@@ -109,10 +109,13 @@ BEGIN
 
             -- Resolve the client + any already-linked user in the same call,
             -- so Python knows in one round trip whether to auto-provision.
+            -- firstLoginCompleted rides along too so verify_client_login_code
+            -- doesn't need a second round trip to decide password-step vs skip.
             DECLARE @clientJson NVARCHAR(MAX) = (
                 SELECT TOP 1
                     c.clientId, c.companyId, c.first_name, c.last_name,
-                    u.userId AS existingUserId
+                    u.userId AS existingUserId,
+                    ISNULL(u.firstLoginCompleted, 0) AS firstLoginCompleted
                 FROM dbo.clients c
                 LEFT JOIN dbo.users u ON u.clientId = c.clientId
                 WHERE c.cellphone = @phone
@@ -130,6 +133,70 @@ BEGIN
             SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg', 'Verified');
             SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@codeId AS VARCHAR(20)));
             SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].client', JSON_QUERY(@clientJson));
+        END
+
+        -- action 3 -- status: body { phone }. No code/password involved --
+        -- just "does this phone have an account, and has that account
+        -- finished first-login password onboarding". Lets Python decide
+        -- whether to send an OTP SMS at all (send_client_login_code) without
+        -- ever touching dbo.clients/dbo.users directly.
+        IF @action = 3
+        BEGIN
+            DECLARE @statusJson NVARCHAR(MAX) = (
+                SELECT TOP 1
+                    c.clientId, c.companyId, c.first_name, c.last_name,
+                    u.userId AS existingUserId,
+                    ISNULL(u.firstLoginCompleted, 0) AS firstLoginCompleted
+                FROM dbo.clients c
+                LEFT JOIN dbo.users u ON u.clientId = c.clientId
+                WHERE c.cellphone = @phone
+                ORDER BY CASE WHEN u.userId IS NOT NULL THEN 0 ELSE 1 END
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            );
+
+            IF @statusJson IS NULL
+            BEGIN
+                SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].error', '1');
+                SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg', 'No encontramos una cuenta con ese número.');
+                GOTO Finish;
+            END
+
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg', 'Status');
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].client', JSON_QUERY(@statusJson));
+        END
+
+        -- action 4 -- password login: body { phone, password }. Returning
+        -- client only (firstLoginCompleted=1 from action 3/2) -- no OTP.
+        -- Password compared in SQL so Python never sees/handles the stored
+        -- value directly. Plaintext compare matches sp_login's existing
+        -- staff password scheme (dbo.users.password varchar(50), no
+        -- hashing anywhere in this backend today).
+        IF @action = 4
+        BEGIN
+            DECLARE @inputPassword VARCHAR(50) = (
+                SELECT TOP 1 JSON_VALUE(value, '$.password') FROM OPENJSON(@pjsonfile, '$.clientLoginCodes')
+            );
+
+            DECLARE @pwClientJson NVARCHAR(MAX) = (
+                SELECT TOP 1
+                    c.clientId, c.companyId, c.first_name, c.last_name, u.userId
+                FROM dbo.clients c
+                INNER JOIN dbo.users u ON u.clientId = c.clientId
+                WHERE c.cellphone = @phone
+                  AND u.password IS NOT NULL AND u.password <> ''
+                  AND u.password = @inputPassword
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            );
+
+            IF @pwClientJson IS NULL
+            BEGIN
+                SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].error', '1');
+                SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg', 'Teléfono o contraseña incorrectos.');
+                GOTO Finish;
+            END
+
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg', 'Verified');
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].client', JSON_QUERY(@pwClientJson));
         END
     END TRY
     BEGIN CATCH

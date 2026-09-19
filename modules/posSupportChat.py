@@ -16,12 +16,16 @@ POS_SUPPORT_AGENT_URL = os.environ.get("NEGOTIATION_AGENT_URL", "").rstrip("/")
 
 # topic -> agent route. Each maps to its own pos_{topic}_support_agent in
 # LoanAgents_SmartLoans (agents/pos_income_support, pos_expenses_support,
-# pos_accounting_support) — no schema or route changes needed on this side.
+# pos_accounting_support, pos_rewards_support) — no schema or route changes
+# needed on this side. "rewards" is client-facing (not staff) -- clientId is
+# already threaded through below for every topic, pos_rewards_support_agent
+# is just the first one that actually uses it to scope its tool calls.
 _TOPIC_ROUTES = {
     "clients": "/support/pos-clients",
     "income": "/support/pos-income",
     "expenses": "/support/pos-expenses",
     "accounting": "/support/pos-accounting",
+    "rewards": "/support/pos-rewards",
 }
 
 # ── Pending write actions ──────────────────────────────────────────────────
