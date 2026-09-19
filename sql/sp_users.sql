@@ -18,6 +18,7 @@ DECLARE @email            VARCHAR(100)
        ,@enabledModules   NVARCHAR(MAX)
        ,@identityVerified BIT
        ,@imageUrl         NVARCHAR(500)
+       ,@firstLoginCompleted BIT
        ,@Error            VARCHAR(500) = ''
 
 DECLARE @Outputmessage VARCHAR(MAX) = '{
@@ -102,7 +103,12 @@ BEGIN
             @identityVerified = TRY_CONVERT(BIT, JSON_VALUE(value, '$.identityVerified')),
             -- Profile avatar (e.g. the verified 'front' liveness capture). Written
             -- to dbo.users.imageUrl, which /one_users reads back as the avatar.
-            @imageUrl         = NULLIF(JSON_VALUE(value, '$.imageUrl'), '')
+            @imageUrl         = NULLIF(JSON_VALUE(value, '$.imageUrl'), ''),
+            -- Client self-service login onboarding milestone (password
+            -- created after first OTP verification) -- see
+            -- modules/client_login.py::set_client_password. Only ever
+            -- moves 0->1, same one-way pattern as identityVerified.
+            @firstLoginCompleted = TRY_CONVERT(BIT, JSON_VALUE(value, '$.firstLoginCompleted'))
         FROM OPENJSON(@pjsonfile, '$.users')
 
         -- Allow the caller to target the row by clientId when it doesn't hold a
@@ -125,6 +131,7 @@ BEGIN
                 appProfile       = ISNULL(@appProfile,     appProfile),
                 enabledModules   = ISNULL(@enabledModules, enabledModules),
                 identityVerified = CASE WHEN @identityVerified = 1 THEN 1 ELSE identityVerified END,
+                firstLoginCompleted = CASE WHEN @firstLoginCompleted = 1 THEN 1 ELSE firstLoginCompleted END,
                 imageUrl         = ISNULL(@imageUrl, imageUrl),
                 [name]    = ISNULL(NULLIF(JSON_VALUE((SELECT value FROM OPENJSON(@pjsonfile,'$.users')), '$.name'), ''), [name]),
                 [password]= ISNULL(NULLIF(JSON_VALUE((SELECT value FROM OPENJSON(@pjsonfile,'$.users')), '$.password'), ''), [password])

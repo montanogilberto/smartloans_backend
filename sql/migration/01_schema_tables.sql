@@ -2571,7 +2571,8 @@ CREATE TABLE [dbo].[users] (
     [cellphone] nvarchar(20) NULL,
     [appProfile] varchar(20) NULL,
     [enabledModules] nvarchar(max) NULL,
-    [identityVerified] bit NOT NULL CONSTRAINT [DF_users_identityVerified] DEFAULT ((0))
+    [identityVerified] bit NOT NULL CONSTRAINT [DF_users_identityVerified] DEFAULT ((0)),
+    [firstLoginCompleted] bit NOT NULL CONSTRAINT [DF_users_firstLoginCompleted] DEFAULT ((0))
 );
 END
 GO
