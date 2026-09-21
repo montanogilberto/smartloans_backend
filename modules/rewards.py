@@ -57,9 +57,15 @@ def earn_points_for_income(company_id: int, client_id: int, income_id: int, tota
     SAME write path every income insert already goes through, so it
     applies uniformly whether the sale came from the cart checkout screen
     or the chat-based CREATE_INCOME agent flow.
+
+    clientId=1 is the walk-in/"mostrador" placeholder CartPage.tsx sends
+    when no real client was scanned/selected (dbo.income.clientId is
+    NOT NULL, so the sale itself still needs SOME value there) -- excluded
+    here so anonymous counter sales don't silently accrue points onto
+    whichever real client happens to hold id 1.
     """
     try:
-        if not client_id or not total:
+        if not client_id or not total or client_id == 1:
             return None
         rule = _active_purchase_rule(company_id)
         if not rule:

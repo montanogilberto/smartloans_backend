@@ -36,15 +36,15 @@ def clients_sp(json_file: dict):
         cursor = conn.cursor()
         cursor.execute("EXEC [dbo].[sp_clients] @pjsonfile = %s", (json.dumps(json_file)))
 
-        # Fetch the result as a JSON string
-        json_result = cursor.fetchall()
+        # sp_clients' final SELECT returns one row: (value, msg, error). Return
+        # all three columns — a bare msg string silently drops the error flag,
+        # so callers (e.g. delete/deactivate guards) can't tell success from
+        # a blocked/failed operation.
+        row = cursor.fetchone()
+        if not row:
+            return JSONResponse(content={"result": [{"value": "", "msg": "No response from sp_clients", "error": "1"}]}, status_code=200)
 
-        #print(json_result[0][1])
-
-        # Parse the JSON string to a Python dictionary
-        #result = json.loads(json_result[0][1])
-
-        return JSONResponse(content=json_result[0][1], status_code=200)
+        return JSONResponse(content={"result": [{"value": row[0], "msg": row[1], "error": row[2]}]}, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
     finally:

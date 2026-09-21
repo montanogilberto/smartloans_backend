@@ -3,6 +3,12 @@
 -- ALTER TABLE [dbo].[clients] ADD qrBlobUrl NVARCHAR(500) NULL;
 -- ============================================================
 
+-- ── ALTERs (guardados) ──────────────────────────────────────
+IF COL_LENGTH('dbo.clients', 'isActive') IS NULL
+    ALTER TABLE dbo.clients ADD isActive BIT NOT NULL
+        CONSTRAINT DF_clients_isActive DEFAULT (1);
+GO
+
 -- ============================================================
 -- sp_clients_qr  — update QR blob URL for a client
 -- ============================================================
