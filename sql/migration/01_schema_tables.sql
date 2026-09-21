@@ -371,6 +371,7 @@ CREATE TABLE [dbo].[clients] (
     [phone] varchar(10) NULL,
     [qrBlobUrl] nvarchar(500) NULL,
     [clientType] nvarchar(20) NOT NULL CONSTRAINT [DF_clients_clientType] DEFAULT ('borrower'),
+    [isActive] bit NOT NULL CONSTRAINT [DF_clients_isActive] DEFAULT ((1)),
     CONSTRAINT [PK__clients__81A2CBE1C519AEA4] PRIMARY KEY CLUSTERED ([clientId]),
     CONSTRAINT [UQ_clients_cellphone] UNIQUE NONCLUSTERED ([cellphone]),
     CONSTRAINT [CK_clients_clientType] CHECK ([clientType]='lawyer' OR [clientType]='both' OR [clientType]='lender' OR [clientType]='borrower')

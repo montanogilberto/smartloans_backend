@@ -2838,10 +2838,80 @@ BEGIN
         END
 
         /* =========================
-           ACTION 3 = DELETE
+           ACTION 3 = DELETE (cascade)
         ========================= */
         ELSE IF @action = 3
         BEGIN
+
+            -- Protected clients (e.g. clientId 1 = Lavanderia / system default) are never deleted.
+            IF EXISTS (SELECT 1 FROM @payload WHERE clientId IN (1))
+            BEGIN
+                SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].error','1');
+                SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].msg','Cliente protegido — no se puede eliminar.');
+                COMMIT TRANSACTION;
+                GOTO Finish;
+            END
+
+            -- Block delete if the client has ANY financial/lending history — hard-cascading
+            -- through loans/payments would destroy ledger data the accounting module relies
+            -- on. Use ACTION 4 (deactivate) instead for these clients.
+            IF EXISTS (
+                SELECT 1 FROM @payload p
+                WHERE (OBJECT_ID('dbo.loans','U') IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM dbo.loans l WHERE l.clientId = p.clientId))
+                   OR (OBJECT_ID('dbo.loanProposals','U') IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM dbo.loanProposals lp WHERE lp.borrowerId = p.clientId OR lp.lenderId = p.clientId))
+                   OR (OBJECT_ID('dbo.loanInstallments','U') IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM dbo.loanInstallments li WHERE li.clientId = p.clientId OR li.lenderId = p.clientId))
+                   OR (OBJECT_ID('dbo.paymentIntents','U') IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM dbo.paymentIntents pi WHERE pi.payerClientId = p.clientId OR pi.payeeClientId = p.clientId))
+                   OR (OBJECT_ID('dbo.fundingTransactions','U') IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM dbo.fundingTransactions ft WHERE ft.lenderClientId = p.clientId OR ft.borrowerClientId = p.clientId OR ft.confirmedByClientId = p.clientId))
+                   OR (OBJECT_ID('dbo.stripeTransactions','U') IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM dbo.stripeTransactions st WHERE st.fromClientId = p.clientId OR st.toClientId = p.clientId))
+            )
+            BEGIN
+                SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].error','1');
+                SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].msg','Este cliente tiene historial financiero (préstamos/pagos) y no puede eliminarse. Desactívalo en su lugar.');
+                COMMIT TRANSACTION;
+                GOTO Finish;
+            END
+
+            -- No financial history — safe to cascade-delete non-financial child rows first,
+            -- then the client row itself. Each step is OBJECT_ID-guarded in case a table
+            -- hasn't been deployed in this environment yet.
+            IF OBJECT_ID('dbo.ClientFaceRecognitions','U') IS NOT NULL
+                DELETE cfr FROM dbo.ClientFaceRecognitions cfr INNER JOIN @payload p ON cfr.clientId = p.clientId;
+
+            IF OBJECT_ID('dbo.clientDashboards','U') IS NOT NULL
+                DELETE cd FROM dbo.clientDashboards cd INNER JOIN @payload p ON cd.clientId = p.clientId;
+
+            IF OBJECT_ID('dbo.clientFollowUps','U') IS NOT NULL
+                DELETE cf FROM dbo.clientFollowUps cf INNER JOIN @payload p ON cf.clientId = p.clientId;
+
+            IF OBJECT_ID('dbo.creditScoreHistory','U') IS NOT NULL
+                DELETE csh FROM dbo.creditScoreHistory csh INNER JOIN @payload p ON csh.clientId = p.clientId;
+
+            IF OBJECT_ID('dbo.creditScores','U') IS NOT NULL
+                DELETE cs FROM dbo.creditScores cs INNER JOIN @payload p ON cs.clientId = p.clientId;
+
+            IF OBJECT_ID('dbo.savedPaymentMethods','U') IS NOT NULL
+                DELETE spm FROM dbo.savedPaymentMethods spm INNER JOIN @payload p ON spm.clientId = p.clientId;
+
+            IF OBJECT_ID('dbo.clientWallets','U') IS NOT NULL
+                DELETE cw FROM dbo.clientWallets cw INNER JOIN @payload p ON cw.clientId = p.clientId;
+
+            IF OBJECT_ID('dbo.stripeConnectedAccounts','U') IS NOT NULL
+                DELETE sca FROM dbo.stripeConnectedAccounts sca INNER JOIN @payload p ON sca.clientId = p.clientId;
+
+            IF OBJECT_ID('dbo.userCompanies','U') IS NOT NULL AND OBJECT_ID('dbo.users','U') IS NOT NULL
+                DELETE uc
+                FROM dbo.userCompanies uc
+                INNER JOIN dbo.users u ON u.userId = uc.userId
+                INNER JOIN @payload p ON u.clientId = p.clientId;
+
+            IF OBJECT_ID('dbo.users','U') IS NOT NULL
+                DELETE u FROM dbo.users u INNER JOIN @payload p ON u.clientId = p.clientId;
 
             DELETE c
             FROM dbo.clients c
@@ -2851,10 +2921,48 @@ BEGIN
             SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].msg','Deleted Successfully');
         END
 
+        /* =========================
+           ACTION 4 = DEACTIVATE
+        ========================= */
+        ELSE IF @action = 4
+        BEGIN
+            IF EXISTS (SELECT 1 FROM @payload WHERE clientId IN (1))
+            BEGIN
+                SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].error','1');
+                SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].msg','Cliente protegido — no se puede desactivar.');
+                COMMIT TRANSACTION;
+                GOTO Finish;
+            END
+
+            UPDATE c
+            SET c.isActive = 0,
+                c.updated_at = GETDATE()
+            FROM dbo.clients c
+            INNER JOIN @payload p
+                ON c.clientId = p.clientId;
+
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].msg','Deactivated Successfully');
+        END
+
+        /* =========================
+           ACTION 5 = REACTIVATE
+        ========================= */
+        ELSE IF @action = 5
+        BEGIN
+            UPDATE c
+            SET c.isActive = 1,
+                c.updated_at = GETDATE()
+            FROM dbo.clients c
+            INNER JOIN @payload p
+                ON c.clientId = p.clientId;
+
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].msg','Reactivated Successfully');
+        END
+
         ELSE
         BEGIN
             SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].error','1');
-            SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].msg','Invalid action. Use 1=Insert, 2=Update, 3=Delete.');
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage,'$.result[0].msg','Invalid action. Use 1=Insert, 2=Update, 3=Delete, 4=Deactivate, 5=Reactivate.');
         END
 
         COMMIT TRANSACTION;
@@ -2903,7 +3011,8 @@ BEGIN
         [created_At],
         [updated_at],
         clientType,
-        ISNULL([qrBlobUrl], '')    AS qrBlobUrl
+        ISNULL([qrBlobUrl], '')    AS qrBlobUrl,
+        CAST(ISNULL([isActive], 1) AS BIT) AS isActive
     FROM dbo.clients
     FOR JSON AUTO, ROOT('clients');
 
@@ -2947,7 +3056,8 @@ BEGIN
         created_At,
         ISNULL(CONVERT(VARCHAR(30), updated_at, 126), '') AS updated_at,
         clientType,
-        ISNULL(qrBlobUrl, '') AS qrBlobUrl
+        ISNULL(qrBlobUrl, '') AS qrBlobUrl,
+        CAST(ISNULL(isActive, 1) AS BIT) AS isActive
     FROM dbo.clients
     WHERE clientId = @clientId
     FOR JSON AUTO, ROOT('clients');

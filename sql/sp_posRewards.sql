@@ -577,6 +577,10 @@ BEGIN
 
         DECLARE @direction NVARCHAR(1) = CASE WHEN @points >= 0 THEN 'C' ELSE 'D' END;
         DECLARE @absPoints DECIMAL(12,2) = ABS(@points);
+        -- EXEC's @param = value only accepts a constant or a bare variable,
+        -- never an inline expression -- CASE has to be pre-computed here.
+        DECLARE @earnedDelta DECIMAL(12,2) = CASE WHEN @points > 0 THEN @points ELSE 0 END;
+        DECLARE @redeemedDeltaIn DECIMAL(12,2) = CASE WHEN @points < 0 THEN @absPoints ELSE 0 END;
 
         BEGIN TRAN;
 
@@ -584,8 +588,8 @@ BEGIN
         EXEC [dbo].[sp_posRewardBalances_applyDelta]
             @companyId = @companyId, @clientId = @clientId,
             @pointsDelta = @points,
-            @earnedDelta = CASE WHEN @points > 0 THEN @points ELSE 0 END,
-            @redeemedDelta = CASE WHEN @points < 0 THEN @absPoints ELSE 0 END,
+            @earnedDelta = @earnedDelta,
+            @redeemedDelta = @redeemedDeltaIn,
             @newBalance = @newBalance OUTPUT;
 
         INSERT INTO [dbo].[posRewardTransactions]
@@ -688,10 +692,13 @@ BEGIN
 
         DECLARE @redemptionId INT = SCOPE_IDENTITY();
 
+        -- EXEC's @param = value only accepts a constant or a bare variable,
+        -- never an inline expression -- the negation has to be pre-computed here.
+        DECLARE @negRequiredPoints DECIMAL(12,2) = -@requiredPoints;
         DECLARE @newBalance DECIMAL(12,2);
         EXEC [dbo].[sp_posRewardBalances_applyDelta]
             @companyId = @companyId, @clientId = @clientId,
-            @pointsDelta = -@requiredPoints, @earnedDelta = 0, @redeemedDelta = @requiredPoints,
+            @pointsDelta = @negRequiredPoints, @earnedDelta = 0, @redeemedDelta = @requiredPoints,
             @newBalance = @newBalance OUTPUT;
 
         INSERT INTO [dbo].[posRewardTransactions]
