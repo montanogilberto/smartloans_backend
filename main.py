@@ -95,6 +95,7 @@ origins = [
     "http://localhost:5173",
     "capacitor://localhost",
     "ionic://localhost",
+    "http://localhost:8101",
 
     # Azure Static Web Apps / Production
     "https://wonderful-island-0e351d910.5.azurestaticapps.net",
@@ -102,6 +103,7 @@ origins = [
     "https://mango-smoke-0323ed91e.3.azurestaticapps.net",
     "https://proud-grass-09761cb1e.1.azurestaticapps.net",
     "https://ashy-ground-041405f1e.7.azurestaticapps.net",
+    "https://www.gmolavanderia.com",
 
     # Custom domain
     "https://www.rpmtoolsmx.com",
