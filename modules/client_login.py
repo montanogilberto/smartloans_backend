@@ -73,7 +73,13 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
         if str(first.get("error") or "") == "1":
             return JSONResponse(content={"error": first.get("msg") or "No se pudo generar el código"}, status_code=500)
 
-        _send_sms_otp(phone, code)
+        # This client's own company, not the _send_sms_otp default of
+        # "SmartLoans" -- a Lavanderia POS customer shouldn't get an OTP
+        # that says SmartLoans. "POS GMO" (the client-facing app name, see
+        # ClientLogin.tsx) is the fallback if companies.name is ever missing,
+        # not "SmartLoans" -- equally wrong for this audience.
+        brand = status_client.get("companyName") or "POS GMO"
+        _send_sms_otp(phone, code, brand=brand)
 
         log_workflow_step(
             "Client Login Code Sent", workflow_name="client_login",

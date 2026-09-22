@@ -111,6 +111,12 @@ BEGIN
             -- so Python knows in one round trip whether to auto-provision.
             -- firstLoginCompleted rides along too so verify_client_login_code
             -- doesn't need a second round trip to decide password-step vs skip.
+            -- Compare by last-10-digits, NOT exact string: dbo.clients.cellphone
+            -- is stored however it was originally typed (often plain 10-digit,
+            -- no +52), while @phone here is always E.164-normalized (Python's
+            -- _normalize_phone) -- an exact match silently fails for most real
+            -- clients. Same normalization ClientSelector.tsx already uses
+            -- client-side (normalizePhoneDigits + endsWith).
             DECLARE @clientJson NVARCHAR(MAX) = (
                 SELECT TOP 1
                     c.clientId, c.companyId, c.first_name, c.last_name,
@@ -118,7 +124,7 @@ BEGIN
                     ISNULL(u.firstLoginCompleted, 0) AS firstLoginCompleted
                 FROM dbo.clients c
                 LEFT JOIN dbo.users u ON u.clientId = c.clientId
-                WHERE c.cellphone = @phone
+                WHERE RIGHT(REPLACE(c.cellphone, '+', ''), 10) = RIGHT(REPLACE(@phone, '+', ''), 10)
                 ORDER BY CASE WHEN u.userId IS NOT NULL THEN 0 ELSE 1 END
                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
             );
@@ -142,14 +148,19 @@ BEGIN
         -- ever touching dbo.clients/dbo.users directly.
         IF @action = 3
         BEGIN
+            -- companyName rides along so Python can brand the OTP SMS as this
+            -- client's own company (e.g. "Lavanderia") instead of the
+            -- _send_sms_otp default of "SmartLoans" -- see modules/users.py.
             DECLARE @statusJson NVARCHAR(MAX) = (
                 SELECT TOP 1
                     c.clientId, c.companyId, c.first_name, c.last_name,
+                    co.name AS companyName,
                     u.userId AS existingUserId,
                     ISNULL(u.firstLoginCompleted, 0) AS firstLoginCompleted
                 FROM dbo.clients c
                 LEFT JOIN dbo.users u ON u.clientId = c.clientId
-                WHERE c.cellphone = @phone
+                LEFT JOIN dbo.companies co ON co.companyId = c.companyId
+                WHERE RIGHT(REPLACE(c.cellphone, '+', ''), 10) = RIGHT(REPLACE(@phone, '+', ''), 10)
                 ORDER BY CASE WHEN u.userId IS NOT NULL THEN 0 ELSE 1 END
                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
             );
@@ -182,7 +193,7 @@ BEGIN
                     c.clientId, c.companyId, c.first_name, c.last_name, u.userId
                 FROM dbo.clients c
                 INNER JOIN dbo.users u ON u.clientId = c.clientId
-                WHERE c.cellphone = @phone
+                WHERE RIGHT(REPLACE(c.cellphone, '+', ''), 10) = RIGHT(REPLACE(@phone, '+', ''), 10)
                   AND u.password IS NOT NULL AND u.password <> ''
                   AND u.password = @inputPassword
                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
