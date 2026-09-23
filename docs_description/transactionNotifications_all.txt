@@ -1,0 +1,5 @@
+Returns all transactionNotifications records for the given company filtered by companyId via sp_transactionNotifications_all.
+Stored procedure: EXEC [dbo].[sp_transactionNotifications_all] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/all_transactionNotifications"   -H "Content-Type: application/json"   -d '{"transactionNotifications":[{"companyId":1}]}'
