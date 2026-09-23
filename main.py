@@ -62,6 +62,7 @@ from routes_ import (
     clientCapabilities,
     roles,
     commissionTerminals,
+    transactionNotification,
 )
 
 app = FastAPI(
@@ -227,6 +228,7 @@ app.include_router(posRewards.router)
 app.include_router(clientCapabilities.router)
 app.include_router(roles.router)
 app.include_router(commissionTerminals.router)
+app.include_router(transactionNotification.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job
