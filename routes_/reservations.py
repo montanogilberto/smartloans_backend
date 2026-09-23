@@ -1,5 +1,6 @@
 from fastapi import APIRouter
-from modules.reservations import reservations_sp
+from fastapi.responses import JSONResponse
+from modules.reservations import reservations_sp, run_migration
 
 router = APIRouter()
 
@@ -35,3 +36,15 @@ action 5 — list pending+confirmed for POS queue (today onward):
 )
 def reservations(json: dict):
     return reservations_sp(json)
+
+
+@router.post(
+    "/reservations/migrate",
+    summary="Create reservations table + SP on the database (idempotent)",
+)
+def reservations_migrate():
+    try:
+        result = run_migration()
+        return JSONResponse(result, status_code=200)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)

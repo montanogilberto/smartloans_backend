@@ -150,3 +150,46 @@ def reservations_sp(json_file: dict):
     except Exception as e:
         logger.exception("[reservations] unhandled error")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def run_migration():
+    """Create the reservations table and sp_reservations SP if they don't exist."""
+    sql_path = os.path.join(os.path.dirname(__file__), "..", "sql", "migrations", "2026-09-23_add_reservations.sql")
+    with open(os.path.abspath(sql_path), encoding="utf-8") as f:
+        script = f.read()
+
+    # Split on GO (batch separator used by SQL Server)
+    batches = [b.strip() for b in script.split("\nGO") if b.strip()]
+    executed = []
+    conn = None
+    try:
+        conn = _conn()
+        cursor = conn.cursor()
+        for batch in batches:
+            if batch:
+                cursor.execute(batch)
+        conn.commit()
+        executed = batches
+    finally:
+        if conn:
+            conn.close()
+
+    # Now create/replace the SP from the full sp_reservations.sql
+    sp_path = os.path.join(os.path.dirname(__file__), "..", "sql", "sp_reservations.sql")
+    with open(os.path.abspath(sp_path), encoding="utf-8") as f:
+        sp_script = f.read()
+
+    sp_batches = [b.strip() for b in sp_script.split("\nGO") if b.strip()]
+    conn = None
+    try:
+        conn = _conn()
+        cursor = conn.cursor()
+        for batch in sp_batches:
+            if batch:
+                cursor.execute(batch)
+        conn.commit()
+    finally:
+        if conn:
+            conn.close()
+
+    return {"ok": True, "batches_run": len(executed) + len(sp_batches)}
