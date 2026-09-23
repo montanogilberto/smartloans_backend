@@ -169,6 +169,9 @@ def pos_reward_product_counts_sp(json_file: dict):
     card UI shows accurate per-product progress without a custom table."""
     try:
         result = _sp("sp_posRewardProductCounts", json_file)
+        # SP returns {"posRewardProductCounts": [...]} — wrap in result envelope
+        if isinstance(result, dict) and "posRewardProductCounts" in result:
+            result = {"result": [result]}
         return JSONResponse(result, status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
