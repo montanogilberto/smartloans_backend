@@ -5,6 +5,7 @@ from modules.posRewards import (
     pos_reward_balances_sp, pos_reward_dashboard_summary_sp,
     pos_reward_transactions_sp, earn_from_ticket_sp, adjust_points_sp,
     pos_reward_redemptions_sp, redeem_sp,
+    pos_reward_product_counts_sp,
 )
 
 router = APIRouter()
@@ -117,3 +118,15 @@ REDEEM ledger row and decrements the balance. Returns
 )
 def redeem(json: dict):
     return redeem_sp(json)
+
+
+@router.post(
+    "/posRewardProductCounts",
+    summary="Per-product purchase counts for a client (stamp card progress)",
+    description="""{ "posRewardProductCounts": [{ "companyId": int, "clientId": int }] }
+Returns how many units of each rewardable product the client has purchased,
+minus units already consumed by applied redemptions. Used by stamp-card UI
+to show accurate progress per catalog item.""",
+)
+def pos_reward_product_counts(json: dict):
+    return pos_reward_product_counts_sp(json)
