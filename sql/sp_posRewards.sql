@@ -667,12 +667,55 @@ BEGIN
         IF @companyId IS NULL OR @clientId IS NULL OR @catalogItemId IS NULL OR @redeemedByUserId IS NULL
             RAISERROR('companyId, clientId, catalogItemId y redeemedByUserId son requeridos.', 16, 1);
 
-        DECLARE @requiredPoints DECIMAL(12,2) = (
-            SELECT requiredPoints FROM [dbo].[posRewardCatalogItems]
-            WHERE catalogItemId = @catalogItemId AND companyId = @companyId AND isActive = 1
-        );
+        DECLARE @requiredPoints DECIMAL(12,2), @rewardType NVARCHAR(30), @freeProductId INT;
+        SELECT @requiredPoints = requiredPoints, @rewardType = rewardType, @freeProductId = freeProductId
+        FROM [dbo].[posRewardCatalogItems]
+        WHERE catalogItemId = @catalogItemId AND companyId = @companyId AND isActive = 1;
+
         IF @requiredPoints IS NULL
             RAISERROR('La recompensa no existe, no pertenece a esta empresa, o no está activa.', 16, 1);
+
+        -- free_product rewards must be earned from THAT specific product, not
+        -- from the client's mixed, fungible points balance -- otherwise 3
+        -- cheap purchases across different products could fund one expensive
+        -- item's "free" reward. Units purchased/consumed are derived from
+        -- real ticket history (incomeDetails), no new tables needed: pointsPerUnit
+        -- converts the catalog item's point cost into a physical unit count for
+        -- this product, and each prior 'applied' redemption of this exact
+        -- catalogItemId is assumed to have consumed that many units.
+        IF @rewardType = 'free_product' AND @freeProductId IS NOT NULL
+        BEGIN
+            DECLARE @pointsPerUnit DECIMAL(12,2) = (
+                SELECT pointsPerUnit FROM [dbo].[posRewardProductRates]
+                WHERE companyId = @companyId AND productId = @freeProductId AND isActive = 1
+            );
+            DECLARE @requiredUnits DECIMAL(12,2) = CASE
+                WHEN ISNULL(@pointsPerUnit, 0) > 0 THEN @requiredPoints / @pointsPerUnit
+                ELSE @requiredPoints
+            END;
+
+            DECLARE @unitsPurchased DECIMAL(12,2) = ISNULL((
+                SELECT SUM(d.quantity)
+                FROM [dbo].[incomeDetails] d
+                JOIN [dbo].[income] i ON i.incomeId = d.incomeId
+                WHERE d.productId = @freeProductId AND i.clientId = @clientId AND i.companyId = @companyId
+            ), 0);
+
+            DECLARE @priorRedemptions INT = (
+                SELECT COUNT(*) FROM [dbo].[posRewardRedemptions]
+                WHERE companyId = @companyId AND clientId = @clientId
+                    AND catalogItemId = @catalogItemId AND status = 'applied'
+            );
+            DECLARE @unitsAvailable DECIMAL(12,2) = @unitsPurchased - (@priorRedemptions * @requiredUnits);
+
+            IF @unitsAvailable < @requiredUnits
+            BEGIN
+                SELECT ('{"error":"insufficient_product_units","required":' + CONVERT(NVARCHAR(30), @requiredUnits) +
+                    ',"purchased":' + CONVERT(NVARCHAR(30), @unitsPurchased) +
+                    ',"available":' + CONVERT(NVARCHAR(30), @unitsAvailable) + '}') AS [jsonResult]
+                RETURN;
+            END
+        END
 
         DECLARE @currentBalance DECIMAL(12,2) = ISNULL(
             (SELECT balance FROM [dbo].[posRewardBalances] WHERE companyId = @companyId AND clientId = @clientId), 0);
@@ -714,6 +757,72 @@ BEGIN
     END TRY
     BEGIN CATCH
         IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+        DECLARE @Error NVARCHAR(500) = ERROR_MESSAGE();
+        SELECT ('{"error":"' + REPLACE(@Error, '"', '\"') + '"}') AS [jsonResult]
+    END CATCH
+END
+GO
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- sp_posRewardProductCounts
+-- Returns available units per rewardable product for a client.
+-- "Available" = total purchased - units consumed by applied redemptions.
+-- Used by the stamp-card UI to show accurate per-product progress.
+-- Input:  { "posRewardProductCounts": [{ "companyId": int, "clientId": int }] }
+-- Output: { "result": [{ "posRewardProductCounts": [{ "productId", "unitsPurchased", "unitsConsumed", "unitsAvailable" }] }] }
+-- ─────────────────────────────────────────────────────────────────────────────
+IF OBJECT_ID('dbo.sp_posRewardProductCounts', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_posRewardProductCounts;
+GO
+CREATE PROCEDURE [dbo].[sp_posRewardProductCounts]
+    @pjsonfile NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRY
+        DECLARE @companyId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.posRewardProductCounts[0].companyId'));
+        DECLARE @clientId  INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.posRewardProductCounts[0].clientId'));
+
+        IF @companyId IS NULL OR @clientId IS NULL
+        BEGIN
+            SELECT ('{"error":"companyId and clientId are required"}') AS [jsonResult];
+            RETURN;
+        END
+
+        -- Units purchased per product
+        ;WITH purchased AS (
+            SELECT d.productId, SUM(d.quantity) AS unitsPurchased
+            FROM [dbo].[incomeDetails] d
+            JOIN [dbo].[income] i ON i.incomeId = d.incomeId
+            WHERE i.clientId = @clientId AND i.companyId = @companyId
+            GROUP BY d.productId
+        ),
+        -- Units consumed by applied redemptions per catalog item
+        consumed AS (
+            SELECT c.freeProductId AS productId,
+                   COUNT(*) * (c.requiredPoints / ISNULL(r.pointsPerUnit, 1)) AS unitsConsumed
+            FROM [dbo].[posRewardRedemptions] rd
+            JOIN [dbo].[posRewardCatalogItems] c ON c.catalogItemId = rd.catalogItemId
+            LEFT JOIN [dbo].[posRewardProductRates] r
+                ON r.companyId = @companyId AND r.productId = c.freeProductId AND r.isActive = 1
+            WHERE rd.companyId = @companyId AND rd.clientId = @clientId AND rd.status = 'applied'
+              AND c.rewardType = 'free_product' AND c.freeProductId IS NOT NULL
+            GROUP BY c.freeProductId, c.requiredPoints, r.pointsPerUnit
+        )
+        SELECT (
+            SELECT
+                p.productId,
+                p.unitsPurchased,
+                ISNULL(con.unitsConsumed, 0) AS unitsConsumed,
+                p.unitsPurchased - ISNULL(con.unitsConsumed, 0) AS unitsAvailable
+            FROM purchased p
+            JOIN [dbo].[posRewardProductRates] pr
+                ON pr.companyId = @companyId AND pr.productId = p.productId AND pr.isActive = 1
+            LEFT JOIN consumed con ON con.productId = p.productId
+            FOR JSON PATH, ROOT('posRewardProductCounts')
+        ) AS [jsonResult];
+
+    END TRY
+    BEGIN CATCH
         DECLARE @Error NVARCHAR(500) = ERROR_MESSAGE();
         SELECT ('{"error":"' + REPLACE(@Error, '"', '\"') + '"}') AS [jsonResult]
     END CATCH

@@ -160,3 +160,15 @@ def redeem_sp(json_file: dict):
         return JSONResponse(result, status_code=status_code)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def pos_reward_product_counts_sp(json_file: dict):
+    """POST /posRewardProductCounts — returns units purchased per rewardable
+    product for a client, minus units already consumed by applied redemptions.
+    Runs directly against incomeDetails + posRewardRedemptions so the stamp
+    card UI shows accurate per-product progress without a custom table."""
+    try:
+        result = _sp("sp_posRewardProductCounts", json_file)
+        return JSONResponse(result, status_code=200)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
