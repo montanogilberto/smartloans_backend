@@ -1,0 +1,5 @@
+Returns a single transactionNotification record by its primary key via sp_transactionNotifications_one.
+Stored procedure: EXEC [dbo].[sp_transactionNotifications_one] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/one_transactionNotification"   -H "Content-Type: application/json"   -d '{"companyId":1,"transactionNotificationId":1}'
