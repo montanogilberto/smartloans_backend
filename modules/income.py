@@ -14,26 +14,54 @@ app = FastAPI()
 def _get_client_phone(conn, client_id) -> str | None:
     try:
         cur = conn.cursor()
-        cur.execute("SELECT cellphone FROM dbo.clients WHERE clientId = %s", (client_id,))
-        row = cur.fetchone()
-        return row[0] if row and row[0] else None
+        cur.execute("EXEC sp_clients_one @pjsonfile = %s",
+                    (json.dumps({"clients": [{"clientId": client_id}]}),))
+        # FOR JSON AUTO may split the payload across several rows
+        rows = cur.fetchall()
+        json_text = "".join((r[0] or "") for r in rows).strip() if rows else ""
+        if not json_text:
+            return None
+        clients = json.loads(json_text).get("clients") or []
+        phone = (clients[0].get("cellphone") or "").strip() if clients else ""
+        return phone or None
     except Exception as e:
         print(f"[income] client phone lookup failed: {e}")
         return None
 
 
-def _get_final_total(conn, income_id) -> float | None:
+def _get_final_total(conn, income_id, company_id) -> float | None:
     """sp_income can recompute total server-side (B2G1 promo) after the
     initial insert -- read back the authoritative value so notifications
     quote the amount actually charged, not the pre-promo client-submitted one."""
+    total, _discount, _promo_code = _get_final_total_and_discount(conn, income_id, company_id)
+    return total
+
+
+def _get_final_total_and_discount(conn, income_id, company_id) -> tuple[float | None, float | None, str | None]:
+    """Same authoritative read as _get_final_total, plus whatever B2G1 promo
+    discount sp_income applied -- so the comprobante message can say WHY the
+    total is what it is, not just quote the post-discount number."""
     try:
         cur = conn.cursor()
-        cur.execute("SELECT total FROM dbo.income WHERE incomeId = %s", (income_id,))
-        row = cur.fetchone()
-        return float(row[0]) if row and row[0] is not None else None
+        cur.execute("EXEC sp_income_one @pjsonfile = %s",
+                    (json.dumps({"income": [{"incomeId": income_id, "companyId": company_id}]}),))
+        # FOR JSON AUTO may split the payload across several rows
+        rows = cur.fetchall()
+        json_text = "".join((r[0] or "") for r in rows).strip() if rows else ""
+        if not json_text:
+            return None, None, None
+        parsed = json.loads(json_text)
+        incomes = parsed.get("income") if isinstance(parsed, dict) else None
+        if not incomes:
+            return None, None, None
+        inc = incomes[0]
+        total = float(inc["total"]) if inc.get("total") is not None else None
+        discount = float(inc["discountAmount"]) if inc.get("discountAmount") is not None else None
+        promo_code = inc.get("promotionCode") or None
+        return total, discount, promo_code
     except Exception as e:
-        print(f"[income] final total lookup failed: {e}")
-        return None
+        print(f"[income] final total/discount lookup failed: {e}")
+        return None, None, None
 
 
 def income_sp(json_file: dict):
@@ -106,13 +134,16 @@ def income_sp(json_file: dict):
                     income_id = int(result[0]["value"])
                     if company_id and client_id:
                         phone = _get_client_phone(conn, client_id)
-                        final_total = _get_final_total(conn, income_id)
+                        final_total, discount_amount, promo_code = _get_final_total_and_discount(conn, income_id, company_id)
                         if final_total is None:
                             final_total = first_row.get("total")
                         preview = (
                             f"Gracias por su compra. Total: ${final_total:,.2f} MXN"
                             if isinstance(final_total, (int, float)) else "Gracias por su compra."
                         )
+                        if isinstance(discount_amount, (int, float)) and discount_amount > 0:
+                            code_suffix = f" ({promo_code})" if promo_code else ""
+                            preview += f"\nDescuento aplicado{code_suffix}: -${discount_amount:,.2f} MXN"
                         asyncio.run(dispatch_notification_connector({
                             "companyId": company_id,
                             "sourceType": "income",

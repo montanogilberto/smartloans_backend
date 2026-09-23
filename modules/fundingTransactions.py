@@ -82,12 +82,14 @@ def _requester_role(company_id: int, requester_user_id: int):
         conn = _conn()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT TOP 1 roleName FROM dbo.userCompanies "
-            "WHERE userId = %s AND companyId = %s AND active = 1",
-            (requester_user_id, company_id)
+            "EXEC [dbo].[sp_userCompanies_role] @pjsonfile = %s",
+            (json.dumps({"userCompanies": [{"userId": requester_user_id, "companyId": company_id}]}),)
         )
         row = cursor.fetchone()
-        return row[0] if row else None
+        result = json.loads(row[0]) if row and row[0] else {}
+        if "error" in result:
+            raise RuntimeError(result["error"])
+        return result.get("roleName")
     except Exception as e:
         print(f"[fundingTransactions] _requester_role failed: {e}")
         return None

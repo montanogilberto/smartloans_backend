@@ -18,6 +18,11 @@ jobs:
         with:
           python-version: '3.11'
 
+      # Backend rule: modules never issue raw SQL -- only EXEC [dbo].[sp_*].
+      # Stdlib-only, so it runs before dependencies are installed.
+      - name: Check for raw SQL
+        run: python scripts/check_raw_sql.py
+
       - name: Create and start virtual environment
         run: |
           python -m venv venv

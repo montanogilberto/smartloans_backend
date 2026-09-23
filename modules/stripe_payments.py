@@ -859,14 +859,19 @@ def _client_contact(client_id) -> dict:
     try:
         conn = connection()
         cur = conn.cursor()
-        cur.execute(
-            "SELECT email, first_name, last_name FROM dbo.clients WHERE clientId = %s",
-            (client_id,))
-        row = cur.fetchone()
-        if not row:
+        cur.execute("EXEC sp_clients_one @pjsonfile = %s",
+                    (json.dumps({"clients": [{"clientId": client_id}]}),))
+        # FOR JSON AUTO may split the payload across several rows
+        rows = cur.fetchall()
+        json_text = "".join((r[0] or "") for r in rows).strip() if rows else ""
+        if not json_text:
             return {}
-        return {"email": (row[0] or "").strip(),
-                "name": f"{row[1] or ''} {row[2] or ''}".strip() or "cliente"}
+        clients = json.loads(json_text).get("clients") or []
+        if not clients:
+            return {}
+        c = clients[0]
+        return {"email": (c.get("email") or "").strip(),
+                "name": f"{c.get('first_name') or ''} {c.get('last_name') or ''}".strip() or "cliente"}
     except Exception as e:
         print(f"[stripe][receipt] client lookup FAILED: {e}")
         return {}

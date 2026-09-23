@@ -17,16 +17,21 @@ def _offer_contact(client_id) -> dict:
     try:
         conn = connection()
         cur = conn.cursor()
-        cur.execute(
-            "SELECT email, cellphone, first_name, last_name FROM dbo.clients WHERE clientId = %s",
-            (client_id,))
-        row = cur.fetchone()
-        if not row:
+        cur.execute("EXEC sp_clients_one @pjsonfile = %s",
+                    (json.dumps({"clients": [{"clientId": client_id}]}),))
+        # FOR JSON AUTO may split the payload across several rows
+        rows = cur.fetchall()
+        json_text = "".join((r[0] or "") for r in rows).strip() if rows else ""
+        if not json_text:
             return {}
+        clients = json.loads(json_text).get("clients") or []
+        if not clients:
+            return {}
+        c = clients[0]
         return {
-            "email": (row[0] or "").strip(),
-            "cellphone": (row[1] or "").strip(),
-            "name": f"{row[2] or ''} {row[3] or ''}".strip() or "prestamista",
+            "email": (c.get("email") or "").strip(),
+            "cellphone": (c.get("cellphone") or "").strip(),
+            "name": f"{c.get('first_name') or ''} {c.get('last_name') or ''}".strip() or "prestamista",
         }
     except Exception as e:
         print(f"[loanOffers][ticket] client lookup FAILED: {e}")

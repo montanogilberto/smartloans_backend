@@ -7,6 +7,7 @@ from observability import log_workflow_step, log_audit
 from observability.integrations import timed_integration
 from modules.ticket_notifications import send_sms, send_whatsapp
 from modules.azure_notifications import send_azure_push
+from modules.pushNotifications import resolve_push_user_ids
 
 # sp_notificationDispatches action codes -> a human label for workflow/audit logs.
 _ACTION_LABELS = {1: "Insert", 2: "Update", 3: "Delete"}
@@ -111,13 +112,19 @@ def one_notificationDispatch_sp(json_file: dict):
 
 def _get_policy(cursor, event_name: str):
     cursor.execute(
-        "SELECT channel_list_json, allow_sms_fallback FROM dbo.notificationDispatch_policy WHERE eventName = %s",
-        (event_name,),
+        "EXEC sp_notificationDispatchPolicy_one @pjsonfile = %s",
+        (json.dumps({"notificationDispatchPolicies": [{"eventName": event_name}]}),),
     )
-    row = cursor.fetchone()
-    if not row:
+    # FOR JSON AUTO may split the payload across several rows
+    rows = cursor.fetchall()
+    json_text = "".join((r[0] or "") for r in rows).strip() if rows else ""
+    if not json_text:
         return None
-    channel_list_json, allow_sms_fallback = row[0], row[1]
+    policies = json.loads(json_text).get("notificationDispatchPolicies") or []
+    if not policies:
+        return None
+    channel_list_json = policies[0].get("channel_list_json")
+    allow_sms_fallback = policies[0].get("allow_sms_fallback")
     try:
         channels = json.loads(channel_list_json)
     except (TypeError, ValueError):
@@ -131,9 +138,9 @@ def _resolve_push_user_id(cursor, recipient_type: str, recipient_id):
     (see modules/azure_notifications.py). If recipientType is already "user",
     recipientId IS the userId. If recipientType is "client", resolve the
     linked app account the same way the rest of this backend already does
-    (modules/pushNotifications.py:128, modules/automatedPayments.py:408):
-    dbo.clients has no userId column, so the only path is
-    `SELECT TOP 1 userId FROM users WHERE clientId = %s`.
+    (modules/pushNotifications.py, modules/automatedPayments.py):
+    dbo.clients has no userId column, so the only path is dbo.users.clientId,
+    read via sp_pushNotifications_resolveUsers.
 
     Returns the userId to target, or None if this recipient has no linked
     user account at all (the real "no push possible" case -- NOT the same as
@@ -144,31 +151,48 @@ def _resolve_push_user_id(cursor, recipient_type: str, recipient_id):
     """
     if recipient_type == "user":
         return recipient_id
-    cursor.execute("SELECT TOP 1 userId FROM users WHERE clientId = %s", (recipient_id,))
-    row = cursor.fetchone()
-    return row[0] if row else None
+    try:
+        client_id = int(recipient_id)
+    except (TypeError, ValueError):
+        return None
+    return resolve_push_user_ids(cursor, [client_id]).get(client_id)
+
+
+def _lookup(cursor, item: dict) -> list:
+    """sp_notificationDispatches_lookup -> list of matching rows ([] if none)."""
+    cursor.execute(
+        "EXEC sp_notificationDispatches_lookup @pjsonfile = %s",
+        (json.dumps({"notificationDispatches": [item]}),),
+    )
+    # FOR JSON may split the payload across several rows
+    rows = cursor.fetchall()
+    json_text = "".join((r[0] or "") for r in rows).strip() if rows else ""
+    if not json_text:
+        return []
+    parsed = json.loads(json_text)
+    if isinstance(parsed, dict) and "error" in parsed:
+        raise RuntimeError(f"sp_notificationDispatches_lookup: {parsed['error']}")
+    return parsed.get("notificationDispatches") or [] if isinstance(parsed, dict) else []
 
 
 def _existing_resolved_dispatch(cursor, company_id, source_type, source_id, event_name):
-    cursor.execute(
-        """
-        SELECT TOP 1 notificationDispatchId, selectedChannel, status, providerMessageId, sentAt, confirmedAt
-        FROM dbo.notificationDispatches
-        WHERE companyId = %s AND sourceType = %s AND sourceId = %s AND eventName = %s
-          AND status IN ('sent', 'confirmed')
-        """,
-        (company_id, source_type, source_id, event_name),
-    )
-    row = cursor.fetchone()
-    if not row:
+    rows = _lookup(cursor, {
+        "action": "resolved",
+        "companyId": company_id,
+        "sourceType": source_type,
+        "sourceId": source_id,
+        "eventName": event_name,
+    })
+    if not rows:
         return None
+    row = rows[0]
     return {
-        "notificationDispatchId": row[0],
-        "selectedChannel": row[1],
-        "status": row[2],
-        "providerMessageId": row[3],
-        "sentAt": row[4].isoformat() if row[4] else None,
-        "confirmedAt": row[5].isoformat() if row[5] else None,
+        "notificationDispatchId": row.get("notificationDispatchId"),
+        "selectedChannel": row.get("selectedChannel"),
+        "status": row.get("status"),
+        "providerMessageId": row.get("providerMessageId"),
+        "sentAt": row.get("sentAt"),
+        "confirmedAt": row.get("confirmedAt"),
     }
 
 
@@ -180,9 +204,9 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
     tags devices as user_{userId} only -- never clientId (see
     modules/azure_notifications.py::_send_single), and dbo.clients has no
     userId column. So _resolve_push_user_id() looks up the linked app
-    account via `SELECT TOP 1 userId FROM users WHERE clientId = %s` -- the
-    same idiom already used at modules/pushNotifications.py:128 and
-    modules/automatedPayments.py:408 -- and only skips push (fallbackReason=
+    account via sp_pushNotifications_resolveUsers -- the same resolver
+    modules/pushNotifications.py and modules/automatedPayments.py use --
+    and only skips push (fallbackReason=
     NO_DEVICE) when that client has no linked user account at all.
 
     IMPORTANT, honest limitation this connector cannot fix on its own: there
@@ -429,15 +453,11 @@ async def confirm_notification_connector(payload: dict) -> JSONResponse:
 
         conn = connection()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT TOP 1 notificationDispatchId, companyId FROM dbo.notificationDispatches WHERE providerMessageId = %s",
-            (provider_message_id,),
-        )
-        row = cursor.fetchone()
-        if not row:
+        matches = _lookup(cursor, {"action": "byProviderMessageId", "providerMessageId": provider_message_id})
+        if not matches:
             return JSONResponse(content={"error": "No dispatch found for that providerMessageId"}, status_code=404)
 
-        dispatch_id, company_id = row[0], row[1]
+        dispatch_id, company_id = matches[0]["notificationDispatchId"], matches[0]["companyId"]
         now_iso = _now_iso()
         update_payload = {
             "notificationDispatches": [{

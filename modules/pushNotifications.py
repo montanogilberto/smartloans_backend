@@ -23,6 +23,31 @@ def _get_active_user_ids(cursor, company_id=None) -> list:
     return [u["userId"] for u in json.loads(json_result).get("users", [])]
 
 
+def _as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_push_user_ids(cursor, ids, allow_user_id: bool = False) -> dict:
+    """{id: userId | None} via sp_pushNotifications_resolveUsers, one call for
+    the whole list. Hub tags are user_{userId}; allow_user_id=True keeps an
+    id that already IS a userId, else every id is treated as a clientId."""
+    int_ids = [i for i in (_as_int(x) for x in ids) if i is not None]
+    if not int_ids:
+        return {}
+    cursor.execute(
+        "EXEC [dbo].[sp_pushNotifications_resolveUsers] @pjsonfile = %s",
+        (json.dumps({"allowUserId": 1 if allow_user_id else 0, "ids": int_ids}),),
+    )
+    rows = cursor.fetchall()
+    json_result = "".join(row[0] for row in rows if row and row[0])
+    if not json_result:
+        return {}
+    return {u["id"]: u.get("userId") for u in json.loads(json_result).get("users", [])}
+
+
 def _record_delivery(cursor, push_notification_id: int, user_id: int, was_sent: bool) -> None:
     cursor.execute(
         "EXEC [dbo].[sp_pushNotifications_recordDelivery] @pjsonfile = %s",
@@ -119,20 +144,17 @@ async def pushNotifications_sp(json_file: dict):
                 # ZERO devices and Azure still reports success — pushes vanish
                 # silently. Resolve here, once, for every caller: keep the id
                 # if it's a real userId; else map clientId→userId.
+                mapping = resolve_push_user_ids(cursor, recipient_ids, allow_user_id=True)
                 resolved = []
                 for rid in recipient_ids:
-                    cursor.execute("SELECT 1 FROM users WHERE userId = %s", (rid,))
-                    if cursor.fetchone():
-                        resolved.append(rid)
-                        continue
-                    cursor.execute("SELECT TOP 1 userId FROM users WHERE clientId = %s", (rid,))
-                    row = cursor.fetchone()
-                    if row:
-                        print(f"[pushNotifications][module] mapped clientId {rid} → userId {row[0]}")
-                        resolved.append(row[0])
-                    else:
+                    user_id = mapping.get(_as_int(rid))
+                    if user_id is None:
                         print(f"[pushNotifications][module] WARNING: id {rid} matches no user — push will target an empty tag")
                         resolved.append(rid)
+                        continue
+                    if user_id != _as_int(rid):
+                        print(f"[pushNotifications][module] mapped clientId {rid} → userId {user_id}")
+                    resolved.append(user_id)
                 recipient_ids = resolved
 
                 print("[pushNotifications][module] Resolved recipients:", recipient_ids)
