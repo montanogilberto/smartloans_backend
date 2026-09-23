@@ -1,0 +1,5 @@
+Performs INSERT, UPDATE, or DELETE on the FactoryRunUsages table via sp_factoryRunUsages.
+Stored procedure: EXEC [dbo].[sp_factoryRunUsages] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/factoryRunUsages"   -H "Content-Type: application/json"   -d '{"factoryRunUsages":[{"action":1,"factoryRunRef":"FR-XYZ-123","promptTokens":100,"completionTokens":50,"totalTokens":150,"costUSD":0.05,"modelName":"gpt-4","timestamp":"2023-10-27T10:00:00Z"}]}'
