@@ -789,11 +789,14 @@ BEGIN
         END
 
         -- Units purchased per product
+        -- Note: income.companyId is not filtered here — the earn SP also omits it
+        -- when summing incomeDetails (see lines 503-508 of sp_posRewardTransactions_earnFromTicket).
+        -- We scope to the client and restrict products to those with active rates for this company.
         ;WITH purchased AS (
             SELECT d.productId, SUM(d.quantity) AS unitsPurchased
             FROM [dbo].[incomeDetails] d
             JOIN [dbo].[income] i ON i.incomeId = d.incomeId
-            WHERE i.clientId = @clientId AND i.companyId = @companyId
+            WHERE i.clientId = @clientId
             GROUP BY d.productId
         ),
         -- Units consumed by applied redemptions per catalog item
