@@ -59,6 +59,7 @@ from routes_ import (
     posSupportChat,
     client_login,
     posRewards,
+    reservations,
     clientCapabilities,
     roles,
     commissionTerminals,
@@ -224,6 +225,7 @@ app.include_router(onboardingReminders.router)
 app.include_router(registrationReminders.router)
 app.include_router(client_login.router)
 app.include_router(posRewards.router)
+app.include_router(reservations.router)
 app.include_router(clientCapabilities.router)
 app.include_router(roles.router)
 app.include_router(commissionTerminals.router)
