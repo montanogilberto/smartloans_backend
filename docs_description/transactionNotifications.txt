@@ -1,0 +1,5 @@
+Performs INSERT, UPDATE, or DELETE on the transactionNotifications table via sp_transactionNotifications.
+Stored procedure: EXEC [dbo].[sp_transactionNotifications] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/transactionNotifications"   -H "Content-Type: application/json"   -d '{"transactionNotifications":[{"action":1,"companyId":1,"clientId":101,"transactionId":201,"movementType":"top-up","channel":"email","status":"pending","recipientEmail":"client@example.com","subject":"Your top-up is pending","messageBody":"Your recent wallet top-up of 100.00 MXN is pending confirmation.","amount":100.00,"currency":"MXN"}]}'
