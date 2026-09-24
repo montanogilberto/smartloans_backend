@@ -63,6 +63,7 @@ from routes_ import (
     clientCapabilities,
     roles,
     commissionTerminals,
+    whatsappCloud,
 )
 
 app = FastAPI(
@@ -229,6 +230,7 @@ app.include_router(reservations.router)
 app.include_router(clientCapabilities.router)
 app.include_router(roles.router)
 app.include_router(commissionTerminals.router)
+app.include_router(whatsappCloud.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job
