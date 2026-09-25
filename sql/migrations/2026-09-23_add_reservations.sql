@@ -21,5 +21,6 @@ CREATE TABLE [dbo].[reservations] (
 );
 GO
 
-IF OBJECT_ID('dbo.sp_reservations', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_reservations;
-GO
+-- Next: run sql/sp_reservations.sql to (re)create dbo.sp_reservations.
+-- It is not dropped here: a drop without the create left /reservations
+-- returning 500 "Could not find stored procedure" in production.

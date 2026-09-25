@@ -1,6 +1,8 @@
 """
-Laundry service reservations — customers book lavado/secado from the kiosk.
-Staff confirms via POS. Sends SMS + WhatsApp + email on creation.
+Reservations — customers book a slot for a service from the company's
+catalog (sp_reservationServices) via kiosk or WhatsApp; hours come from
+sp_reservationHours. Staff confirms via POS. On creation: SMS + WhatsApp +
+email to the customer and a push to the company's POS users.
 """
 
 import json
@@ -13,8 +15,10 @@ from email.mime.multipart import MIMEMultipart
 from typing import Optional
 
 import certifi
+from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 from databases import connection
+from modules.pushNotifications import pushNotifications_sp
 from modules.ticket_notifications import send_sms, send_whatsapp
 
 logger = logging.getLogger(__name__)
@@ -26,12 +30,12 @@ def _conn():
     return connection()
 
 
-def _sp(json_file: dict):
+def _sp(json_file: dict, procedure: str = "sp_reservations"):
     conn = None
     try:
         conn = _conn()
         cursor = conn.cursor()
-        cursor.execute("EXEC [dbo].[sp_reservations] @pjsonfile = %s", (json.dumps(json_file),))
+        cursor.execute(f"EXEC [dbo].[{procedure}] @pjsonfile = %s", (json.dumps(json_file),))
         rows = cursor.fetchall()
         raw = "".join(r[0] for r in rows if r and r[0])
         return json.loads(raw) if raw else {}
@@ -41,10 +45,9 @@ def _sp(json_file: dict):
 
 
 def _send_confirmation_sms(phone: str, name: str, service: str, date: str, time_slot: str, reservation_id: int):
-    service_label = "Lavado" if service == "lavado" else "Secado"
     body = (
         f"✅ Reservación confirmada - {COMPANY_NAME}\n"
-        f"Hola {name}! Tu reservación para {service_label} está lista.\n"
+        f"Hola {name}! Tu reservación para {service} está lista.\n"
         f"📅 Fecha: {date}  🕐 Hora: {time_slot}\n"
         f"Folio: #{reservation_id}\n"
         f"Te esperamos. Para cancelar responde CANCELAR."
@@ -57,10 +60,9 @@ def _send_confirmation_sms(phone: str, name: str, service: str, date: str, time_
 
 
 def _send_confirmation_whatsapp(phone: str, name: str, service: str, date: str, time_slot: str, reservation_id: int):
-    service_label = "Lavado" if service == "lavado" else "Secado"
     body = (
         f"✅ *Reservación confirmada - {COMPANY_NAME}*\n\n"
-        f"Hola *{name}*! Tu reservación para *{service_label}* está lista.\n\n"
+        f"Hola *{name}*! Tu reservación para *{service}* está lista.\n\n"
         f"📅 *Fecha:* {date}\n"
         f"🕐 *Hora:* {time_slot}\n"
         f"🔖 *Folio:* #{reservation_id}\n\n"
@@ -82,7 +84,6 @@ def _send_confirmation_email(email: str, name: str, service: str, date: str, tim
         logger.warning("[reservations] SMTP not configured, skipping email")
         return
 
-    service_label = "Lavado" if service == "lavado" else "Secado"
     detail_line = f"<p><strong>Servicio:</strong> {detail}</p>" if detail else ""
 
     subject = f"✅ Reservación #{reservation_id} — {COMPANY_NAME}"
@@ -92,7 +93,7 @@ def _send_confirmation_email(email: str, name: str, service: str, date: str, tim
       <p>Hola <strong>{name}</strong>,</p>
       <p>Tu reservación en <strong>{COMPANY_NAME}</strong> ha sido registrada con éxito.</p>
       <table style="border-collapse:collapse;width:100%">
-        <tr><td style="padding:8px 0;color:#555">Servicio</td><td><strong>{service_label}</strong></td></tr>
+        <tr><td style="padding:8px 0;color:#555">Servicio</td><td><strong>{service}</strong></td></tr>
         {detail_line.replace('<p>','<tr><td style="padding:8px 0;color:#555">Detalle</td><td>').replace('</p>','</td></tr>') if detail else ''}
         <tr><td style="padding:8px 0;color:#555">Fecha</td><td><strong>{date}</strong></td></tr>
         <tr><td style="padding:8px 0;color:#555">Hora</td><td><strong>{time_slot}</strong></td></tr>
@@ -117,79 +118,144 @@ def _send_confirmation_email(email: str, name: str, service: str, date: str, tim
         logger.warning("[reservations] email failed: %s", e)
 
 
-def reservations_sp(json_file: dict):
+def _first_reservation(result) -> dict:
+    """sp_reservations returns {"result":[{"reservations":[{...}]}]}."""
     try:
-        result = _sp(json_file)
+        return (result["result"][0].get("reservations") or [{}])[0]
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return {}
 
-        # On successful create (action 1), fire notifications asynchronously-ish
-        action = None
-        try:
-            action = json_file.get("reservations", [{}])[0].get("action")
-        except Exception:
-            pass
 
-        if action == 1 and isinstance(result, dict) and "result" in result:
-            row = result["result"][0] if result["result"] else {}
-            res_id = row.get("reservationId")
-            if res_id and "error" not in row:
-                payload = json_file.get("reservations", [{}])[0]
-                phone    = payload.get("phone", "")
-                name     = payload.get("clientName", "")
-                service  = payload.get("serviceType", "")
-                date     = payload.get("reservationDate", "")
-                slot     = payload.get("timeSlot", "")
-                detail   = payload.get("serviceDetail")
-                email    = payload.get("email")
+def create_reservation(fields: dict) -> dict:
+    """Runs sp_reservations action 1. Shared by the kiosk (POST /reservations)
+    and the WhatsApp agent's confirmed booking, so both hit the same slot
+    capacity check. Returns the created row, or {"error", "message"?} as the
+    SP reported it (slot_taken, past_slot, missing fields)."""
+    result = _sp({"reservations": [{**fields, "action": 1}]})
+    if isinstance(result, dict) and result.get("error"):
+        return result
+    row = _first_reservation(result)
+    if not row.get("reservationId"):
+        return {"error": "unexpected response from sp_reservations"}
+    return row
 
-                _send_confirmation_sms(phone, name, service, date, slot, res_id)
-                _send_confirmation_whatsapp(phone, name, service, date, slot, res_id)
-                if email:
-                    _send_confirmation_email(email, name, service, date, slot, res_id, detail)
 
-        return JSONResponse(result, status_code=200)
+def list_services(company_id: int) -> list:
+    """Active services of the company's catalog (sp_reservationServices)."""
+    result = _sp({"reservationServices": [{"companyId": company_id}]}, "sp_reservationServices")
+    try:
+        return result["result"][0]["reservationServices"]
+    except (KeyError, IndexError, TypeError):
+        return []
+
+
+def available_slots(company_id: int, date: str, reservation_service_id: int) -> dict:
+    """sp_reservations action 6: {"date", "reservationServiceId", "serviceName",
+    "durationMinutes", "capacity", "open", "close",
+    "slots": [{"timeSlot", "available"}]} or {"error"}. open/close are null
+    and slots empty on a closed day."""
+    result = _sp({"reservations": [{"action": 6, "companyId": company_id, "date": date,
+                                    "reservationServiceId": reservation_service_id}]})
+    if isinstance(result, dict) and result.get("error"):
+        return result
+    try:
+        return result["result"][0]
+    except (KeyError, IndexError, TypeError):
+        return {"error": "unexpected response from sp_reservations"}
+
+
+def notify_customer(row: dict):
+    """SMS + WhatsApp (Twilio) + email confirmation to the customer."""
+    args = (row.get("phone", ""), row.get("clientName", ""), row.get("serviceType", ""),
+            row.get("reservationDate", ""), row.get("timeSlot", ""), row["reservationId"])
+    _send_confirmation_sms(*args)
+    _send_confirmation_whatsapp(*args)
+    if row.get("email"):
+        _send_confirmation_email(row["email"], *args[1:], row.get("serviceDetail"))
+
+
+async def notify_pos(row: dict, source: str = "kiosco"):
+    """Push to every POS user of the company. The POS also polls action 5
+    every minute; this is what makes staff notice right away."""
+    company_id = row.get("companyId")
+    service_label = row.get("serviceType") or ""
+    try:
+        await pushNotifications_sp({
+            "pushNotifications": [{
+                "action": 1,
+                "companyId": company_id,
+                "title": f"🧺 Nueva reservación #{row['reservationId']}",
+                "message": (f"{row.get('clientName', '')} — {service} "
+                            f"{row.get('reservationDate', '')} {row.get('timeSlot', '')} (vía {source})"),
+                "notificationType": "Info",
+                "priority": "High",
+                "targetType": "Company",
+                "targetCompanyId": company_id,
+                "navigationRoute": "/reservations",
+                "payloadJson": json.dumps({"type": "NewReservation", "reservationId": row["reservationId"]}),
+            }]
+        })
+    except Exception:
+        logger.exception("[reservations] POS push failed for reservation #%s", row.get("reservationId"))
+
+
+def reservation_catalog_sp(json_file: dict, procedure: str):
+    """Passthrough for the catalogs: sp_reservationServices / sp_reservationHours."""
+    try:
+        return JSONResponse(_sp(json_file, procedure), status_code=200)
+    except Exception as e:
+        logger.exception("[reservations] %s failed", procedure)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def reservations_sp(json_file: dict, background_tasks: BackgroundTasks):
+    try:
+        payload = (json_file.get("reservations") or [{}])[0]
+        if payload.get("action") == 1:
+            fields = {k: v for k, v in payload.items() if k != "action"}
+            row = create_reservation(fields)
+            if row.get("error"):
+                return JSONResponse(row, status_code=200)
+            # After the response: SMTP/Twilio/push must not slow the kiosk.
+            background_tasks.add_task(notify_customer, row)
+            background_tasks.add_task(notify_pos, row)
+            return JSONResponse({"result": [{"reservations": [row]}]}, status_code=200)
+
+        return JSONResponse(_sp(json_file), status_code=200)
     except Exception as e:
         logger.exception("[reservations] unhandled error")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# Run in this order: tables/migrations first, then the SPs that use them.
+_MIGRATION_FILES = (
+    "sql/migrations/2026-09-23_add_reservations.sql",
+    "sql/migrations/2026-09-24_reservation_catalogs.sql",
+    "sql/sp_reservationServices.sql",
+    "sql/sp_reservationHours.sql",
+    "sql/sp_reservations.sql",
+)
+
+
 def run_migration():
-    """Create the reservations table and sp_reservations SP if they don't exist."""
-    sql_path = os.path.join(os.path.dirname(__file__), "..", "sql", "migrations", "2026-09-23_add_reservations.sql")
-    with open(os.path.abspath(sql_path), encoding="utf-8") as f:
-        script = f.read()
-
-    # Split on GO (batch separator used by SQL Server)
-    batches = [b.strip() for b in script.split("\nGO") if b.strip()]
-    executed = []
+    """Create the reservation tables and SPs (idempotent). The catalog seed
+    inside the migration only runs once its @companyId is filled in."""
+    root = os.path.join(os.path.dirname(__file__), "..")
+    batches_run = 0
     conn = None
     try:
         conn = _conn()
         cursor = conn.cursor()
-        for batch in batches:
-            if batch:
-                cursor.execute(batch)
-        conn.commit()
-        executed = batches
-    finally:
-        if conn:
-            conn.close()
-
-    # Now create/replace the SP from the full sp_reservations.sql
-    sp_path = os.path.join(os.path.dirname(__file__), "..", "sql", "sp_reservations.sql")
-    with open(os.path.abspath(sp_path), encoding="utf-8") as f:
-        sp_script = f.read()
-
-    sp_batches = [b.strip() for b in sp_script.split("\nGO") if b.strip()]
-    conn = None
-    try:
-        conn = _conn()
-        cursor = conn.cursor()
-        for batch in sp_batches:
-            if batch:
-                cursor.execute(batch)
+        for rel_path in _MIGRATION_FILES:
+            with open(os.path.abspath(os.path.join(root, rel_path)), encoding="utf-8") as f:
+                script = f.read()
+            # Split on GO (batch separator used by SQL Server)
+            for batch in (b.strip() for b in script.split("\nGO")):
+                if batch:
+                    cursor.execute(batch)
+                    batches_run += 1
         conn.commit()
     finally:
         if conn:
             conn.close()
-
-    return {"ok": True, "batches_run": len(executed) + len(sp_batches)}
+    return {"ok": True, "batches_run": batches_run}

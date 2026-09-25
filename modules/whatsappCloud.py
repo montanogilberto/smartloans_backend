@@ -7,8 +7,9 @@ WhatsApp Cloud API (Meta, direct — no Twilio/BSP in between).
 - send_text(): free-form text reply. Only delivered inside the 24h customer
   service window (the customer wrote to us in the last 24h) — outside it Meta
   requires an approved template.
-- handle_webhook(): parses inbound messages and logs them through the same
-  sp_whatsapp_messages the Twilio webhook already uses.
+- handle_webhook(): parses inbound messages, logs them through the same
+  sp_whatsapp_messages the Twilio webhook already uses, and sends the
+  reservations bot's reply (modules/whatsappReservations.py).
 
 Env vars:
   WA_VERIFY_TOKEN      any string; must match "Verify token" in the Meta dashboard
@@ -27,6 +28,7 @@ from typing import Any, Dict, List
 
 import httpx
 
+from modules import whatsappReservations
 from modules.whatsapp import log_message_to_database
 from observability.integrations import timed_integration
 
@@ -118,14 +120,47 @@ def _extract_inbound(payload: dict) -> List[Dict[str, Any]]:
     return out
 
 
+def _log_statuses(payload: dict) -> None:
+    """Outbound delivery receipts. A send that Meta accepted (200 + wamid) can
+    still fail later — e.g. 131047 outside the 24h window, 131042 no payment
+    method — and this webhook is the only place Meta reports why."""
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            if change.get("field") != "messages":
+                continue
+            for st in (change.get("value") or {}).get("statuses") or []:
+                if st.get("status") == "failed":
+                    logger.warning("[whatsappCloud] send failed | to=%s id=%s errors=%s",
+                                   st.get("recipient_id"), st.get("id"), st.get("errors"))
+                else:
+                    logger.info("[whatsappCloud] status | to=%s id=%s status=%s",
+                                st.get("recipient_id"), st.get("id"), st.get("status"))
+
+
+def _pause_bot_on_staff_replies(payload: dict) -> None:
+    """Coexistence: a message staff send from the WhatsApp Business app comes
+    back as field "smb_message_echoes". The bot steps aside in that chat."""
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            if change.get("field") != "smb_message_echoes":
+                continue
+            for echo in (change.get("value") or {}).get("message_echoes") or []:
+                customer = "+" + normalize_mx_number(echo.get("to", ""))
+                logger.info("[whatsappCloud] staff replied from app | to=%s", customer)
+                whatsappReservations.pause_for_staff(customer)
+
+
 def handle_webhook(payload: dict) -> None:
     """Runs in a background task — the route already answered Meta 200."""
+    _log_statuses(payload)
+    _pause_bot_on_staff_replies(payload)
     for msg in _extract_inbound(payload):
         logger.info("[whatsappCloud] inbound | from=%s type=%s id=%s",
                     msg["from"], msg["type"], msg["messageId"])
+        phone = "+" + normalize_mx_number(msg["from"])
         try:
             log_message_to_database(
-                phone_number="+" + normalize_mx_number(msg["from"]),
+                phone_number=phone,
                 message_body=msg["text"],
                 response_body="",
                 direction="inbound",
@@ -134,4 +169,13 @@ def handle_webhook(payload: dict) -> None:
             )
         except Exception:
             logger.exception("[whatsappCloud] failed to log inbound message")
-        # Next step: hand msg to the reservations agent and send_text() its reply.
+
+        reply = whatsappReservations.reply_to(phone, msg["name"], msg["text"])
+        if not reply:
+            continue
+        try:
+            send_text(phone, reply)
+            log_message_to_database(phone_number=phone, message_body=reply, response_body="",
+                                    direction="outbound", status="sent", action=1)
+        except Exception:
+            logger.exception("[whatsappCloud] failed to send bot reply | to=%s", phone)
