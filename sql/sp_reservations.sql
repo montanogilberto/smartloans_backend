@@ -26,6 +26,12 @@ CREATE TABLE [dbo].[reservations] (
 );
 GO
 
+-- Tables created before the catalog lack this column, and CREATE PROCEDURE
+-- fails on a missing column of an existing table (Msg 207).
+IF COL_LENGTH('dbo.reservations', 'reservationServiceId') IS NULL
+    ALTER TABLE [dbo].[reservations] ADD reservationServiceId INT NULL;
+GO
+
 IF OBJECT_ID('dbo.sp_reservations', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_reservations;
 GO
 CREATE PROCEDURE [dbo].[sp_reservations]
