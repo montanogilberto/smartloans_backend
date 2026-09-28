@@ -17,6 +17,9 @@
 --     it (unchanged behavior: malformed JSON -> no channels).
 --   - No companyId: notificationDispatch_policy is global per eventName
 --     (PK = eventName), not tenant data.
+-- FIX 2026-09-28: the table was recreated as dbo.notificationDispatchPolicy on
+--   2026-09-18; reading the old name threw "Invalid object name" and silently
+--   killed every dispatch from then on.
 -- Idempotent: CREATE OR ALTER is always safe to re-run.
 -- =============================================================================
 
@@ -39,7 +42,7 @@ BEGIN
         [eventName],
         [channel_list_json],
         CAST([allow_sms_fallback] AS BIT) AS allow_sms_fallback
-    FROM dbo.notificationDispatch_policy
+    FROM dbo.notificationDispatchPolicy
     WHERE eventName = @eventName
     FOR JSON AUTO, ROOT('notificationDispatchPolicies');
 END
