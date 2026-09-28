@@ -9,32 +9,32 @@ Same propose → confirm → execute split as modules/posSupportChat.py:
 - The customer's "sí" is detected here deterministically (never by the LLM),
   and only this module creates the reservation — through the same
   create_reservation() the kiosk uses, so the slot capacity check is shared.
-- companyId (WA_COMPANY_ID) and phone (the WhatsApp sender) are always set
-  here, never taken from the agent's fields.
+- companyId / branchId come from the channel the customer wrote to (one
+  WhatsApp number per branch, dbo.whatsappChannels) and phone from the
+  WhatsApp sender — always set here, never taken from the agent's fields.
 
 Coexistence: the number is also used from the WhatsApp Business app. When
 staff answer a chat from the app, Meta sends an smb_message_echoes webhook;
 the bot then stays quiet in that chat for STAFF_PAUSE_SECONDS so the
 customer doesn't get answers from both.
 
-State (pending proposals, staff pauses) is in-process only — same tradeoff
-posSupportChat accepts: a restart just means the customer re-confirms.
+State (pending proposal, staff pause, last booking) lives in
+dbo.whatsappConversations per (channel, customer), so it is shared by every
+App Service instance and survives restarts.
 
 Env vars:
-  WA_COMPANY_ID           companyId the WhatsApp number belongs to; unset = bot off
-  COMPANY_NAME            business name the agent introduces (shared with reservations.py)
   NEGOTIATION_AGENT_URL   LoanAgents_SmartLoans base URL (shared with posSupportChat)
 """
 
 import asyncio
 import logging
 import os
-import time
 
 import httpx
 
+from modules import whatsappChannels
 from modules.posSupportChat import _classify_confirmation
-from modules.reservations import COMPANY_NAME, available_slots, create_reservation, notify_pos
+from modules.reservations import available_slots, create_reservation, notify_pos
 from observability.integrations import timed_integration
 
 logger = logging.getLogger(__name__)
@@ -43,34 +43,21 @@ AGENT_URL = os.environ.get("NEGOTIATION_AGENT_URL", "").rstrip("/")
 PENDING_TTL_SECONDS = 600
 STAFF_PAUSE_SECONDS = 2 * 60 * 60
 
-# phone (E.164) -> {"fields": dict, "expiresAt": float}
-_PENDING: dict[str, dict] = {}
-# phone (E.164) -> unix time until which the bot stays quiet
-_STAFF_PAUSED_UNTIL: dict[str, float] = {}
-# phone (E.164) -> last reservation booked in this chat, passed to the agent
-# so it knows the booking went through (it never sees the "sí" turn).
-_LAST_BOOKED: dict[str, dict] = {}
-
 _FALLBACK_REPLY = ("Por el momento no puedo procesar tu mensaje. "
                    "Alguien del equipo te responderá en breve.")
 
 
-def _company_id() -> int | None:
-    value = os.environ.get("WA_COMPANY_ID", "")
-    return int(value) if value.isdigit() else None
+def pause_for_staff(channel: dict, phone: str) -> None:
+    whatsappChannels.pause_for_staff(channel["channelId"], phone, STAFF_PAUSE_SECONDS)
 
 
-def pause_for_staff(phone: str) -> None:
-    _STAFF_PAUSED_UNTIL[phone] = time.time() + STAFF_PAUSE_SECONDS
-    _PENDING.pop(phone, None)
-
-
-def _book(company_id: int, phone: str, profile_name: str | None, fields: dict) -> str:
+def _book(channel: dict, phone: str, profile_name: str | None, fields: dict) -> str:
     """Executes a confirmed proposal. Re-checks action 6 first: that is where
     business hours live, and the slot may have filled since the proposal."""
     date = fields.get("reservationDate")
     slot = fields.get("timeSlot")
     service_id = fields.get("reservationServiceId")
+    company_id = channel["companyId"]
 
     availability = available_slots(company_id, date, service_id)
     free = {s.get("timeSlot") for s in availability.get("slots") or []}
@@ -87,13 +74,14 @@ def _book(company_id: int, phone: str, profile_name: str | None, fields: dict) -
         "notes": fields.get("notes"),
         # Trusted values last so they always win.
         "companyId": company_id,
+        "branchId": channel.get("branchId"),
         "phone": phone,
     })
     if row.get("error"):
         logger.warning("[whatsappReservations] create failed | phone=%s error=%s", phone, row)
         return row.get("message") or "No pude registrar la reservación. Intenta con otro horario."
 
-    _LAST_BOOKED[phone] = row
+    whatsappChannels.set_last_booked(channel["channelId"], phone, row)
     asyncio.run(notify_pos(row, source="WhatsApp"))
     return (f"✅ Listo, tu reservación quedó registrada.\n"
             f"{row.get('serviceType')} — {row.get('reservationDate')} a las {row.get('timeSlot')}\n"
@@ -101,14 +89,17 @@ def _book(company_id: int, phone: str, profile_name: str | None, fields: dict) -
             f"Te esperamos. Si necesitas cambiarla, escríbenos aquí.")
 
 
-def _ask_agent(company_id: int, phone: str, profile_name: str | None, text: str) -> tuple[str, dict | None]:
+def _ask_agent(channel: dict, phone: str, profile_name: str | None, text: str,
+               last_booked: dict | None) -> tuple[str, dict | None]:
     request_body = {
-        "companyId": company_id,
-        "companyName": COMPANY_NAME,
+        "companyId": channel["companyId"],
+        "companyName": channel.get("companyName"),
+        "branchId": channel.get("branchId"),
+        "branchName": channel.get("branchName"),
         "phone": phone,
         "customerName": profile_name,
         "message": text,
-        "recentReservation": _LAST_BOOKED.get(phone),
+        "recentReservation": last_booked,
     }
     with timed_integration("loanagents_smartloans", "whatsapp_reservations", request=request_body) as span:
         resp = httpx.post(f"{AGENT_URL}/support/whatsapp-reservations", json=request_body, timeout=30.0)
@@ -119,39 +110,35 @@ def _ask_agent(company_id: int, phone: str, profile_name: str | None, text: str)
         return data["reply"], data.get("pendingAction")
 
 
-def reply_to(phone: str, profile_name: str | None, text: str) -> str | None:
+def reply_to(channel: dict, phone: str, profile_name: str | None, text: str) -> str | None:
     """Returns the text to send back, or None to stay silent."""
-    company_id = _company_id()
-    if company_id is None or not AGENT_URL:
+    if not AGENT_URL:
         return None
-    if _STAFF_PAUSED_UNTIL.get(phone, 0) > time.time():
-        logger.info("[whatsappReservations] staff is handling %s — bot silent", phone)
+    channel_id = channel["channelId"]
+    state = whatsappChannels.get_state(channel_id, phone)
+    if state["staffPaused"]:
+        logger.info("[whatsappReservations] staff is handling %s on channel %s — bot silent",
+                    phone, channel_id)
         return None
 
-    pending = _PENDING.get(phone)
-    if pending and pending["expiresAt"] < time.time():
-        _PENDING.pop(phone, None)
-        pending = None
-
+    pending = state["pending"]  # already None when expired (checked by the SP)
     if pending:
         decision = _classify_confirmation(text)
+        # Any reply ends the proposal: confirmed, cancelled, or the customer
+        # changed something and the agent re-proposes below.
+        whatsappChannels.clear_pending(channel_id, phone)
         if decision == "confirm":
-            _PENDING.pop(phone, None)
-            return _book(company_id, phone, profile_name, pending["fields"])
+            return _book(channel, phone, profile_name, pending)
         if decision == "cancel":
-            _PENDING.pop(phone, None)
             return "Cancelado, no se hizo la reservación. ¿Te ayudo con otro horario?"
-        # Anything else: the customer changed something — let the agent
-        # re-propose; the old proposal is dropped.
-        _PENDING.pop(phone, None)
 
     try:
-        reply, pending_action = _ask_agent(company_id, phone, profile_name, text)
+        reply, pending_action = _ask_agent(channel, phone, profile_name, text, state["lastBooked"])
     except Exception:
         logger.exception("[whatsappReservations] agent call failed | phone=%s", phone)
         return _FALLBACK_REPLY
 
     if pending_action and pending_action.get("capability") == "CREATE_RESERVATION":
-        _PENDING[phone] = {"fields": pending_action.get("fields") or {},
-                           "expiresAt": time.time() + PENDING_TTL_SECONDS}
+        whatsappChannels.set_pending(channel_id, phone, pending_action.get("fields") or {},
+                                     PENDING_TTL_SECONDS)
     return reply

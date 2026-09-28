@@ -185,7 +185,7 @@ async def notify_pos(row: dict, source: str = "kiosco"):
                 "action": 1,
                 "companyId": company_id,
                 "title": f"🧺 Nueva reservación #{row['reservationId']}",
-                "message": (f"{row.get('clientName', '')} — {service} "
+                "message": (f"{row.get('clientName', '')} — {service_label} "
                             f"{row.get('reservationDate', '')} {row.get('timeSlot', '')} (vía {source})"),
                 "notificationType": "Info",
                 "priority": "High",
