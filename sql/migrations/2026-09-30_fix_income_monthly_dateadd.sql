@@ -1,26 +1,30 @@
 -- =============================================================================
--- dbo.sp_income_monthly — any month, not only the current one
+-- Fix sp_income_monthly: DATEADD(HOUR, ...) on a DATE value
 -- =============================================================================
--- Forward-only, additive. NOT YET EXECUTED — run manually against the live DB.
+-- Forward-only migration. NOT YET EXECUTED against any database —
+-- run manually against smartloansbackend's live DB.
 --
--- WHY: /ingresos (IncomesPage) loaded GET /all_income → dbo.sp_income_all,
--- which has NO companyId filter: every company's income rows (770+) went to
--- every company's staff, and its "Total Mensual" mixed companies (it disagreed
--- with /movements: $29,090 / 139 vs $28,880 / 138 for September 2026).
--- /ingresos now reads one company + one month through this SP instead.
+-- WHY: POST /monthly_income (the /dashboard income load) returns 500 since
+-- 2026-09-30_income_terminal_commission.sql ran:
+--   "The datepart hour is not supported by date function dateadd for data
+--    type date." (error 9810, verified in production 2026-09-30)
+-- DATEFROMPARTS() returns DATE, and DATEADD(HOUR, 7, <date>) is illegal.
+-- The line came from 2026-09-29_income_monthly_any_month.sql (never run in
+-- prod on its own) and was carried into the commission migration.
 --
--- CHANGE: optional "year" and "month" in the payload. Omitted → the current
--- Hermosillo month, exactly as before (Dashboard and /movements unchanged):
---   {"income":[{"companyId": 1}]}                           -- current month
---   {"income":[{"companyId": 1, "year": 2026, "month": 8}]} -- August 2026
--- Month boundaries are Hermosillo local time (UTC-7, no DST) converted back
--- to UTC, same as the original version. Same output shape.
+-- FIX: CAST(DATEFROMPARTS(...) AS DATETIME) before adding the 7 hours
+-- (Hermosillo UTC-7 month start -> UTC). Nothing else changes: same columns,
+-- including commissionTerminalId / commissionRatePct / commissionAmount.
+-- Both earlier files are patched the same way so a replay cannot bring the
+-- bug back.
 -- Idempotent: CREATE OR ALTER.
 -- =============================================================================
+
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
 GO
+
 CREATE OR ALTER PROC [dbo].[sp_income_monthly] (@pjsonfile VARCHAR(MAX))
 AS
 SET NOCOUNT ON
@@ -59,7 +63,10 @@ BEGIN
             i.userId,
             i.clientId,
             i.companyId,
-            ISNULL(i.discountAmount,0) AS discountAmount
+            ISNULL(i.discountAmount,0) AS discountAmount,
+            i.commissionTerminalId,
+            i.commissionRatePct,
+            ISNULL(i.commissionAmount,0) AS commissionAmount
         FROM [dbo].[income] i
         WHERE i.companyId = @companyId
           AND i.paymentDate >= @MonthStartUtc

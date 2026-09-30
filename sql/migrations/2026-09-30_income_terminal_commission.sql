@@ -149,7 +149,7 @@ BEGIN
         SET @month = MONTH(@HermosilloNow);
     END
 
-    DECLARE @MonthStartUtc DATETIME = DATEADD(HOUR, 7, DATEFROMPARTS(@year, @month, 1));
+    DECLARE @MonthStartUtc DATETIME = DATEADD(HOUR, 7, CAST(DATEFROMPARTS(@year, @month, 1) AS DATETIME));
     DECLARE @MonthEndUtc   DATETIME = DATEADD(MONTH, 1, @MonthStartUtc);
 
     IF EXISTS (
