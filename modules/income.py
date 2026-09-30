@@ -64,6 +64,22 @@ def _get_final_total_and_discount(conn, income_id, company_id) -> tuple[float | 
         return None, None, None
 
 
+def _apply_terminal_commission(conn, income_id, commission_terminal_id=None) -> dict:
+    """sp_income_applyCommission for one sale. Idempotent in the SP: a sale
+    that already has commissionAmount is never re-priced."""
+    item = {"incomeId": income_id}
+    if commission_terminal_id:
+        item["commissionTerminalId"] = commission_terminal_id
+    cur = conn.cursor()
+    cur.execute("EXEC sp_income_applyCommission @pjsonfile = %s",
+                (json.dumps({"income": [item]}),))
+    row = cur.fetchone()
+    result = json.loads(row[0]) if row and row[0] else {}
+    if "error" in result:
+        raise RuntimeError(result["error"])
+    return result
+
+
 def income_sp(json_file: dict):
     conn = None
     try:
@@ -119,6 +135,16 @@ def income_sp(json_file: dict):
                         earn_points_for_income(company_id, client_id, int(result[0]["value"]), total)
             except Exception as e:
                 print(f"[income] rewards auto-earn hook failed: {e}")
+
+            # Best-effort: stamp the card-terminal commission (rate snapshot +
+            # amount) on the new sale so income reports show what actually
+            # reaches the bank. Runs after sp_income, so it prices the final
+            # (post-promo) total. Cash/transfer sales are a no-op in the SP.
+            try:
+                if is_new_income and str(first_row.get("paymentMethod") or "").strip().lower() in ("tarjeta", "terminal"):
+                    _apply_terminal_commission(conn, int(result[0]["value"]), first_row.get("commissionTerminalId"))
+            except Exception as e:
+                print(f"[income] terminal commission hook failed: {e}")
 
             # Best-effort: fire the Push -> WhatsApp -> SMS cascade for the
             # client on a successful income. Never blocks/fails the income

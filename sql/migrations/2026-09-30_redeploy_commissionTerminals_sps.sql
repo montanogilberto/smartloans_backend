@@ -1,30 +1,27 @@
--- ============================================================
--- sp_commissionTerminals  (action 1=create, 2=update, 3=deactivate)
--- Catálogo de terminales de cobro / proveedor y su comisión —
--- income.commissionTerminalId apunta aquí. Global (no companyId):
--- dbo.commissionTerminals (antes commission_terminals) ya existía en la base (1 fila: Mercado
--- Pago @ 3.6%) sin CRUD ni endpoint -- este archivo solo agrega
--- el procedimiento almacenado sobre la tabla existente, no la
--- vuelve a crear ni cambia su forma.
--- ============================================================
+-- =============================================================================
+-- Redeploy sp_commissionTerminals / _all / _one against dbo.commissionTerminals
+-- =============================================================================
+-- Forward-only migration. NOT YET EXECUTED against any database —
+-- run manually against smartloansbackend's live DB.
+--
+-- WHY: dbo.commission_terminals was renamed to dbo.commissionTerminals on
+-- 2026-09-18. sql/sp_commissionTerminals.sql was updated for the rename but
+-- never re-run, so the live SPs still read the old name and every
+-- /commissionTerminals, /all_commissionTerminals, /one_commissionTerminals
+-- call fails with "Invalid object name" (found 2026-09-30 via
+-- sys.sql_expression_dependencies).
+--
+-- SCOPE: the three SP definitions only, copied verbatim from
+-- sql/sp_commissionTerminals.sql. Deliberately NOT re-running that whole
+-- file: its tail holds one-off data fixes (reset Mercado Pago to 4.2%,
+-- backfill income.commissionTerminalId) that must not be replayed — the
+-- rate reset would overwrite any change made since.
+-- Idempotent: DROP-if-exists + CREATE, safe to re-run.
+-- =============================================================================
 
--- ── Table: commissionTerminals (renamed from commission_terminals 2026-09-18) (ya existe en prod; guard solo para entornos nuevos) ──
-IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'commissionTerminals')
-CREATE TABLE [dbo].[commissionTerminals] (
-    commissionTerminalId INT IDENTITY(1,1) PRIMARY KEY,
-    provider              VARCHAR(40)   NOT NULL,
-    terminalName          VARCHAR(80)   NOT NULL,
-    paymentMethod         VARCHAR(20)   NULL,
-    country                CHAR(2)      NULL,
-    commissionRatePct     DECIMAL(6,3)  NOT NULL,
-    fixedFeeAmount        DECIMAL(10,2) NULL,
-    currency                CHAR(3)     NULL,
-    isActive              BIT           NOT NULL DEFAULT 1,
-    validFrom             DATETIME      NOT NULL DEFAULT GETDATE(),
-    validTo               DATETIME      NULL,
-    createdAt             DATETIME      NOT NULL DEFAULT GETDATE(),
-    updatedAt             DATETIME      NULL
-)
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
 GO
 
 -- ============================================================
@@ -159,27 +156,4 @@ BEGIN
         '{}'
     ) AS [jsonResult]
 END
-GO
-
--- ============================================================
--- Data fix: the existing seeded row (commissionTerminalId = 1,
--- provider = 'mercadopago') was inserted at 3.6% — correct it to
--- the actual negotiated rate of 4.2%. Idempotent (targets by id).
--- ============================================================
-UPDATE [dbo].[commissionTerminals]
-SET commissionRatePct = 4.200, updatedAt = GETDATE()
-WHERE commissionTerminalId = 1 AND provider = 'mercadopago';
-GO
-
--- ============================================================
--- Backfill: every existing card ('tarjeta') income row predates this
--- catalog and has commissionTerminalId = NULL. Mercado Pago (id 1) is
--- the only terminal in use today, so it's safe to point all of them
--- at it. Cash ('efectivo') and transfer ('transferencia') rows are
--- left untouched — no physical terminal is involved in those.
--- Safe to re-run: only touches rows still NULL.
--- ============================================================
-UPDATE [dbo].[income]
-SET commissionTerminalId = 1
-WHERE paymentMethod = 'tarjeta' AND commissionTerminalId IS NULL;
 GO

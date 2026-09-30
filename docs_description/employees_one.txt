@@ -1,16 +1,10 @@
-Retrieve a single employee record with the provided JSON.
+Retrieve a single employee of one company.
 
 Parameters:
     ```
     JSON
-    {
-      "employees": [
-        {
-          "employeeId": "1"
-        }
-      ]
-    }
+    { "employees": [ { "companyId": 1008, "employeeId": 1 } ] }
     ```
 
 Returns:
-- JSON representation of the specified employee record.
+- { "employees": [ { ...same fields as /all_employees } ] } — empty list if not found.

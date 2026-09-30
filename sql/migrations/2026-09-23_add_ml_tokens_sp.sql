@@ -5,7 +5,7 @@
 -- run manually against smartloansbackend's live DB.
 --
 -- WHY: modules/mercadolibre.py::upsert_tokens / get_latest_tokens wrote and
--- read dbo.ml_tokens with 5 raw statements (SELECT/UPDATE/INSERT/SELECT and
+-- read dbo.mlTokens with 5 raw statements (SELECT/UPDATE/INSERT/SELECT and
 -- SELECT). Backend rule: modules never issue raw SQL — every read and
 -- mutation goes through an SP.
 --
@@ -26,6 +26,8 @@
 --     would silently return NULL above 4000 chars.
 --   - expires_at in/out is naive UTC ISO-8601 (style 126), seconds precision.
 --   - No companyId: one MercadoLibre app for the platform, not tenant data.
+--   - FIX 2026-09-30: the live table is dbo.mlTokens (renamed from
+--     ml_tokens; verified against the live schema), not dbo.ml_tokens.
 -- Idempotent: CREATE OR ALTER is always safe to re-run.
 -- =============================================================================
 
@@ -70,12 +72,12 @@ BEGIN
             BEGIN TRANSACTION;
 
             SELECT TOP 1 @id = id
-            FROM dbo.ml_tokens WITH (UPDLOCK, HOLDLOCK)
+            FROM dbo.mlTokens WITH (UPDLOCK, HOLDLOCK)
             ORDER BY id DESC;
 
             IF @id IS NOT NULL
             BEGIN
-                UPDATE dbo.ml_tokens
+                UPDATE dbo.mlTokens
                    SET access_token  = @accessToken,
                        refresh_token = @refreshToken,
                        expires_at    = @expiresAt,
@@ -85,7 +87,7 @@ BEGIN
             END
             ELSE
             BEGIN
-                INSERT INTO dbo.ml_tokens (access_token, refresh_token, expires_at)
+                INSERT INTO dbo.mlTokens (access_token, refresh_token, expires_at)
                 VALUES (@accessToken, @refreshToken, @expiresAt);
                 SET @id = SCOPE_IDENTITY();
                 SET @op = 'inserted';
@@ -101,7 +103,7 @@ BEGIN
             SELECT ISNULL(
                 (SELECT TOP 1 id, access_token, refresh_token,
                         CONVERT(VARCHAR(19), expires_at, 126) AS expires_at
-                   FROM dbo.ml_tokens
+                   FROM dbo.mlTokens
                   ORDER BY id DESC
                  FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
                 '{}'
