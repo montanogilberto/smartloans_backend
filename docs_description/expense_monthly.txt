@@ -1,0 +1,16 @@
+One company's expenses for one month (Hermosillo local time, UTC-7), plus
+per-month totals for the 12 months ending at that month.
+
+Parameters:
+    ```
+    JSON — year/month optional; omitted → current month
+    { "expenses": [ { "companyId": 1, "year": 2026, "month": 9 } ] }
+    ```
+
+Returns:
+-     {
+        "expenses": [ { "expenseId", "orderId", "total", "paymentMethod", "paymentDate",
+                        "userId", "supplierId", "companyId", "expenseType", "employeeId",
+                        "notes", "receiptUrl" } ],
+        "monthlyTotals": [ { "year": 2026, "month": 9, "total": 1234.5, "count": 7 } ]
+      }
