@@ -1,44 +1,42 @@
-Manage employee records with the provided JSON.
+Manage one company's employee records with the provided JSON.
+
+Every action is scoped by companyId: updating or deleting another company's
+employeeId returns "Employee not found". Delete is refused while payroll
+expenses or project assignments reference the employee — set statusId=2
+(Inactive) + endDate instead.
 
 Parameters:
     ```
     Actions:
     INSERT --> 1
     UPDATE --> 2
-    DELETE --> 3
+    DELETE --> 3 (only companyId + employeeId + action needed)
     JSON
     {
       "employees": [
         {
-          "employeeId": "0",
-          "firstName": "John",
-          "lastName": "Doe",
-          "email": "john.doe@example.com",
-          "phoneNumber": "123-456-7890",
-          "address": "123 Main St, City, Country",
-          "employmentTypeId": "1",
-          "position": "Engineer",
-          "departmentId": "2",
-          "statusId": "1",
-          "hireDate": "2021-01-15",
-          "endDate": "NULL",
-          "emergencyContactName": "Jane Doe",
-          "emergencyContactRelationship": "Spouse",
-          "emergencyContactPhone": "123-456-7891",
-          "notes": "Notes about John Doe",
-          "action": "1"
+          "companyId": 1008,
+          "employeeId": 0,
+          "firstName": "Ana",
+          "lastName": "López",
+          "email": "ana@example.com",
+          "phoneNumber": "6621234567",
+          "address": "",
+          "employmentTypeId": 1,
+          "position": "Cajera",
+          "departmentId": 3,
+          "statusId": 1,
+          "hireDate": "2026-09-01",
+          "endDate": "",
+          "emergencyContactName": "",
+          "emergencyContactRelationship": "",
+          "emergencyContactPhone": "",
+          "notes": "",
+          "action": 1
         }
       ]
     }
     ```
 
 Returns:
--     {
-          "result": [
-          {
-             "value": "1", --identifier table, return the id associate
-             "msg": "Inserted Successfully", --return msg
-             "error": "" --if exists error return 1
-           }
-          ]
-        }
+-     { "status": "success" | "error", "message": "...", "value": "<employeeId>" }

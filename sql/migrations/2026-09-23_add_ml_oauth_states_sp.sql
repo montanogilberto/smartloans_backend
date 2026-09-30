@@ -5,7 +5,7 @@
 -- run manually against smartloansbackend's live DB.
 --
 -- WHY: modules/mercadolibre.py::save_oauth_state / pop_code_verifier wrote
--- and read dbo.ml_oauth_states with raw INSERT/SELECT/UPDATE. Backend rule:
+-- and read dbo.mlOauthStates with raw INSERT/SELECT/UPDATE. Backend rule:
 -- modules never issue raw SQL — every read and mutation goes through an SP.
 --
 -- Also fixes a replay race: pop_code_verifier did SELECT (used_at IS NULL)
@@ -20,8 +20,10 @@
 --   - Caller payloads:
 --       {"mlOAuthStates":[{"action":"save","state":"...","code_verifier":"..."}]}
 --       {"mlOAuthStates":[{"action":"pop","state":"..."}]}
---   - No companyId: dbo.ml_oauth_states is platform-level integration state
+--   - No companyId: dbo.mlOauthStates is platform-level integration state
 --     (one MercadoLibre app), not tenant data — same as today's raw SQL.
+--   - FIX 2026-09-30: the live table is dbo.mlOauthStates (renamed from
+--     ml_oauth_states; verified against the live schema), not dbo.ml_oauth_states.
 -- Idempotent: CREATE OR ALTER is always safe to re-run.
 -- =============================================================================
 
@@ -54,7 +56,7 @@ BEGIN
                 RETURN;
             END
 
-            INSERT INTO dbo.ml_oauth_states (state, code_verifier)
+            INSERT INTO dbo.mlOauthStates (state, code_verifier)
             VALUES (@state, @codeVerifier);
 
             SELECT (SELECT @state AS state FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult];
@@ -65,7 +67,7 @@ BEGIN
             -- Atomic claim: only the first caller for an unused state gets a row.
             DECLARE @popped TABLE (code_verifier NVARCHAR(400));
 
-            UPDATE dbo.ml_oauth_states
+            UPDATE dbo.mlOauthStates
                SET used_at = SYSUTCDATETIME()
             OUTPUT inserted.code_verifier INTO @popped
              WHERE state = @state

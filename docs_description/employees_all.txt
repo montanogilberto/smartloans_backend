@@ -1,6 +1,14 @@
-Retrieve all employee records in JSON format.
+Retrieve one company's employees (ids + department/employment type/status names).
 
-No Parameters.
+Parameters:
+    ```
+    JSON
+    { "employees": [ { "companyId": 1008 } ] }
+    ```
 
 Returns:
-- JSON representation of all employee records.
+-     { "employees": [ { "employeeId", "companyId", "firstName", "lastName", "email",
+        "phoneNumber", "address", "employmentTypeId", "employmentType", "position",
+        "departmentId", "departmentName", "statusId", "status", "hireDate", "endDate",
+        "emergencyContactName", "emergencyContactRelationship", "emergencyContactPhone",
+        "notes", "createdAt", "updated_at" } ] }

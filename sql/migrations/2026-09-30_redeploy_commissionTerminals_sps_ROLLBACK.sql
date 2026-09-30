@@ -1,0 +1,3 @@
+-- ROLLBACK for 2026-09-30_redeploy_commissionTerminals_sps.sql
+-- Nothing useful to roll back to: the previous live definitions read
+-- dbo.commission_terminals, which no longer exists (every call failed).
