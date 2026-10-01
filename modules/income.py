@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from databases import connection
 import json
 
-from modules.journalEntries import post_income_journal_entry
+from modules.journalEntries import post_income_journal_entry, post_income_commission_journal_entry
 from modules.notificationDispatch import dispatch_notification_connector
 from modules.rewards import earn_points_for_income
 
@@ -80,6 +80,20 @@ def _apply_terminal_commission(conn, income_id, commission_terminal_id=None) -> 
     return result
 
 
+def _reverse_on_delete(conn, income_id) -> dict:
+    """sp_income_reverseOnDelete for a sale that was just deleted (Step 5,
+    2026-10-01): VOIDs its income/commission journal entries and takes back
+    the points it earned. Idempotent in the SP; refuses while the sale exists."""
+    cur = conn.cursor()
+    cur.execute("EXEC sp_income_reverseOnDelete @incomeId = %s", (int(income_id),))
+    row = cur.fetchone()
+    if not row:
+        return {}
+    keys = ("voidedEntries", "posPointsReversed", "posPointsShortfall",
+            "loyaltyPointsReversed", "loyaltyPointsShortfall", "alreadyReversed")
+    return dict(zip(keys, row))
+
+
 def income_sp(json_file: dict):
     conn = None
     try:
@@ -117,7 +131,8 @@ def income_sp(json_file: dict):
                     total = first_row.get("total")
                     if company_id and total:
                         post_income_journal_entry(
-                            company_id, int(result[0]["value"]), float(total), first_row.get("paymentDate")
+                            company_id, int(result[0]["value"]), float(total), first_row.get("paymentDate"),
+                            payment_method=first_row.get("paymentMethod"),
                         )
             except Exception as e:
                 print(f"[income] accounting auto-post hook failed: {e}")
@@ -142,9 +157,30 @@ def income_sp(json_file: dict):
             # (post-promo) total. Cash/transfer sales are a no-op in the SP.
             try:
                 if is_new_income and str(first_row.get("paymentMethod") or "").strip().lower() in ("tarjeta", "terminal"):
-                    _apply_terminal_commission(conn, int(result[0]["value"]), first_row.get("commissionTerminalId"))
+                    stamped = _apply_terminal_commission(conn, int(result[0]["value"]), first_row.get("commissionTerminalId"))
+                    # Step 4 (2026-10-01): the commission is a real cost that
+                    # leaves Bancos — journal it (Dr 5120 / Cr 1105), same day
+                    # as the sale's own entry. Best-effort like the other hooks.
+                    if stamped.get("commissionAmount"):
+                        post_income_commission_journal_entry(
+                            first_row.get("companyId"), int(result[0]["value"]),
+                            stamped["commissionAmount"], first_row.get("paymentDate"),
+                        )
             except Exception as e:
                 print(f"[income] terminal commission hook failed: {e}")
+
+            # Best-effort: a deleted sale (action=2) must not keep counting in
+            # the books or keep the points it earned — VOID its journal entries
+            # and reverse its points (owner decision 2026-10-01; points are
+            # promotional, so no journal entry is created for them).
+            try:
+                is_deleted_income = (str(first_row.get("action")) == "2" and result and not failed
+                                     and first_row.get("incomeId"))
+                if is_deleted_income:
+                    reversal = _reverse_on_delete(conn, first_row.get("incomeId"))
+                    print(f"[income] reversed deleted income {first_row.get('incomeId')}: {reversal}")
+            except Exception as e:
+                print(f"[income] delete reversal hook failed: {e}")
 
             # Best-effort: fire the Push -> WhatsApp -> SMS cascade for the
             # client on a successful income. Never blocks/fails the income

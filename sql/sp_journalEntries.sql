@@ -189,6 +189,37 @@ BEGIN
 
             BEGIN TRAN;
 
+            -- One POSTED entry per movement (Step 3, 2026-10-01): a retried
+            -- auto-post hook or a backfill must never book the same income,
+            -- expense or commission twice. VOID entries don't count, so a
+            -- voided movement can be re-posted. The lock keeps two concurrent
+            -- posts of the same reference from both passing the check.
+            IF @referenceId IS NOT NULL
+               AND @referenceType IN ('income', 'expense', 'income_commission')
+               AND EXISTS (SELECT 1 FROM [dbo].[journalEntries] WITH (UPDLOCK, HOLDLOCK)
+                           WHERE companyId = @companyId AND referenceType = @referenceType
+                             AND referenceId = @referenceId AND status = 'POSTED')
+            BEGIN
+                DECLARE @refStr NVARCHAR(60) = @referenceType + N' #' + CONVERT(NVARCHAR(20), @referenceId);
+                RAISERROR('Ya existe un asiento POSTED para %s (duplicado rechazado).', 16, 1, @refStr);
+            END
+
+            -- Opening balances (Step 6, 2026-10-01): one POSTED 'opening_balance'
+            -- entry per company (VOID it to replace it), and balance-sheet
+            -- accounts only — an income/expense line would distort the result.
+            IF @referenceType = 'opening_balance'
+            BEGIN
+                IF EXISTS (SELECT 1 FROM [dbo].[journalEntries] WITH (UPDLOCK, HOLDLOCK)
+                           WHERE companyId = @companyId AND referenceType = 'opening_balance'
+                             AND status = 'POSTED')
+                    RAISERROR('La empresa ya tiene un asiento de saldos iniciales POSTED (anúlalo antes de registrar otro).', 16, 1);
+
+                IF EXISTS (SELECT 1 FROM @Lines Ln
+                           JOIN [dbo].[chartOfAccounts] A ON A.accountId = Ln.accountId
+                           WHERE A.accountType NOT IN ('ASSET', 'LIABILITY', 'EQUITY'))
+                    RAISERROR('Los saldos iniciales solo pueden usar cuentas de Activo, Pasivo o Capital.', 16, 1);
+            END
+
             -- Folio consecutivo por empresa; UPDLOCK+HOLDLOCK evita folios
             -- duplicados bajo inserciones concurrentes.
             DECLARE @entryNumber INT = (
@@ -377,6 +408,54 @@ END
 GO
 
 -- ============================================================
+-- fn_journalEntries_accountTotals — the one per-account aggregation every
+-- accounting report uses (Balanza, Balance General, Estado de Resultados):
+-- lines of this company's POSTED entries with entryDate <= @toDate (NULL =
+-- no cutoff), postable accounts with activity, balance signed by naturaleza.
+-- Added 2026-10-01 (sql/migrations/2026-10-01b_journal_accountTotals_fn.sql);
+-- it replaced a LEFT JOIN … ON status/date filter that leaked VOID and
+-- post-cutoff lines into per-account totals.
+-- ============================================================
+IF OBJECT_ID('dbo.fn_journalEntries_accountTotals', 'IF') IS NOT NULL DROP FUNCTION dbo.fn_journalEntries_accountTotals;
+GO
+CREATE FUNCTION [dbo].[fn_journalEntries_accountTotals]
+(
+    @companyId INT,
+    @toDate    DATE
+)
+RETURNS TABLE
+AS
+RETURN
+(
+    SELECT a.accountId,
+           a.code,
+           a.name,
+           a.accountType,
+           a.normalBalance,
+           a.parentAccountId,
+           m.debitTotal,
+           m.creditTotal,
+           CASE WHEN a.normalBalance = 'D' THEN m.debitTotal - m.creditTotal
+                ELSE m.creditTotal - m.debitTotal END AS balance
+    FROM [dbo].[chartOfAccounts] a
+    JOIN (
+        SELECT l.accountId,
+               SUM(l.debit)  AS debitTotal,
+               SUM(l.credit) AS creditTotal
+        FROM [dbo].[journalEntryLines] l
+        JOIN [dbo].[journalEntries] e ON e.entryId = l.journalEntryId
+        WHERE e.companyId = @companyId
+          AND e.status = 'POSTED'
+          AND (@toDate IS NULL OR e.entryDate <= @toDate)
+        GROUP BY l.accountId
+    ) m ON m.accountId = a.accountId
+    WHERE a.companyId = @companyId
+      AND a.isPostable = 1
+      AND (m.debitTotal <> 0 OR m.creditTotal <> 0)
+);
+GO
+
+-- ============================================================
 -- sp_journalEntries_trialBalance — Balanza de Comprobación (proyección
 -- de lectura): Debe y Haber acumulados por cuenta a una fecha de corte,
 -- más el total general. "balanced" debe ser siempre true si los asientos
@@ -392,20 +471,13 @@ BEGIN
     DECLARE @companyId INT  = JSON_VALUE(@pjsonfile, '$.journalEntries[0].companyId')
     DECLARE @toDate    DATE = TRY_CONVERT(DATE, JSON_VALUE(@pjsonfile, '$.journalEntries[0].toDate'))
 
+    -- Per-account totals come from the shared aggregation (POSTED, <= cutoff,
+    -- this company only) — see dbo.fn_journalEntries_accountTotals above.
     DECLARE @accountsJson NVARCHAR(MAX) = (
-        SELECT a.accountId, a.code AS accountCode, a.name AS accountName, a.accountType,
-               a.normalBalance,
-               ISNULL(SUM(l.debit), 0)  AS debitTotal,
-               ISNULL(SUM(l.credit), 0) AS creditTotal
-        FROM [dbo].[chartOfAccounts] a
-        LEFT JOIN [dbo].[journalEntryLines] l ON l.accountId = a.accountId
-        LEFT JOIN [dbo].[journalEntries] e
-            ON e.entryId = l.journalEntryId AND e.status = 'POSTED'
-               AND (@toDate IS NULL OR e.entryDate <= @toDate)
-        WHERE a.companyId = @companyId AND a.isPostable = 1
-        GROUP BY a.accountId, a.code, a.name, a.accountType, a.normalBalance
-        HAVING ISNULL(SUM(l.debit), 0) <> 0 OR ISNULL(SUM(l.credit), 0) <> 0
-        ORDER BY a.code
+        SELECT t.accountId, t.code AS accountCode, t.name AS accountName, t.accountType,
+               t.normalBalance, t.debitTotal, t.creditTotal
+        FROM [dbo].[fn_journalEntries_accountTotals](@companyId, @toDate) t
+        ORDER BY t.code
         FOR JSON PATH
     );
 

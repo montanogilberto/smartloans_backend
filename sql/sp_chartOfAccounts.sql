@@ -189,11 +189,14 @@ END
 GO
 
 -- ============================================================
--- sp_chartOfAccounts_seed  — catálogo base para una empresa nueva.
--- Idempotente: no hace nada si la empresa ya tiene cualquier cuenta.
--- Reusar esta misma SP el día que el alta de una empresa (dbo.companies)
--- tenga su propio flujo — hoy no existe ese hook, así que este archivo
--- también la corre una vez para cada empresa ya existente (ver abajo).
+-- sp_chartOfAccounts_seed  — catálogo base de una empresa ("ensure base").
+-- Inserta SOLO las cuentas base cuyo código le falte a la empresa: nunca
+-- actualiza ni borra una cuenta existente, no toca cuentas propias de la
+-- empresa, y una segunda ejecución no inserta nada. (Hasta 2026-10-01 no
+-- hacía nada si la empresa ya tenía cualquier cuenta — así no podía agregar
+-- 1101 Caja / 3205 / 3210; ver sql/migrations/2026-10-01c_chartOfAccounts_ensure_base.sql.)
+-- Hoy no existe hook de alta de empresa, así que este archivo la corre para
+-- cada empresa existente (ver abajo).
 -- ============================================================
 IF OBJECT_ID('dbo.sp_chartOfAccounts_seed', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_chartOfAccounts_seed;
 GO
@@ -202,51 +205,56 @@ CREATE PROCEDURE [dbo].[sp_chartOfAccounts_seed]
 AS
 BEGIN
     SET NOCOUNT ON;
-    IF EXISTS (SELECT 1 FROM [dbo].[chartOfAccounts] WHERE companyId = @companyId) RETURN;
+    IF @companyId IS NULL RETURN;
 
-    DECLARE @assetId INT, @liabilityId INT, @equityId INT, @incomeId INT, @expenseId INT;
+    DECLARE @base TABLE (
+        code NVARCHAR(20), name NVARCHAR(150), accountType NVARCHAR(20),
+        normalBalance NVARCHAR(1), parentCode NVARCHAR(20) NULL, isPostable BIT, level INT
+    );
+    INSERT INTO @base (code, name, accountType, normalBalance, parentCode, isPostable, level) VALUES
+        ('1',    'ACTIVO',                              'ASSET',     'D', NULL, 0, 1),
+        ('2',    'PASIVO',                              'LIABILITY', 'C', NULL, 0, 1),
+        ('3',    'CAPITAL',                             'EQUITY',    'C', NULL, 0, 1),
+        ('4',    'INGRESOS',                            'INCOME',    'C', NULL, 0, 1),
+        ('5',    'GASTOS',                              'EXPENSE',   'D', NULL, 0, 1),
+        ('1101', 'Caja',                                'ASSET',     'D', '1',  1, 2),
+        ('1105', 'Bancos',                              'ASSET',     'D', '1',  1, 2),
+        ('2105', 'Cuentas por pagar',                   'LIABILITY', 'C', '2',  1, 2),
+        ('3105', 'Capital social',                      'EQUITY',    'C', '3',  1, 2),
+        ('3205', 'Resultados de ejercicios anteriores', 'EQUITY',    'C', '3',  1, 2),
+        ('3210', 'Resultado del ejercicio',             'EQUITY',    'C', '3',  1, 2),
+        ('4105', 'Ingresos por ventas',                 'INCOME',    'C', '4',  1, 2),
+        ('4110', 'Intereses ganados',                   'INCOME',    'C', '4',  1, 2),
+        ('4115', 'Comisiones cobradas',                 'INCOME',    'C', '4',  1, 2),
+        ('4199', 'Otros ingresos',                      'INCOME',    'C', '4',  1, 2),
+        ('5105', 'Gastos de operación',                 'EXPENSE',   'D', '5',  1, 2),
+        ('5110', 'Nómina',                              'EXPENSE',   'D', '5',  1, 2),
+        ('5115', 'Servicios',                           'EXPENSE',   'D', '5',  1, 2),
+        ('5120', 'Comisiones bancarias',                'EXPENSE',   'D', '5',  1, 2),
+        ('5199', 'Otros gastos',                        'EXPENSE',   'D', '5',  1, 2);
 
+    -- Classes (level 1) the company is missing.
     INSERT INTO [dbo].[chartOfAccounts] (companyId, code, name, accountType, normalBalance, isPostable, level)
-    VALUES (@companyId, '1', 'ACTIVO', 'ASSET', 'D', 0, 1);
-    SET @assetId = SCOPE_IDENTITY();
+    SELECT @companyId, b.code, b.name, b.accountType, b.normalBalance, b.isPostable, b.level
+    FROM @base b
+    WHERE b.parentCode IS NULL
+      AND NOT EXISTS (SELECT 1 FROM [dbo].[chartOfAccounts] a
+                      WHERE a.companyId = @companyId AND a.code = b.code);
 
-    INSERT INTO [dbo].[chartOfAccounts] (companyId, code, name, accountType, normalBalance, isPostable, level)
-    VALUES (@companyId, '2', 'PASIVO', 'LIABILITY', 'C', 0, 1);
-    SET @liabilityId = SCOPE_IDENTITY();
-
-    INSERT INTO [dbo].[chartOfAccounts] (companyId, code, name, accountType, normalBalance, isPostable, level)
-    VALUES (@companyId, '3', 'CAPITAL', 'EQUITY', 'C', 0, 1);
-    SET @equityId = SCOPE_IDENTITY();
-
-    INSERT INTO [dbo].[chartOfAccounts] (companyId, code, name, accountType, normalBalance, isPostable, level)
-    VALUES (@companyId, '4', 'INGRESOS', 'INCOME', 'C', 0, 1);
-    SET @incomeId = SCOPE_IDENTITY();
-
-    INSERT INTO [dbo].[chartOfAccounts] (companyId, code, name, accountType, normalBalance, isPostable, level)
-    VALUES (@companyId, '5', 'GASTOS', 'EXPENSE', 'D', 0, 1);
-    SET @expenseId = SCOPE_IDENTITY();
-
-    INSERT INTO [dbo].[chartOfAccounts]
-        (companyId, code, name, accountType, normalBalance, parentAccountId, isPostable, level)
-    VALUES
-        (@companyId, '1105', 'Bancos',                 'ASSET',    'D', @assetId,    1, 2),
-        (@companyId, '2105', 'Cuentas por pagar',       'LIABILITY','C', @liabilityId,1, 2),
-        (@companyId, '3105', 'Capital social',          'EQUITY',   'C', @equityId,   1, 2),
-        (@companyId, '4105', 'Ingresos por ventas',     'INCOME',   'C', @incomeId,   1, 2),
-        (@companyId, '4110', 'Intereses ganados',       'INCOME',   'C', @incomeId,   1, 2),
-        (@companyId, '4115', 'Comisiones cobradas',     'INCOME',   'C', @incomeId,   1, 2),
-        (@companyId, '4199', 'Otros ingresos',          'INCOME',   'C', @incomeId,   1, 2),
-        (@companyId, '5105', 'Gastos de operación',     'EXPENSE',  'D', @expenseId,  1, 2),
-        (@companyId, '5110', 'Nómina',                  'EXPENSE',  'D', @expenseId,  1, 2),
-        (@companyId, '5115', 'Servicios',                'EXPENSE',  'D', @expenseId,  1, 2),
-        (@companyId, '5120', 'Comisiones bancarias',    'EXPENSE',  'D', @expenseId,  1, 2),
-        (@companyId, '5199', 'Otros gastos',            'EXPENSE',  'D', @expenseId,  1, 2);
+    -- Leaves the company is missing, under its class.
+    INSERT INTO [dbo].[chartOfAccounts] (companyId, code, name, accountType, normalBalance, parentAccountId, isPostable, level)
+    SELECT @companyId, b.code, b.name, b.accountType, b.normalBalance, p.accountId, b.isPostable, b.level
+    FROM @base b
+    JOIN [dbo].[chartOfAccounts] p ON p.companyId = @companyId AND p.code = b.parentCode
+    WHERE b.parentCode IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM [dbo].[chartOfAccounts] a
+                      WHERE a.companyId = @companyId AND a.code = b.code);
 END
 GO
 
 -- ============================================================
--- One-time backfill: siembra el catálogo base para cada empresa que ya
--- existe hoy y todavía no tiene ninguna cuenta. Seguro de re-ejecutar
+-- Backfill: asegura el catálogo base para cada empresa existente (agrega
+-- solo las cuentas base que le falten). Seguro de re-ejecutar
 -- (sp_chartOfAccounts_seed es idempotente por empresa).
 -- ============================================================
 DECLARE @seedCompanyId INT;
