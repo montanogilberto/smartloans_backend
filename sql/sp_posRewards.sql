@@ -486,6 +486,21 @@ BEGIN
         IF @clientId IS NULL
             RAISERROR('El ticket no existe para esta empresa.', 16, 1);
 
+        -- clientId = 1 is the walk-in/"mostrador" placeholder CartPage.tsx
+        -- sends when no real client was scanned/selected (dbo.income.clientId
+        -- is NOT NULL, so the ticket itself still needs SOME value there).
+        -- Same no-op shape as "no rated products" below -- a successful
+        -- response, not an error -- so anonymous counter sales don't
+        -- silently accrue points onto whichever real client holds id 1.
+        IF @clientId = 1
+        BEGIN
+            DECLARE @walkInBalance DECIMAL(12,2) = ISNULL(
+                (SELECT balance FROM [dbo].[posRewardBalances] WHERE companyId = @companyId AND clientId = @clientId), 0);
+            SELECT CAST(0 AS DECIMAL(12,2)) AS pointsEarned, @walkInBalance AS newBalance, CAST(NULL AS INT) AS transactionId
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            RETURN;
+        END
+
         -- Idempotent replay: same ticket already posted -> return that result, no new row.
         DECLARE @existingTxId INT, @existingPoints DECIMAL(12,2), @existingBalance DECIMAL(12,2);
         SELECT TOP 1 @existingTxId = transactionId, @existingPoints = points, @existingBalance = balanceAfter
@@ -720,7 +735,17 @@ BEGIN
         DECLARE @currentBalance DECIMAL(12,2) = ISNULL(
             (SELECT balance FROM [dbo].[posRewardBalances] WHERE companyId = @companyId AND clientId = @clientId), 0);
 
-        IF @currentBalance < @requiredPoints
+        -- free_product rewards are earned from that product's own purchase
+        -- history (checked above via @unitsAvailable/@requiredUnits) -- they
+        -- never draw from the client's points balance, which is a separate
+        -- currency entirely. Gating/deducting points here too (the bug this
+        -- replaces) meant a client could pass the product-eligibility check
+        -- and still be rejected as "insufficient_points", or have an
+        -- unrelated points balance silently drained for a reward they'd
+        -- already earned with real purchases.
+        DECLARE @isFreeProduct BIT = CASE WHEN @rewardType = 'free_product' AND @freeProductId IS NOT NULL THEN 1 ELSE 0 END;
+
+        IF @isFreeProduct = 0 AND @currentBalance < @requiredPoints
         BEGIN
             SELECT ('{"error":"insufficient_points","balance":' + CONVERT(NVARCHAR(30), @currentBalance) + '}') AS [jsonResult]
             RETURN;
@@ -728,31 +753,36 @@ BEGIN
 
         BEGIN TRAN;
 
+        DECLARE @pointsSpent DECIMAL(12,2) = CASE WHEN @isFreeProduct = 1 THEN 0 ELSE @requiredPoints END;
+
         INSERT INTO [dbo].[posRewardRedemptions]
             (companyId, clientId, catalogItemId, pointsSpent, status, incomeId, redeemedByUserId)
         VALUES
-            (@companyId, @clientId, @catalogItemId, @requiredPoints, 'applied', @incomeId, @redeemedByUserId);
+            (@companyId, @clientId, @catalogItemId, @pointsSpent, 'applied', @incomeId, @redeemedByUserId);
 
         DECLARE @redemptionId INT = SCOPE_IDENTITY();
+        DECLARE @newBalance DECIMAL(12,2) = @currentBalance;
 
-        -- EXEC's @param = value only accepts a constant or a bare variable,
-        -- never an inline expression -- the negation has to be pre-computed here.
-        DECLARE @negRequiredPoints DECIMAL(12,2) = -@requiredPoints;
-        DECLARE @newBalance DECIMAL(12,2);
-        EXEC [dbo].[sp_posRewardBalances_applyDelta]
-            @companyId = @companyId, @clientId = @clientId,
-            @pointsDelta = @negRequiredPoints, @earnedDelta = 0, @redeemedDelta = @requiredPoints,
-            @newBalance = @newBalance OUTPUT;
+        IF @isFreeProduct = 0
+        BEGIN
+            -- EXEC's @param = value only accepts a constant or a bare variable,
+            -- never an inline expression -- the negation has to be pre-computed here.
+            DECLARE @negRequiredPoints DECIMAL(12,2) = -@requiredPoints;
+            EXEC [dbo].[sp_posRewardBalances_applyDelta]
+                @companyId = @companyId, @clientId = @clientId,
+                @pointsDelta = @negRequiredPoints, @earnedDelta = 0, @redeemedDelta = @requiredPoints,
+                @newBalance = @newBalance OUTPUT;
 
-        INSERT INTO [dbo].[posRewardTransactions]
-            (companyId, clientId, txType, direction, points, referenceType, referenceId, balanceAfter, description)
-        VALUES
-            (@companyId, @clientId, 'REDEEM', 'D', @requiredPoints, 'redemption', @redemptionId, @newBalance,
-             CONCAT('Canje #', @redemptionId));
+            INSERT INTO [dbo].[posRewardTransactions]
+                (companyId, clientId, txType, direction, points, referenceType, referenceId, balanceAfter, description)
+            VALUES
+                (@companyId, @clientId, 'REDEEM', 'D', @requiredPoints, 'redemption', @redemptionId, @newBalance,
+                 CONCAT('Canje #', @redemptionId));
+        END
 
         COMMIT TRAN;
 
-        SELECT 'applied' AS status, @redemptionId AS redemptionId, @requiredPoints AS pointsSpent, @newBalance AS newBalance
+        SELECT 'applied' AS status, @redemptionId AS redemptionId, @pointsSpent AS pointsSpent, @newBalance AS newBalance
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
     END TRY
     BEGIN CATCH

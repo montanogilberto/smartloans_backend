@@ -15,7 +15,7 @@ cash-flow reports need their own later reporting PRD.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from fastapi.responses import JSONResponse
 from databases import connection
 
@@ -40,22 +40,81 @@ def _sp(proc: str, json_file: dict):
 
 # ── Auto-posting: income/expenses -> journalEntry ───────────────────────────
 # Best-effort bridge called from modules/income.py and modules/expenses.py
-# right after a successful INSERT. The account mapping is intentionally the
-# simplest one that keeps every asiento balanced: everything routes through
-# "Bancos" — there is no per-category (Nómina/Servicios/supplier type) split
-# yet. Never raises: the income/expense row already committed, so a missing
-# chart of accounts or a posting error must not break that response — it's
-# only logged. See sql/sp_journalEntries.sql hints + prd_journalEntry.json.
+# right after a successful INSERT. Never raises: the income/expense row
+# already committed, so a missing chart of accounts or a posting error must
+# not break that response — it's only logged. Duplicates are rejected by
+# sp_journalEntries itself (one POSTED entry per companyId + referenceType +
+# referenceId), so a retried hook can't double-post.
+#
+# Posting map (POSVending/docs/accounting-module.md §7.3, Step 3, 2026-10-01):
+#   income   Efectivo              Dr 1101 Caja    / Cr 4105 Ventas
+#   income   Tarjeta/Transferencia Dr 1105 Bancos  / Cr 4105 Ventas
+#   expense  Dr by type (payroll 5110, general/servicios 5115, inventory 5105)
+#            Cr 1101 Caja (Efectivo) or 1105 Bancos (any other method)
+# Owner decisions: inventory is expensed (5105, no 1115); payroll is
+# cash-basis (no 2110 accrual); IVA is not split out.
 
+CASH_ACCOUNT_CODE = '1101'              # Caja (ASSET)
 DEFAULT_BANK_ACCOUNT_CODE = '1105'      # Bancos (ASSET)
 DEFAULT_INCOME_ACCOUNT_CODE = '4105'    # Ingresos por ventas (INCOME)
 DEFAULT_EXPENSE_ACCOUNT_CODE = '5105'   # Gastos de operación (EXPENSE)
+COMMISSION_EXPENSE_ACCOUNT_CODE = '5120'  # Comisiones bancarias (EXPENSE)
+
+EXPENSE_ACCOUNT_BY_TYPE = {
+    'payroll': '5110',     # Nómina
+    'general': '5115',     # Servicios (the form's "Servicios" tab sends 'general')
+    'inventory': '5105',   # Gastos de operación — inventory is expensed (Q2)
+}
+
+_CASH_METHODS = {'efectivo', 'cash'}
+_BANK_METHODS = {'tarjeta', 'terminal', 'transferencia', 'transferir', 'transfer', 'spei', 'card'}
+
+
+def cash_or_bank_code(payment_method) -> str:
+    """Asset account a movement settles through: Efectivo → 1101 Caja,
+    card/transfer → 1105 Bancos. An unknown method keeps the pre-2026-10-01
+    behavior (Bancos) and is logged so reconciliation can catch it."""
+    method = str(payment_method or '').strip().lower()
+    if method in _CASH_METHODS:
+        return CASH_ACCOUNT_CODE
+    if method not in _BANK_METHODS:
+        print(f"[journalEntries] unknown paymentMethod {payment_method!r} -> posting to Bancos {DEFAULT_BANK_ACCOUNT_CODE}")
+    return DEFAULT_BANK_ACCOUNT_CODE
+
+
+def expense_account_code(expense_type) -> str:
+    """Debit account for an expense by expenseType (sp_expense defaults a
+    missing type to 'inventory', so None maps the same way)."""
+    return EXPENSE_ACCOUNT_BY_TYPE.get(str(expense_type or 'inventory').strip().lower(),
+                                       DEFAULT_EXPENSE_ACCOUNT_CODE)
+
+
+HERMOSILLO_OFFSET = timedelta(hours=-7)   # UTC-7, no DST
 
 
 def _normalize_entry_date(raw) -> str:
-    if raw:
-        return str(raw)[:10]
-    return datetime.utcnow().strftime('%Y-%m-%d')
+    """Hermosillo business date ('YYYY-MM-DD') for a movement.
+
+    - 'YYYY-MM-DD'                      → kept as is (already a local day).
+    - timestamp WITH a zone ('…Z', '…-07:00', '…+00:00') → converted to
+      Hermosillo time, then its date. The POS cart sends
+      new Date().toISOString(); taking its first 10 chars dated every sale
+      after 17:00 local on the NEXT day (and month-end evenings in the next
+      month) — fixed 2026-10-01.
+    - timestamp WITHOUT a zone          → first 10 chars (unknown zone; legacy).
+    - empty                             → today in Hermosillo.
+    """
+    if not raw:
+        return (datetime.now(timezone.utc) + HERMOSILLO_OFFSET).strftime('%Y-%m-%d')
+    text = str(raw).strip()
+    has_zone = text.endswith('Z') or (len(text) > 19 and text[-6] in '+-' and text[-3] == ':')
+    if 'T' in text and has_zone:
+        try:
+            moment = datetime.fromisoformat(text.replace('Z', '+00:00'))
+            return (moment.astimezone(timezone.utc) + HERMOSILLO_OFFSET).strftime('%Y-%m-%d')
+        except ValueError:
+            pass
+    return text[:10]
 
 
 def _get_account_id(company_id: int, code: str):
@@ -108,23 +167,43 @@ def _post_movement_journal_entry(company_id: int, reference_type: str, reference
         print(f"[journalEntries] auto-post EXCEPTION for {reference_type} {reference_id}: {e}")
 
 
-def post_income_journal_entry(company_id: int, income_id: int, amount: float, entry_date=None):
-    """Debe Bancos / Haber Ingresos por ventas. Called from modules/income.py
-    after a successful sp_income action=1."""
+def post_income_journal_entry(company_id: int, income_id: int, amount: float, entry_date=None,
+                              payment_method=None):
+    """Debe Caja (Efectivo) or Bancos / Haber Ingresos por ventas. Called from
+    modules/income.py after a successful sp_income action=1."""
     _post_movement_journal_entry(
         company_id, 'income', income_id, amount, entry_date,
         description=f"Ingreso #{income_id}",
-        debit_code=DEFAULT_BANK_ACCOUNT_CODE, credit_code=DEFAULT_INCOME_ACCOUNT_CODE,
+        debit_code=cash_or_bank_code(payment_method), credit_code=DEFAULT_INCOME_ACCOUNT_CODE,
     )
 
 
-def post_expense_journal_entry(company_id: int, expense_id: int, amount: float, entry_date=None):
-    """Debe Gastos de operación / Haber Bancos. Called from modules/expenses.py
-    after a successful sp_expense action=1 (any expenseType)."""
+def post_expense_journal_entry(company_id: int, expense_id: int, amount: float, entry_date=None,
+                               payment_method=None, expense_type=None):
+    """Debe gasto by expenseType / Haber Caja (Efectivo) or Bancos. Called from
+    modules/expenses.py after a successful sp_expense action=1."""
     _post_movement_journal_entry(
         company_id, 'expense', expense_id, amount, entry_date,
         description=f"Egreso #{expense_id}",
-        debit_code=DEFAULT_EXPENSE_ACCOUNT_CODE, credit_code=DEFAULT_BANK_ACCOUNT_CODE,
+        debit_code=expense_account_code(expense_type), credit_code=cash_or_bank_code(payment_method),
+    )
+
+
+def post_income_commission_journal_entry(company_id: int, income_id: int, commission_amount, entry_date=None):
+    """Debe 5120 Comisiones bancarias / Haber 1105 Bancos for the card-terminal
+    commission stamped on a sale (sp_income_applyCommission). Step 4,
+    2026-10-01. referenceType 'income_commission' + referenceId incomeId;
+    sp_journalEntries rejects a second POSTED one, so retries are safe.
+    entry_date must be the SAME value the sale's own entry used, so both land
+    on the same Hermosillo day."""
+    try:
+        amount = round(float(commission_amount or 0), 2)
+    except (TypeError, ValueError):
+        amount = 0
+    _post_movement_journal_entry(
+        company_id, 'income_commission', income_id, amount, entry_date,
+        description=f"Comisión terminal ingreso #{income_id}",
+        debit_code=COMMISSION_EXPENSE_ACCOUNT_CODE, credit_code=DEFAULT_BANK_ACCOUNT_CODE,
     )
 
 
@@ -177,5 +256,22 @@ def journal_entries_trial_balance_sp(json_file: dict):
             result["accounts"] = json.loads(result.pop("accountsJson"))
             result["balanced"] = bool(result.get("balanced"))
         return JSONResponse(result, status_code=200)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def journal_entries_balance_sheet_sp(json_file: dict):
+    """POST /journalEntries/balance-sheet — Balance General / Estado de Situación
+    Financiera (read projection over the journal; Step 8, 2026-10-01).
+
+    sp_journalEntries_balanceSheet returns the finished JSON document as a
+    string column ([jsonResult]); _sp concatenates the chunks and parses it.
+    All accounting math happens in SQL (fn_journalEntries_balanceSheet) — this
+    layer never computes balances. 400 on bad input ({"error": ...}).
+    """
+    try:
+        result = _sp("sp_journalEntries_balanceSheet", json_file)
+        status_code = 400 if isinstance(result, dict) and result.get("error") else 200
+        return JSONResponse(result, status_code=status_code)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)

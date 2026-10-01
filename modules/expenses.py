@@ -76,7 +76,11 @@ def expense_sp(json_file: dict):
                 try:
                     company_id = first_in.get("companyId")
                     if company_id and total:
-                        post_expense_journal_entry(company_id, entity_id, float(total), first_in.get("paymentDate"))
+                        post_expense_journal_entry(
+                            company_id, entity_id, float(total), first_in.get("paymentDate"),
+                            payment_method=first_in.get("paymentMethod"),
+                            expense_type=first_in.get("expenseType"),
+                        )
                 except Exception as e:
                     print(f"[expenses] accounting auto-post hook failed: {e}")
 
