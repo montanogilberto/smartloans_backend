@@ -258,3 +258,20 @@ def journal_entries_trial_balance_sp(json_file: dict):
         return JSONResponse(result, status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def journal_entries_balance_sheet_sp(json_file: dict):
+    """POST /journalEntries/balance-sheet — Balance General / Estado de Situación
+    Financiera (read projection over the journal; Step 8, 2026-10-01).
+
+    sp_journalEntries_balanceSheet returns the finished JSON document as a
+    string column ([jsonResult]); _sp concatenates the chunks and parses it.
+    All accounting math happens in SQL (fn_journalEntries_balanceSheet) — this
+    layer never computes balances. 400 on bad input ({"error": ...}).
+    """
+    try:
+        result = _sp("sp_journalEntries_balanceSheet", json_file)
+        status_code = 400 if isinstance(result, dict) and result.get("error") else 200
+        return JSONResponse(result, status_code=status_code)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)

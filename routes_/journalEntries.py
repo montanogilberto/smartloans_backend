@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from modules.journalEntries import (
     journal_entries_sp, all_journal_entries_sp, one_journal_entry_sp,
-    journal_entries_ledger_sp, journal_entries_trial_balance_sp,
+    journal_entries_ledger_sp, journal_entries_trial_balance_sp, journal_entries_balance_sheet_sp,
 )
 
 router = APIRouter()
@@ -68,3 +68,21 @@ be true if every posted entry passed sp_journalEntries action=1's Debe=Haber che
 )
 def journal_entries_trial_balance(json: dict):
     return journal_entries_trial_balance_sp(json)
+
+
+@router.post(
+    "/journalEntries/balance-sheet",
+    summary="Balance General / Estado de Situación Financiera (read projection, not a stored table)",
+    description="""Body: { "journalEntries": [{ "companyId": int, "asOfDate"?: "YYYY-MM-DD",
+    "compareDate"?: "YYYY-MM-DD" }] }
+asOfDate defaults to today (Hermosillo). Only POSTED entries with entryDate <= cutoff.
+Returns { companyId, asOfDate,
+  assets: { current: [{code,name,balance}], nonCurrent: [...], total },
+  liabilities: { current: [...], nonCurrent: [...], total },
+  equity: { accounts: [...], priorYearsResult, currentYearResult, total },
+  totalLiabilitiesAndEquity, balanced, comparison?: { same shape at compareDate } }.
+current/nonCurrent by code: 11xx/12xx (assets), 21xx/22xx (liabilities).
+currentYearResult = income − expenses from Jan 1 to the cutoff; priorYearsResult = before Jan 1.""",
+)
+def journal_entries_balance_sheet(json: dict):
+    return journal_entries_balance_sheet_sp(json)

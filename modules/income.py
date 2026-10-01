@@ -7,6 +7,7 @@ import json
 from modules.journalEntries import post_income_journal_entry, post_income_commission_journal_entry
 from modules.notificationDispatch import dispatch_notification_connector
 from modules.rewards import earn_points_for_income
+from modules.incomePayments import record_income_payments
 
 app = FastAPI()
 
@@ -136,6 +137,19 @@ def income_sp(json_file: dict):
                         )
             except Exception as e:
                 print(f"[income] accounting auto-post hook failed: {e}")
+
+            # Best-effort: record the payment-method breakdown for a split
+            # sale (e.g. 60% Efectivo + 40% Tarjeta) -- only present when the
+            # frontend sent a "payments" array (CartPage.tsx's split-payment
+            # mode); a normal single-method sale sends nothing here and this
+            # is a no-op. See modules/incomePayments.py for the known gap:
+            # the card-terminal commission hook below does not yet journal
+            # a split sale's Tarjeta portion.
+            try:
+                if is_new_income and first_row.get("payments"):
+                    record_income_payments(int(result[0]["value"]), first_row.get("payments"))
+            except Exception as e:
+                print(f"[income] split-payment record hook failed: {e}")
 
             # Best-effort: auto-earn loyalty points for this sale, linked to
             # the real incomeId (see modules/rewards.py::earn_points_for_income
