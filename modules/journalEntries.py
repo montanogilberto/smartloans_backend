@@ -204,47 +204,32 @@ def post_expense_journal_entry(company_id: int, expense_id: int, amount: float, 
 # accounting-module.md Q1), and they are idempotent, so a retried hook is safe.
 
 def _fetch_expense(expense_id: int):
-    """Current expenses row as a dict, or None if it no longer exists."""
-    conn = _conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT companyId, total, paymentMethod, expenseType "
-            "FROM dbo.expenses WHERE expenseId = %s", (int(expense_id),))
-        row = cur.fetchone()
-        if not row:
-            return None
-        return {"companyId": row[0], "total": row[1], "paymentMethod": row[2], "expenseType": row[3]}
-    finally:
-        conn.close()
+    """Current expenses row as a dict, or None if it no longer exists
+    (sp_expense_one)."""
+    row = _sp("sp_expense_one", {"expenses": [{"expenseId": int(expense_id)}]})
+    if isinstance(row, dict) and row.get("error"):
+        raise RuntimeError(f"sp_expense_one: {row['error']}")
+    if not row:
+        return None
+    return {"companyId": row.get("companyId"), "total": row.get("total"),
+            "paymentMethod": row.get("paymentMethod"), "expenseType": row.get("expenseType")}
 
 
 def _fetch_posted_expense_entries(expense_id: int) -> list:
     """POSTED journal entries for this expense (any company), with the account
-    codes they debit/credit, as the 2-line entries the auto-post writes."""
-    conn = _conn()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT e.entryId, e.companyId, CONVERT(VARCHAR(10), e.entryDate, 23), e.totalDebit,
-                   (SELECT TOP 1 c.code FROM dbo.journalEntryLines l
-                      JOIN dbo.chartOfAccounts c ON c.accountId = l.accountId
-                     WHERE l.journalEntryId = e.entryId AND l.debit > 0),
-                   (SELECT TOP 1 c.code FROM dbo.journalEntryLines l
-                      JOIN dbo.chartOfAccounts c ON c.accountId = l.accountId
-                     WHERE l.journalEntryId = e.entryId AND l.credit > 0)
-              FROM dbo.journalEntries e
-             WHERE e.referenceType = 'expense' AND e.referenceId = %s AND e.status = 'POSTED'
-             ORDER BY e.entryId
-            """, (int(expense_id),))
-        return [
-            {"entryId": r[0], "companyId": r[1], "entryDate": r[2],
-             "amount": float(r[3] or 0), "debitCode": r[4], "creditCode": r[5]}
-            for r in cur.fetchall()
-        ]
-    finally:
-        conn.close()
+    codes they debit/credit, as the 2-line entries the auto-post writes
+    (sp_journalEntries_byReference)."""
+    entries = _sp("sp_journalEntries_byReference", {"journalEntries": [
+        {"referenceType": "expense", "referenceId": int(expense_id), "status": "POSTED"}]})
+    if isinstance(entries, dict):
+        if entries.get("error"):
+            raise RuntimeError(f"sp_journalEntries_byReference: {entries['error']}")
+        return []
+    return [
+        {"entryId": e.get("entryId"), "companyId": e.get("companyId"), "entryDate": e.get("entryDate"),
+         "amount": float(e.get("amount") or 0), "debitCode": e.get("debitCode"), "creditCode": e.get("creditCode")}
+        for e in entries
+    ]
 
 
 def _void_entry(entry_id: int, company_id: int) -> None:
