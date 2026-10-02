@@ -76,7 +76,11 @@ def expense_sp(json_file: dict):
                 try:
                     company_id = first_in.get("companyId")
                     if company_id and total:
-                        post_expense_journal_entry(company_id, entity_id, float(total), first_in.get("paymentDate"))
+                        post_expense_journal_entry(
+                            company_id, entity_id, float(total), first_in.get("paymentDate"),
+                            payment_method=first_in.get("paymentMethod"),
+                            expense_type=first_in.get("expenseType"),
+                        )
                 except Exception as e:
                     print(f"[expenses] accounting auto-post hook failed: {e}")
 
@@ -126,6 +130,31 @@ async def upload_expense_receipt_connector(payload: dict) -> JSONResponse:
         return JSONResponse(content={"blobUrl": blob_url}, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+def monthly_expense_sp(json_file: dict):
+    """One company's expenses for one Hermosillo month + 12-month totals.
+
+    sp_expense_monthly returns a single FOR JSON document; long output is
+    split across rows, so the chunks are concatenated before parsing.
+    """
+    conn = None
+    try:
+        conn = connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC [dbo].[sp_expense_monthly] @pjsonfile = %s", (json.dumps(json_file),))
+        rows = cursor.fetchall()
+        json_result = "".join(row[0] for row in rows if row and row[0])
+        if not json_result:
+            return JSONResponse(content={"expenses": [], "monthlyTotals": []}, status_code=200)
+
+        result = json.loads(json_result)
+        return JSONResponse(content=result, status_code=200)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 
 def all_expense_sp():

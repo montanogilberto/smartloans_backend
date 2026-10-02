@@ -40,7 +40,7 @@ from routes_ import (
     listingDrafts, messageTickets, procurementJobs, productMatches,
     publishJobs, sellListings, shipments, opportunities, marketplaceOrders, mercadolibre, ml_proxy,
     mlSearchRuns, mlJobs, routes_ml_proxy, cashRegister, companies, companiesBranches, productCategories,
-    supplier, loan, clientFaceRecognition,
+    supplier, service, loan, clientFaceRecognition,
     pushNotification,
     loanProposals, loanOffers, stripe_payments,
     creditScore, walletBalance, automatedPayments, signatureUpload,
@@ -59,14 +59,16 @@ from routes_ import (
     posSupportChat,
     client_login,
     posRewards,
+    reservations,
     clientCapabilities,
     roles,
     commissionTerminals,
     factoryRunUsage,
+    whatsappCloud,
 )
 
 app = FastAPI(
-    title="SmartLoans Backend API",
+    title="Factory Backend API",
     version="1.0.0"
 )
 
@@ -184,6 +186,7 @@ app.include_router(companies.router)
 app.include_router(companiesBranches.router)
 app.include_router(productCategories.router)
 app.include_router(supplier.router)
+app.include_router(service.router)
 app.include_router(loan.router)
 app.include_router(clientDashboards.router)
 app.include_router(clientFaceRecognition.router)
@@ -225,10 +228,12 @@ app.include_router(onboardingReminders.router)
 app.include_router(registrationReminders.router)
 app.include_router(client_login.router)
 app.include_router(posRewards.router)
+app.include_router(reservations.router)
 app.include_router(clientCapabilities.router)
 app.include_router(roles.router)
 app.include_router(commissionTerminals.router)
 app.include_router(factoryRunUsage.router)
+app.include_router(whatsappCloud.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job

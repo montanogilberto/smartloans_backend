@@ -1,0 +1,6 @@
+-- ROLLBACK for 2026-09-30_fix_statuses_table_rename.sql
+-- There is nothing useful to roll back to: the previous definitions read
+-- dbo.statuses, which does not exist in the live DB (every call failed with
+-- "Invalid object name"). Only roll back together with renaming the table
+-- back:  EXEC sp_rename 'dbo.status', 'statuses';
+-- then re-run the four definitions from sql/migration/02_programmability.sql.

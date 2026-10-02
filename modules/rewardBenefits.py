@@ -16,7 +16,7 @@ apostar para salir del hoyo.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from fastapi.responses import JSONResponse
 
@@ -47,18 +47,16 @@ def _first(json_file: dict, key: str) -> dict:
 def _rule(company_id: int, rule_type: str) -> dict:
     """Regla activa de ese tipo. La tasa vive en la base, no en el codigo."""
     try:
-        conn = connection()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT TOP 1 ruleId, pointsPerUnit, maxPointsPerTx FROM rewardRules "
-            "WHERE companyId = %s AND ruleType = %s AND isActive = 1 ORDER BY ruleId",
-            (company_id, rule_type),
-        )
-        row = cur.fetchone()
-        conn.close()
-        if not row:
+        # list_rules already filters isActive = 1 and orders by ruleId, so the
+        # first match is the same rule the old TOP 1 ... ORDER BY ruleId picked.
+        rules = _exec_sp("sp_rewards", {"rewards": [{"action": "list_rules", "companyId": company_id}]})
+        if not isinstance(rules, list):
             return {}
-        return {"ruleId": row[0], "pointsPerUnit": float(row[1]), "maxPointsPerTx": row[2]}
+        rule = next((r for r in rules if r.get("ruleType") == rule_type), None)
+        if not rule:
+            return {}
+        return {"ruleId": rule["ruleId"], "pointsPerUnit": float(rule["pointsPerUnit"]),
+                "maxPointsPerTx": rule.get("maxPointsPerTx")}
     except Exception as e:
         print(f"[rewards] no se pudo leer la regla {rule_type}: {type(e).__name__}: {e}")
         return {}
@@ -68,7 +66,7 @@ def _rule(company_id: int, rule_type: str) -> dict:
 # Otorgar puntos por conducta
 # ---------------------------------------------------------------------------
 
-def _installment_is_on_time(installment_id: int) -> tuple:
+def _installment_is_on_time(company_id: int, installment_id: int) -> tuple:
     """
     (puntual, monto) de la cuota, leidos de la base.
 
@@ -76,32 +74,25 @@ def _installment_is_on_time(installment_id: int) -> tuple:
     manual ni siquiera carga dueDate en su consulta, y repartir esta regla por
     tres lugares es garantia de que alguno quede distinto.
     """
-    conn = None
     try:
-        conn = connection()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT TOP 1 dueDate, amount, paidAt FROM loanInstallments WHERE installmentId = %s",
-            (installment_id,),
-        )
-        row = cur.fetchone()
+        row = _exec_sp("sp_loanInstallments_one", {"installments": [{
+            "installmentId": installment_id, "companyId": company_id,
+        }]})
+        if "error" in row:
+            raise RuntimeError(row["error"])
         if not row:
             return False, 0.0
-        due, amount, paid_at = row[0], float(row[1] or 0), row[2]
-        if due is None:
+        amount = float(row.get("amount") or 0)
+        if not row.get("dueDate"):
             return False, amount
+        due_date = date.fromisoformat(row["dueDate"])
         # Sin paidAt todavia, se toma "ahora": el hook corre justo al marcar.
-        paid_date = (paid_at or datetime.now(timezone.utc)).date() if hasattr(paid_at or datetime.now(timezone.utc), "date") else None
-        due_date = due.date() if hasattr(due, "date") else due
-        if paid_date is None or due_date is None:
-            return False, amount
+        paid_date = (date.fromisoformat(row["paidDate"]) if row.get("paidDate")
+                     else datetime.now(timezone.utc).date())
         return paid_date <= due_date, amount
     except Exception as e:
         print(f"[rewards] no se pudo leer la cuota {installment_id}: {type(e).__name__}: {e}")
         return False, 0.0
-    finally:
-        if conn:
-            conn.close()
 
 
 def award_on_time_payment(company_id: int, client_id: int, installment_id: int,
@@ -115,7 +106,7 @@ def award_on_time_payment(company_id: int, client_id: int, installment_id: int,
     aqui NUNCA debe tumbar el pago: el dinero ya se movio.
     """
     try:
-        on_time, db_amount = _installment_is_on_time(installment_id)
+        on_time, db_amount = _installment_is_on_time(company_id, installment_id)
         if not on_time:
             return {"status": "skipped", "reason": "late"}
         amount_mxn = db_amount if amount_mxn is None else amount_mxn

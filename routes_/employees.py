@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from modules.employees import employees_sp, all_employees_sp, one_employees_sp
+from modules.employees import employees_sp, all_employees_sp, one_employee_sp
 
 router = APIRouter()
 
@@ -14,9 +14,9 @@ def employees(json: dict):
 # Read all employees docstring from the file
 with open("./docs_description/employees_all.txt", "r") as file:
     employees_all_docstring = file.read()
-@router.get("/all_employees", summary="all employees", description=employees_all_docstring)
-def all_employees():
-    return all_employees_sp()
+@router.post("/all_employees", summary="all employees of a company", description=employees_all_docstring)
+def all_employees(json: dict):
+    return all_employees_sp(json)
 
 
 # Read one employee docstring from the file

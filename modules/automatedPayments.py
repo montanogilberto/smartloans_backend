@@ -56,6 +56,30 @@ def _sp_installments(payload: dict) -> dict:
             conn.close()
 
 
+def _installment_one(company_id: int, loan_id: int, installment_id: int) -> dict:
+    """Full installment row via sp_loanInstallments_one ({} if not found).
+    Raises on DB/SP error — unlike _sp_installments, a failure here must not
+    look like "cuota no encontrada" on the money path."""
+    conn = None
+    try:
+        conn = _conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC [dbo].[sp_loanInstallments_one] @pjsonfile = %s",
+            (json.dumps({"installments": [{
+                "installmentId": installment_id, "loanId": loan_id, "companyId": company_id,
+            }]}),)
+        )
+        row = cursor.fetchone()
+        result = json.loads(row[0]) if row and row[0] else {}
+        if "error" in result:
+            raise RuntimeError(f"sp_loanInstallments_one: {result['error']}")
+        return result
+    finally:
+        if conn:
+            conn.close()
+
+
 def _sp_saved_methods(payload: dict) -> dict:
     conn = None
     try:
@@ -309,6 +333,7 @@ async def pay_installment_spei(payload: dict):
     """
     from modules.walletTransactions import post_entry, get_balance
     from modules.azure_notifications import send_azure_push
+    from modules.pushNotifications import resolve_push_user_ids
 
     company_id  = int(payload.get("companyId", 0))
     loan_id     = int(payload.get("loanId", 0))
@@ -317,21 +342,14 @@ async def pay_installment_spei(payload: dict):
     if not (company_id and loan_id and inst_id and borrower_id):
         return JSONResponse({"error": "companyId, loanId, installmentId y clientId son requeridos"}, status_code=400)
 
-    # The SP's 'list' action omits clientId/lenderId — read the row directly
-    # for ownership + counterpart (read-only; mutations stay in the SP).
-    conn = _conn()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT clientId, lenderId, installmentNumber, amount, principal, interest, status, attemptCount "
-        "FROM loanInstallments WHERE installmentId = %s AND loanId = %s AND companyId = %s",
-        (inst_id, loan_id, company_id))
-    row = cur.fetchone()
-    conn.close()
+    # The SP's 'list' action omits clientId/lenderId — sp_loanInstallments_one
+    # returns the full row for ownership + counterpart.
+    row = _installment_one(company_id, loan_id, inst_id)
     if not row:
         return JSONResponse({"error": f"Cuota {inst_id} no encontrada en el préstamo {loan_id}"}, status_code=404)
-    inst_client_id, lender_id, inst_number = int(row[0]), int(row[1]), int(row[2])
-    amount, principal, interest = float(row[3]), float(row[4] or 0), float(row[5] or 0)
-    inst_status, attempt_count = row[6], int(row[7] or 0)
+    inst_client_id, lender_id, inst_number = int(row["clientId"]), int(row["lenderId"]), int(row["installmentNumber"])
+    amount, principal, interest = float(row["amount"]), float(row.get("principal") or 0), float(row.get("interest") or 0)
+    inst_status, attempt_count = row.get("status"), int(row.get("attemptCount") or 0)
     if inst_client_id != borrower_id:
         return JSONResponse({"error": "La cuota no pertenece a este cliente"}, status_code=403)
     if inst_status == "paid":
@@ -404,15 +422,15 @@ async def pay_installment_spei(payload: dict):
         # Hub tags are user_{userId}; lender_id is a CLIENT id — resolve first
         # or the push targets an empty tag and vanishes silently.
         conn = _conn()
-        cur = conn.cursor()
-        cur.execute("SELECT TOP 1 userId FROM users WHERE clientId = %s", (lender_id,))
-        row = cur.fetchone()
-        conn.close()
-        if row:
+        try:
+            lender_user_id = resolve_push_user_ids(conn.cursor(), [lender_id]).get(lender_id)
+        finally:
+            conn.close()
+        if lender_user_id:
             await send_azure_push(
                 "💵 Cuota recibida",
                 f"Cuota #{inst.get('installmentNumber')} de ${amount:,.2f} pagada por SPEI.",
-                row[0],
+                lender_user_id,
                 data={"navigationRoute": "/p2p-lending"})
     except Exception as e:
         print(f"[automatedPayments] pay_installment_spei: push failed: {e}")

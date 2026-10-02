@@ -94,6 +94,22 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+# Staff authenticate through /login (username + password). An SMS code to the
+# phone on a clients row must never open a staff session.
+_STAFF_ROLES = {"admin", "manager", "employee", "business", "viewer"}
+
+
+def _session_role(client: dict, provisioned_pos: bool) -> tuple[str, str]:
+    """Role this client session gets: their real role in the company when one
+    exists (existingRoleCode from sp_clientLoginCodes, 2026-09-28), else 'pos'.
+    Before 2026-09-28 this was hardcoded 'pos' -- which also DEMOTED borrowers/
+    lenders in dbo.userCompanies on every SMS login."""
+    role = (client.get("existingRoleCode") or "").strip().lower()
+    if provisioned_pos or not role:
+        return "pos", "Cliente"
+    return role, client.get("existingRoleName") or role
+
+
 def verify_client_login_code(json_file: dict) -> JSONResponse:
     try:
         payload = (json_file.get("clientLoginCodes") or [{}])[0]
@@ -118,6 +134,13 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
         existing_user_id = client.get("existingUserId")
         first_login_completed = bool(client.get("firstLoginCompleted"))
 
+        role_code, role_name = _session_role(client, provisioned_pos=False)
+        if role_code in _STAFF_ROLES:
+            return JSONResponse(content={
+                "valid": False,
+                "error": "Esta cuenta es de personal. Inicia sesión con usuario y contraseña.",
+            }, status_code=200)
+
         if existing_user_id:
             user_id = existing_user_id
         else:
@@ -135,12 +158,24 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
                 return JSONResponse(content={"valid": False, "error": "No se pudo crear la cuenta."}, status_code=500)
             user_id = create_result.get("userId")
 
-        _users_sp_raw({
-            "users": [{
-                "action": 2, "user_id": user_id, "companyId": company_id,
-                "roleCode": "pos", "identityVerified": 1,
-            }]
-        })
+        # Assign 'pos' ONLY when this user has no role in the company yet: a
+        # brand-new user, or the SP says hasCompanyRole = 0. When the SP is
+        # the pre-2026-09-28 version (no hasCompanyRole key) an existing user's
+        # role is unknown, so companyId is omitted and userCompanies is left
+        # untouched -- only identityVerified is set.
+        needs_pos_role = (not existing_user_id) or client.get("hasCompanyRole") == 0
+        if needs_pos_role:
+            role_code, role_name = _session_role(client, provisioned_pos=True)
+            _users_sp_raw({
+                "users": [{
+                    "action": 2, "user_id": user_id, "companyId": company_id,
+                    "roleCode": "pos", "identityVerified": 1,
+                }]
+            })
+        else:
+            _users_sp_raw({
+                "users": [{"action": 2, "user_id": user_id, "identityVerified": 1}]
+            })
 
         log_workflow_step(
             "Client Login Verified", workflow_name="client_login",
@@ -153,8 +188,8 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
             "userId": user_id,
             "companyId": company_id,
             "clientId": client_id,
-            "roleCode": "pos",
-            "roleName": "Cliente",
+            "roleCode": role_code,
+            "roleName": role_name,
             "firstName": first_name,
             "lastName": last_name,
             "firstLoginCompleted": first_login_completed,
@@ -207,9 +242,8 @@ def set_client_password(json_file: dict) -> JSONResponse:
 def verify_client_password(json_file: dict) -> JSONResponse:
     """Returning-client login: phone+password, no OTP/SMS at all. Only ever
     reachable once send_client_login_code has reported
-    firstLoginCompleted=True for this phone. Hardcodes roleCode='pos'/
-    roleName='Cliente' same as the OTP path above -- every self-service
-    client account is always that role, so there's nothing to look up.
+    firstLoginCompleted=True for this phone. Returns the user's real role in
+    the company (existingRoleCode) or 'pos' -- same rule as the OTP path.
     Password comparison happens in sp_clientLoginCodes action=4, not here."""
     try:
         payload = (json_file.get("clientPasswordLogin") or [{}])[0]
@@ -234,6 +268,13 @@ def verify_client_password(json_file: dict) -> JSONResponse:
         if not user_id:
             return JSONResponse(content={"valid": False, "error": "Teléfono o contraseña incorrectos"}, status_code=200)
 
+        role_code, role_name = _session_role(client, provisioned_pos=False)
+        if role_code in _STAFF_ROLES:
+            return JSONResponse(content={
+                "valid": False,
+                "error": "Esta cuenta es de personal. Inicia sesión con usuario y contraseña.",
+            }, status_code=200)
+
         log_workflow_step(
             "Client Password Login", workflow_name="client_login",
             action="VERIFY", status="SUCCESS", entity="users",
@@ -245,8 +286,8 @@ def verify_client_password(json_file: dict) -> JSONResponse:
             "userId": user_id,
             "companyId": client.get("companyId"),
             "clientId": client.get("clientId"),
-            "roleCode": "pos",
-            "roleName": "Cliente",
+            "roleCode": role_code,
+            "roleName": role_name,
             "firstName": client.get("first_name") or "",
             "lastName": client.get("last_name") or "",
         }, status_code=200)

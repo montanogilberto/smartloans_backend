@@ -2,15 +2,15 @@
 -- sp_commissionTerminals  (action 1=create, 2=update, 3=deactivate)
 -- Catálogo de terminales de cobro / proveedor y su comisión —
 -- income.commissionTerminalId apunta aquí. Global (no companyId):
--- dbo.commission_terminals ya existía en la base (1 fila: Mercado
+-- dbo.commissionTerminals (antes commission_terminals) ya existía en la base (1 fila: Mercado
 -- Pago @ 3.6%) sin CRUD ni endpoint -- este archivo solo agrega
 -- el procedimiento almacenado sobre la tabla existente, no la
 -- vuelve a crear ni cambia su forma.
 -- ============================================================
 
--- ── Table: commission_terminals (ya existe en prod; guard solo para entornos nuevos) ──
-IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'commission_terminals')
-CREATE TABLE [dbo].[commission_terminals] (
+-- ── Table: commissionTerminals (renamed from commission_terminals 2026-09-18) (ya existe en prod; guard solo para entornos nuevos) ──
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'commissionTerminals')
+CREATE TABLE [dbo].[commissionTerminals] (
     commissionTerminalId INT IDENTITY(1,1) PRIMARY KEY,
     provider              VARCHAR(40)   NOT NULL,
     terminalName          VARCHAR(80)   NOT NULL,
@@ -54,7 +54,7 @@ BEGIN
             IF @provider IS NULL OR @terminalName IS NULL OR @commissionRatePct IS NULL
                 RAISERROR('provider, terminalName y commissionRatePct son requeridos.', 16, 1);
 
-            INSERT INTO [dbo].[commission_terminals]
+            INSERT INTO [dbo].[commissionTerminals]
                 (provider, terminalName, paymentMethod, country, commissionRatePct, fixedFeeAmount, currency, isActive)
             VALUES
                 (@provider, @terminalName, @paymentMethod, @country, @commissionRatePct, @fixedFeeAmount, @currency, ISNULL(@isActive, 1))
@@ -63,7 +63,7 @@ BEGIN
                            commissionRatePct, fixedFeeAmount, currency, isActive,
                            CONVERT(NVARCHAR, validFrom, 127) AS validFrom,
                            CONVERT(NVARCHAR, createdAt, 127) AS createdAt
-                    FROM [dbo].[commission_terminals]
+                    FROM [dbo].[commissionTerminals]
                     WHERE commissionTerminalId = SCOPE_IDENTITY()
                     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
         END
@@ -73,7 +73,7 @@ BEGIN
             IF @commissionTerminalId IS NULL
                 RAISERROR('commissionTerminalId es requerido.', 16, 1);
 
-            UPDATE [dbo].[commission_terminals]
+            UPDATE [dbo].[commissionTerminals]
             SET provider           = ISNULL(@provider, provider),
                 terminalName       = ISNULL(@terminalName, terminalName),
                 paymentMethod      = ISNULL(@paymentMethod, paymentMethod),
@@ -88,7 +88,7 @@ BEGIN
 
             SELECT (SELECT TOP 1 commissionTerminalId, provider, terminalName, paymentMethod, country,
                            commissionRatePct, fixedFeeAmount, currency, isActive
-                    FROM [dbo].[commission_terminals]
+                    FROM [dbo].[commissionTerminals]
                     WHERE commissionTerminalId = @commissionTerminalId
                     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
         END
@@ -98,7 +98,7 @@ BEGIN
             IF @commissionTerminalId IS NULL
                 RAISERROR('commissionTerminalId es requerido.', 16, 1);
 
-            UPDATE [dbo].[commission_terminals]
+            UPDATE [dbo].[commissionTerminals]
             SET isActive = 0, updatedAt = GETDATE()
             WHERE commissionTerminalId = @commissionTerminalId
 
@@ -130,7 +130,7 @@ BEGIN
                 CONVERT(NVARCHAR, validFrom, 127) AS validFrom,
                 CONVERT(NVARCHAR, validTo, 127)   AS validTo,
                 CONVERT(NVARCHAR, createdAt, 127) AS createdAt
-         FROM [dbo].[commission_terminals]
+         FROM [dbo].[commissionTerminals]
          ORDER BY provider, terminalName
          FOR JSON PATH, ROOT('commissionTerminals')),
         '{"commissionTerminals":[]}'
@@ -153,7 +153,7 @@ BEGIN
                 commissionRatePct, fixedFeeAmount, currency, isActive,
                 CONVERT(NVARCHAR, validFrom, 127) AS validFrom,
                 CONVERT(NVARCHAR, createdAt, 127) AS createdAt
-         FROM [dbo].[commission_terminals]
+         FROM [dbo].[commissionTerminals]
          WHERE commissionTerminalId = @commissionTerminalId
          FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
         '{}'
@@ -166,7 +166,7 @@ GO
 -- provider = 'mercadopago') was inserted at 3.6% — correct it to
 -- the actual negotiated rate of 4.2%. Idempotent (targets by id).
 -- ============================================================
-UPDATE [dbo].[commission_terminals]
+UPDATE [dbo].[commissionTerminals]
 SET commissionRatePct = 4.200, updatedAt = GETDATE()
 WHERE commissionTerminalId = 1 AND provider = 'mercadopago';
 GO

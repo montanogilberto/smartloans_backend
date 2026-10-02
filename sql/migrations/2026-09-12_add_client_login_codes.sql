@@ -121,9 +121,17 @@ BEGIN
                 SELECT TOP 1
                     c.clientId, c.companyId, c.first_name, c.last_name,
                     u.userId AS existingUserId,
-                    ISNULL(u.firstLoginCompleted, 0) AS firstLoginCompleted
+                    ISNULL(u.firstLoginCompleted, 0) AS firstLoginCompleted,
+                    -- 2026-09-28: the user's CURRENT role in this company, so
+                    -- client_login.py never overwrites it with 'pos'.
+                    -- hasCompanyRole is never NULL (FOR JSON PATH drops NULLs).
+                    CASE WHEN uc.userId IS NOT NULL THEN 1 ELSE 0 END AS hasCompanyRole,
+                    uc.roleName AS existingRoleCode,
+                    r.name AS existingRoleName
                 FROM dbo.clients c
                 LEFT JOIN dbo.users u ON u.clientId = c.clientId
+                LEFT JOIN dbo.userCompanies uc ON uc.userId = u.userId AND uc.companyId = c.companyId
+                LEFT JOIN dbo.roles r ON r.code = uc.roleName
                 WHERE RIGHT(REPLACE(c.cellphone, '+', ''), 10) = RIGHT(REPLACE(@phone, '+', ''), 10)
                 ORDER BY CASE WHEN u.userId IS NOT NULL THEN 0 ELSE 1 END
                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
@@ -190,9 +198,13 @@ BEGIN
 
             DECLARE @pwClientJson NVARCHAR(MAX) = (
                 SELECT TOP 1
-                    c.clientId, c.companyId, c.first_name, c.last_name, u.userId
+                    c.clientId, c.companyId, c.first_name, c.last_name, u.userId,
+                    uc.roleName AS existingRoleCode,
+                    r.name AS existingRoleName
                 FROM dbo.clients c
                 INNER JOIN dbo.users u ON u.clientId = c.clientId
+                LEFT JOIN dbo.userCompanies uc ON uc.userId = u.userId AND uc.companyId = c.companyId
+                LEFT JOIN dbo.roles r ON r.code = uc.roleName
                 WHERE RIGHT(REPLACE(c.cellphone, '+', ''), 10) = RIGHT(REPLACE(@phone, '+', ''), 10)
                   AND u.password IS NOT NULL AND u.password <> ''
                   AND u.password = @inputPassword

@@ -16401,24 +16401,28 @@ BEGIN
   -- Header
   ------------------------------------------------------------------
   DECLARE
-    @paymentMethod  NVARCHAR(50),
-    @paymentDate    DATETIME,
-    @userId         INT,
-    @clientId       INT,
-    @companyId      INT,
-    @incomeTotal    DECIMAL(10,2),
-    @cashPaid       DECIMAL(10,2),
-    @cashReturn     DECIMAL(10,2);
+    @paymentMethod   NVARCHAR(50),
+    @paymentDate     DATETIME,
+    @userId          INT,
+    @clientId        INT,
+    @companyId       INT,
+    @incomeTotal     DECIMAL(10,2),
+    @cashPaid        DECIMAL(10,2),
+    @cashReturn      DECIMAL(10,2),
+    @incomeDiscount  DECIMAL(10,2),
+    @promotionCode   NVARCHAR(30);
 
   SELECT
-    @paymentMethod = i.paymentMethod,
-    @paymentDate   = DATEADD(HOUR, -7, i.paymentDate),  -- ✅ FIX: UTC -> Hermosillo (UTC-7)
-    @userId        = i.userId,
-    @clientId      = i.clientId,
-    @companyId     = i.companyId,
-    @incomeTotal   = i.total,
-    @cashPaid      = i.cashPaid,
-    @cashReturn    = i.cashReturn
+    @paymentMethod   = i.paymentMethod,
+    @paymentDate     = DATEADD(HOUR, -7, i.paymentDate),  -- ✅ FIX: UTC -> Hermosillo (UTC-7)
+    @userId          = i.userId,
+    @clientId        = i.clientId,
+    @companyId       = i.companyId,
+    @incomeTotal     = i.total,
+    @cashPaid        = i.cashPaid,
+    @cashReturn      = i.cashReturn,
+    @incomeDiscount  = i.discountAmount,
+    @promotionCode   = i.promotionCode
   FROM dbo.income i
   WHERE i.incomeId = @incomeId;
 
@@ -16474,7 +16478,8 @@ BEGIN
   DECLARE
     @subtotal DECIMAL(10,2),
     @iva      DECIMAL(10,2),
-    @total    DECIMAL(10,2);
+    @total    DECIMAL(10,2),
+    @discount DECIMAL(10,2);
 
   SET @subtotal = ISNULL((SELECT SUM(lineSubtotal) FROM #TicketProducts), 0);
 
@@ -16484,6 +16489,15 @@ BEGIN
   -- IVA derived from stored total - subtotal (if included)
   SET @iva = CASE
     WHEN @total >= @subtotal THEN ROUND(@total - @subtotal, 2)
+    ELSE 0
+  END;
+
+  -- Prefer the persisted discountAmount (source of truth, set by sp_income's
+  -- B2G1 promo engine); fall back to subtotal-total for older rows saved
+  -- before that column was populated on this ticket's income row.
+  SET @discount = CASE
+    WHEN @incomeDiscount IS NOT NULL AND @incomeDiscount > 0 THEN @incomeDiscount
+    WHEN @total < @subtotal THEN ROUND(@subtotal - @total, 2)
     ELSE 0
   END;
 
@@ -16589,6 +16603,8 @@ BEGIN
         @subtotal       AS subtotal,
         @iva            AS iva,
         @total          AS total,
+        @discount       AS discount,
+        @promotionCode  AS promotionCode,
         @amountReceived AS amountReceived,
         @change         AS [change]
       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER

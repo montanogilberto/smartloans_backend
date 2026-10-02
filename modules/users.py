@@ -207,7 +207,8 @@ def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str 
     message = f"Tu código {brand} es: {code}. Expira en 10 min."
     logger.info("[_send_sms_otp] raw=%s normalized=%s whatsapp=%s", phone, normalized, via_whatsapp)
     if via_whatsapp:
-        send_whatsapp(normalized, message)
+        # AUTHENTICATION template: Meta fixes its text, so no brand there.
+        send_whatsapp(normalized, message, "codigo_verificacion", [code], button_param=code)
     else:
         send_sms(normalized, message)
 
@@ -336,7 +337,7 @@ def send_account_created(json_file: dict):
                     normalized = _normalize_phone(target)
                     message = _account_created_sms_message(username)
                     if method == "whatsapp":
-                        send_whatsapp(normalized, message)
+                        send_whatsapp(normalized, message, "cuenta_creada", [username])
                     else:
                         send_sms(normalized, message)
                 span.http_status = 200

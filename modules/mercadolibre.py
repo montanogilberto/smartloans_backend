@@ -9,6 +9,7 @@ Dynamic PKCE OAuth for Mercado Libre:
 """
 
 import os
+import json
 import logging
 import base64
 import hashlib
@@ -70,126 +71,89 @@ def generate_pkce_pair() -> Tuple[str, str]:
 # ---------------------------------------------------------
 # DB: OAuth state
 # ---------------------------------------------------------
-def save_oauth_state(state: str, code_verifier: str) -> None:
+def _oauth_states_sp(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """EXEC sp_mlOAuthStates -> parsed jsonResult. Raises on SP error so
+    callers keep the old raw-SQL behavior (DB failures propagate)."""
     with _get_conn() as conn:
         cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO dbo.ml_oauth_states (state, code_verifier)
-            VALUES (%s, %s)
-            """,
-            (state, code_verifier),
-        )
-        logger.info("[DB] OAuth state saved - state: %s..., server: %s, database: %s",
-                   state[:8], conn.server, conn.database)
+        cur.execute("EXEC sp_mlOAuthStates @pjsonfile = %s",
+                    (json.dumps({"mlOAuthStates": [payload]}),))
+        row = cur.fetchone()
+        result = json.loads(row[0]) if row and row[0] else {}
+        if "error" in result:
+            raise RuntimeError(f"sp_mlOAuthStates {payload.get('action')}: {result['error']}")
+        return result
+
+
+def save_oauth_state(state: str, code_verifier: str) -> None:
+    _oauth_states_sp({"action": "save", "state": state, "code_verifier": code_verifier})
+    logger.info("[DB] OAuth state saved - state: %s...", state[:8])
 
 
 def pop_code_verifier(state: str) -> Optional[str]:
-    with _get_conn() as conn:
-        cur = conn.cursor()
+    # Atomic in the SP: marks used_at and returns the verifier in one
+    # statement, so a replayed callback for the same state gets nothing.
+    verifier = _oauth_states_sp({"action": "pop", "state": state}).get("code_verifier")
 
-        cur.execute(
-            """
-            SELECT code_verifier
-            FROM dbo.ml_oauth_states
-            WHERE state = %s AND used_at IS NULL
-            """,
-            (state,),
-        )
-        row = cur.fetchone()
+    if not verifier:
+        logger.warning("[DB] No code_verifier found for state: %s", state[:8])
+        return None
 
-        if not row:
-            logger.warning("[DB] No code_verifier found for state: %s", state[:8])
-            return None
-
-        verifier = row[0]
-
-        cur.execute(
-            """
-            UPDATE dbo.ml_oauth_states
-            SET used_at = SYSUTCDATETIME()
-            WHERE state = %s
-            """,
-            (state,),
-        )
-
-        logger.info("[DB] Code verifier retrieved and marked used - state: %s...", state[:8])
-        return verifier
+    logger.info("[DB] Code verifier retrieved and marked used - state: %s...", state[:8])
+    return verifier
 
 
 # ---------------------------------------------------------
 # DB: Tokens
 # ---------------------------------------------------------
+def _tokens_sp(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """EXEC sp_mlTokens -> parsed jsonResult. Raises on SP error."""
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("EXEC sp_mlTokens @pjsonfile = %s",
+                    (json.dumps({"mlTokens": [payload]}),))
+        row = cur.fetchone()
+        result = json.loads(row[0]) if row and row[0] else {}
+        if "error" in result:
+            raise RuntimeError(f"sp_mlTokens {payload.get('action')}: {result['error']}")
+        return result
+
+
 def upsert_tokens(token_json: Dict[str, Any]) -> None:
     access_token = token_json["access_token"]
     refresh_token = token_json["refresh_token"]
     expires_in = int(token_json.get("expires_in", 21600))
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in - 60)
 
-    with _get_conn() as conn:
-        cur = conn.cursor()
-
-        cur.execute("SELECT TOP 1 id FROM dbo.ml_tokens ORDER BY id DESC")
-        row = cur.fetchone()
-
-        if row:
-            token_id = row[0]
-            cur.execute(
-                """
-                UPDATE dbo.ml_tokens
-                SET access_token = %s,
-                    refresh_token = %s,
-                    expires_at = %s,
-                    updated_at = SYSUTCDATETIME()
-                WHERE id = %s
-                """,
-                (access_token, refresh_token, expires_at, token_id),
-            )
-            logger.info("[DB] Tokens updated - token_id: %s, server: %s, database: %s",
-                       token_id, conn.server, conn.database)
-        else:
-            cur.execute(
-                """
-                INSERT INTO dbo.ml_tokens (access_token, refresh_token, expires_at)
-                VALUES (%s, %s, %s)
-                """,
-                (access_token, refresh_token, expires_at),
-            )
-            # Get the newly inserted ID
-            cur.execute("SELECT TOP 1 id FROM dbo.ml_tokens ORDER BY id DESC")
-            new_row = cur.fetchone()
-            if new_row:
-                logger.info("[DB] Tokens inserted - token_id: %s, server: %s, database: %s",
-                           new_row[0], conn.server, conn.database)
+    # Atomic in the SP (UPDLOCK probe + update-or-insert in one transaction).
+    result = _tokens_sp({
+        "action": "upsert",
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        # naive UTC ISO-8601, same wall-clock value the old raw SQL stored
+        "expires_at": expires_at.replace(tzinfo=None).isoformat(timespec="seconds"),
+    })
+    logger.info("[DB] Tokens %s - token_id: %s", result.get("op"), result.get("id"))
 
 
 def get_latest_tokens() -> Optional[Dict[str, Any]]:
-    with _get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT TOP 1 access_token, refresh_token, expires_at
-            FROM dbo.ml_tokens
-            ORDER BY id DESC
-            """
-        )
-        row = cur.fetchone()
+    tokens = _tokens_sp({"action": "latest"})
 
-        if not row:
-            logger.warning("[DB] No tokens found in database - server: %s, database: %s",
-                          conn.server, conn.database)
-            return None
+    if not tokens:
+        logger.warning("[DB] No tokens found in database")
+        return None
 
-        # DEBUGGING: Log token retrieval (masked)
-        token_len = len(row[0]) if row[0] else 0
-        logger.info("[DB] Tokens retrieved - has_access: %s, access_len: %s, server: %s, database: %s",
-                   bool(row[0]), token_len, conn.server, conn.database)
+    # DEBUGGING: Log token retrieval (masked)
+    token_len = len(tokens["access_token"]) if tokens.get("access_token") else 0
+    logger.info("[DB] Tokens retrieved - has_access: %s, access_len: %s",
+               bool(tokens.get("access_token")), token_len)
 
-        return {
-            "access_token": row[0],
-            "refresh_token": row[1],
-            "expires_at": row[2],
-        }
+    return {
+        "access_token": tokens.get("access_token"),
+        "refresh_token": tokens.get("refresh_token"),
+        # naive UTC; get_valid_access_token() attaches tzinfo
+        "expires_at": datetime.fromisoformat(tokens["expires_at"]),
+    }
 
 
 # ---------------------------------------------------------

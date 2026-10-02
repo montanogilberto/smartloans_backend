@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from modules.income import income_sp, all_income_sp, monthly_income_sp
+from modules.incomePayments import income_payments_sp
 
 router = APIRouter()
 
@@ -26,3 +27,10 @@ with open("./docs_description/income.txt", "r") as file:
 @router.post("/income", summary="CRUD de income", description=income_docstring)
 def income(json: dict):
     return income_sp(json)
+
+# Split-payment breakdown for one sale (action 2 = list by incomeId; writes
+# happen internally via modules.income's new-income hook, not this route).
+# Body: {"incomePayments": [{"action": 2, "incomeId": N}]}
+@router.post("/incomePayments", summary="List the payment-method breakdown for a split-payment sale")
+def income_payments(json: dict):
+    return income_payments_sp(json)
