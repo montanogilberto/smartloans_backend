@@ -28,7 +28,7 @@ from urllib.parse import unquote, urlparse
 
 from azure.storage.blob import BlobSasPermissions, generate_blob_sas
 
-from modules.ticket_receipts import _blob_service_client
+from modules.ticket_receipts import _blob_service_client, get_container_name
 
 logger = logging.getLogger(__name__)
 
@@ -67,13 +67,56 @@ def verify_token(token: str) -> tuple[int, int] | None:
     return company_id, income_id
 
 
-def sas_url(receipt_url: str) -> str:
-    """Read-only, short-lived URL for a stored receipt blob URL
-    ({account}/{container}/{blob path})."""
+def _blob_path(receipt_url: str) -> str:
+    """'{container}/{blob path}' of a stored blob URL."""
     path = unquote(urlparse(receipt_url).path).lstrip("/")
     container, _, blob_path = path.partition("/")
     if not container or not blob_path:
         raise ValueError(f"Not a blob URL: {receipt_url}")
+    return path
+
+
+def file_link(receipt_url: str) -> str | None:
+    """Signed link to one stored receipt file, for receipts that are not POS
+    incomes (arcade chip tickets). The file path travels inside the link, so
+    no table lookup is needed; the signature stops anyone from swapping it."""
+    if not _secret() or not receipt_url:
+        return None
+    path = _blob_path(receipt_url)
+    payload = base64.urlsafe_b64encode(path.encode()).decode().rstrip("=")
+    signature = base64.urlsafe_b64encode(
+        hmac.new(_secret(), f"file:{path}".encode(), hashlib.sha256).digest()).decode()[:22]
+    base = os.getenv("BACKEND_PUBLIC_URL", "https://smartloansbackend.azurewebsites.net").rstrip("/")
+    return f"{base}/recibo/f/{payload}.{signature}"
+
+
+def verify_file_token(token: str) -> str | None:
+    """'{container}/{blob path}' for a genuine file token, else None. Only the
+    receipts container is ever served."""
+    if not _secret() or "." not in (token or ""):
+        return None
+    payload, _, signature = token.rpartition(".")
+    try:
+        path = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode()
+    except Exception:
+        return None
+    expected = base64.urlsafe_b64encode(
+        hmac.new(_secret(), f"file:{path}".encode(), hashlib.sha256).digest()).decode()[:22]
+    if not hmac.compare_digest(signature, expected):
+        return None
+    if path.partition("/")[0] != get_container_name():
+        return None
+    return path
+
+
+def sas_url(receipt_url: str) -> str:
+    """Read-only, short-lived URL for a stored receipt blob URL
+    ({account}/{container}/{blob path})."""
+    return sas_url_for_path(_blob_path(receipt_url))
+
+
+def sas_url_for_path(path: str) -> str:
+    container, _, blob_path = path.partition("/")
     service = _blob_service_client()
     token = generate_blob_sas(
         account_name=service.account_name,

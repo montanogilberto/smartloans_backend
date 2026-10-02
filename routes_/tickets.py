@@ -117,6 +117,17 @@ async def redirect_ticket(short_code: str):
     return JSONResponse(content={"error": "This receipt link is no longer valid."}, status_code=410)
 
 
+@router.get("/recibo/f/{token}", summary="Open a signed receipt file",
+            description="Signed link to one stored receipt file (arcade chip tickets). "
+                        "Redirects to a short-lived read-only URL.")
+def open_receipt_file(token: str):
+    path = receiptLinks.verify_file_token(token)
+    if not path:
+        raise HTTPException(status_code=404, detail="Recibo no encontrado")
+    return RedirectResponse(url=receiptLinks.sas_url_for_path(path), status_code=302,
+                            headers={"Cache-Control": "no-store"})
+
+
 @router.get("/recibo/{token}", summary="Open a customer receipt",
             description="Signed customer receipt link (modules/receiptLinks.py). Redirects to a "
                         "short-lived read-only URL of the receipt, or shows a purchase summary "

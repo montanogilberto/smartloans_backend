@@ -27,6 +27,7 @@ from email.mime.text import MIMEText
 
 import certifi
 
+from modules.receiptLinks import file_link as receipt_file_link
 from modules.ticket_receipts import save_receipt_html
 from observability import log_workflow_step
 
@@ -117,10 +118,11 @@ def build_ticket_html(ticket: dict) -> str:
 
 def _upload_ticket(purchase_id: int, company_id: int, html: str) -> str | None:
     """
-    Sube el ticket a ADLS con nombre IMPREDECIBLE.
+    Sube el ticket a ADLS con nombre IMPREDECIBLE y devuelve el enlace
+    firmado (/recibo/f/...) que se le da al jugador.
 
-    El uuid4 no es adorno: el contenedor es de lectura publica y un
-    `receipt_{id}.html` secuencial se puede enumerar.
+    El uuid4 no es adorno: mientras el contenedor siga siendo de lectura
+    publica, un `receipt_{id}.html` secuencial se puede enumerar.
     """
     stamp = datetime.utcnow()
     file_name = f"arcade_{stamp:%Y%m%d}_{uuid.uuid4().hex}.html"
@@ -131,7 +133,11 @@ def _upload_ticket(purchase_id: int, company_id: int, html: str) -> str | None:
             html=html,
             file_name=file_name,
         )
-        return result.get("receiptUrl")
+        # Al jugador (correo y arcadePurchases.receiptUrl) le llega el enlace
+        # firmado, no la URL del blob: el contenedor dejara de ser publico y
+        # /recibo/f/ entrega el ticket con un SAS de pocos minutos.
+        blob_url = result.get("receiptUrl")
+        return receipt_file_link(blob_url) or blob_url
     except Exception as e:
         print(f"[arcadeTicket] no se pudo subir el ticket {purchase_id}: {type(e).__name__}: {e}")
         return None
