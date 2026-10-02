@@ -8,7 +8,11 @@ from pydantic import BaseModel
 from modules.tickets import one_tickets_sp, one_ticket_tracking_sp, ticket_redirect_sp
 from modules.ticket_notifications import send_ticket_sms, send_ticket_whatsapp
 from modules.ticket_receipts import save_receipt_html
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+from databases import connection
+from modules import receiptLinks
+from modules.income import _get_final_total_and_discount
 
 router = APIRouter()
 
@@ -90,11 +94,12 @@ def send_whatsapp(ticketId: str, payload: TicketNotificationRequest):
 @router.post("/api/tickets/receipt-html", summary="Persist receipt HTML", description=ticket_receipt_html_docstring)
 def save_receipt(payload: TicketReceiptHtmlRequest):
     try:
+        # payload.fileName is ignored: the POS sends receipt_{incomeId}.html,
+        # a guessable name. The blob gets a random one (ticket_receipts).
         result = save_receipt_html(
             income_id=payload.incomeId,
             branch_id=payload.branchId,
             html=payload.html,
-            file_name=payload.fileName
         )
         return JSONResponse(content=result, status_code=200)
     except ValueError as e:
@@ -105,31 +110,42 @@ def save_receipt(payload: TicketReceiptHtmlRequest):
         return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
 
 
-@router.get("/r/{short_code}", summary="Redirect ticket receipt", description=ticket_redirect_docstring)
+@router.get("/r/{short_code}", summary="Retired receipt short link", description=ticket_redirect_docstring)
 async def redirect_ticket(short_code: str):
-    payload = {
-        "ticket": [
-            {
-                "action": "redirect",
-                "shortCode": short_code
-            }
-        ]
-    }
+    # Retired: short codes are T{incomeId}, so counting up through them handed
+    # out every customer's receipt. Customer links are /recibo/{token} now.
+    return JSONResponse(content={"error": "This receipt link is no longer valid."}, status_code=410)
 
-    response = ticket_redirect_sp(payload)
 
-    if response.status_code != 200:
-        raise HTTPException(status_code=500, detail="Failed to fetch ticket redirect data")
+@router.get("/recibo/{token}", summary="Open a customer receipt",
+            description="Signed customer receipt link (modules/receiptLinks.py). Redirects to a "
+                        "short-lived read-only URL of the receipt, or shows a purchase summary "
+                        "while the ticket has not been printed yet.")
+def open_receipt(token: str):
+    verified = receiptLinks.verify_token(token)
+    if not verified:
+        raise HTTPException(status_code=404, detail="Recibo no encontrado")
+    company_id, income_id = verified
+    no_store = {"Cache-Control": "no-store"}
 
-    result = response.body.decode("utf-8")
-    result_json = json.loads(result)
+    response = ticket_redirect_sp({"ticket": [{"action": "redirect", "shortCode": f"T{income_id}"}]})
+    # A sale that was never printed has no ticket row: the SP's FOR JSON
+    # returns NULL and ticket_redirect_sp answers 500 — same as "no receipt".
+    tickets = (json.loads(response.body).get("tickets") or []) if response.status_code == 200 else []
+    stored_url = tickets[0].get("receiptUrl") if tickets else None
+    if stored_url:
+        try:
+            return RedirectResponse(url=receiptLinks.sas_url(stored_url), status_code=302, headers=no_store)
+        except Exception as e:
+            print(f"[tickets] receipt SAS failed for income {income_id}: {e}")
 
-    tickets = result_json.get("tickets", [])
-    if not tickets:
-        raise HTTPException(status_code=404, detail="Ticket not found")
-
-    receipt_url = tickets[0].get("receiptUrl")
-    if not receipt_url:
-        raise HTTPException(status_code=404, detail="Ticket not found")
-
-    return RedirectResponse(url=receipt_url, status_code=302)
+    conn = None
+    try:
+        conn = connection()
+        total, discount, _promo = _get_final_total_and_discount(conn, income_id, company_id)
+    finally:
+        if conn:
+            conn.close()
+    if total is None:
+        raise HTTPException(status_code=404, detail="Recibo no encontrado")
+    return HTMLResponse(receiptLinks.summary_page(income_id, total, discount), headers=no_store)

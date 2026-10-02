@@ -1,5 +1,6 @@
 from datetime import datetime
 import os
+import uuid
 from typing import Dict, Any
 
 from azure.storage.blob import BlobServiceClient, ContentSettings
@@ -41,10 +42,13 @@ def _blob_service_client() -> BlobServiceClient:
 
 
 def build_receipt_blob_path(income_id: int, file_name: str | None = None, now: datetime | None = None) -> str:
+    """Default name is random: 'receipt_{incomeId}.html' let anyone count up
+    through income IDs and read other customers' receipts. Customers reach
+    their receipt through modules/receiptLinks.py, never by its blob name."""
     current = now or datetime.utcnow()
     if file_name and file_name.strip():
         return f"receipts/{current.year}/{current.month:02d}/{file_name.strip()}"
-    return f"receipts/{current.year}/{current.month:02d}/receipt_{income_id}.html"
+    return f"receipts/{current.year}/{current.month:02d}/receipt_{uuid.uuid4().hex}.html"
 
 
 def save_receipt_html(income_id: int, branch_id: int, html: str, file_name: str | None = None) -> Dict[str, Any]:
