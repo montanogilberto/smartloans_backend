@@ -1,0 +1,5 @@
+Returns all factoryRunUsages records filtered by the provided criteria via sp_factoryRunUsages_all.
+Stored procedure: EXEC [dbo].[sp_factoryRunUsages_all] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/all_factoryRunUsages"   -H "Content-Type: application/json"   -d '{"factoryRunUsages":[{}]}'
