@@ -15,23 +15,26 @@
 -- sp_journalEntries / sp_journalEntries_one: @pjsonfile NVARCHAR(MAX), fields
 -- via JSON_VALUE on $.<root>[0], one [jsonResult] column, FOR JSON PATH.
 --
---   sp_expense_one  {"expenses":[{"expenseId":N}]}
+--   sp_expense_one  {"expenses":[{"expenseId":N,"companyId":N}]}
 --     -> {"expenseId","companyId","total","paymentMethod","expenseType"}
---        or '{}' when the expense no longer exists (deleted).
+--        or '{}' when the expense no longer exists (deleted) or belongs to
+--        another company.
 --
 --   sp_journalEntries_byReference
---        {"journalEntries":[{"referenceType":"expense","referenceId":N,
---                            "status":"POSTED"}]}          (status optional)
+--        {"journalEntries":[{"companyId":N,"referenceType":"expense",
+--                            "referenceId":N,"status":"POSTED"}]}  (status optional)
 --     -> [{"entryId","companyId","entryDate":"YYYY-MM-DD","amount",
 --          "debitCode","creditCode"}, ...] ordered by entryId, or '[]'.
 --        debitCode/creditCode = the account code of the first debit / credit
 --        line — the 2-line shape the auto-post writes.
 --
--- No companyId filter, on purpose: both are internal reads used only by the
--- backend's ledger sync (no route exposes them). The sync must see the
--- expense's CURRENT company and every POSTED entry for that expense in ANY
--- company, so it can detect and correct an expense moved between companies.
--- Filtering by the caller's companyId would hide exactly that case.
+-- companyId is REQUIRED and filters both reads (multi-tenancy rule: never
+-- return cross-company data). The backend passes the companyId of the
+-- expense request being synced. Consequence, accepted 2026-10-02: an expense
+-- moved to another company (sp_expense action 2 can still overwrite
+-- companyId) is not followed across companies — its old company's entry is
+-- left as-is. Closing that hole belongs in sp_expense (scope action 2/3 by
+-- companyId and stop it changing companyId), not in these reads.
 -- Idempotent: CREATE OR ALTER is always safe to re-run.
 -- =============================================================================
 
@@ -47,10 +50,11 @@ BEGIN
     SET NOCOUNT ON;
     BEGIN TRY
         DECLARE @expenseId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.expenses[0].expenseId'));
+        DECLARE @companyId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.expenses[0].companyId'));
 
-        IF @expenseId IS NULL
+        IF @expenseId IS NULL OR @companyId IS NULL
         BEGIN
-            SELECT '{"error":"expenseId is required"}' AS [jsonResult];
+            SELECT '{"error":"expenseId and companyId are required"}' AS [jsonResult];
             RETURN;
         END
 
@@ -58,6 +62,7 @@ BEGIN
             (SELECT expenseId, companyId, total, paymentMethod, expenseType
                FROM dbo.expenses
               WHERE expenseId = @expenseId
+                AND companyId = @companyId
              FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES),
             '{}'
         ) AS [jsonResult];
@@ -74,13 +79,14 @@ AS
 BEGIN
     SET NOCOUNT ON;
     BEGIN TRY
+        DECLARE @companyId     INT          = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.journalEntries[0].companyId'));
         DECLARE @referenceType NVARCHAR(30) = JSON_VALUE(@pjsonfile, '$.journalEntries[0].referenceType');
         DECLARE @referenceId   INT          = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.journalEntries[0].referenceId'));
         DECLARE @status        NVARCHAR(20) = JSON_VALUE(@pjsonfile, '$.journalEntries[0].status');
 
-        IF @referenceType IS NULL OR @referenceId IS NULL
+        IF @companyId IS NULL OR @referenceType IS NULL OR @referenceId IS NULL
         BEGIN
-            SELECT '{"error":"referenceType and referenceId are required"}' AS [jsonResult];
+            SELECT '{"error":"companyId, referenceType and referenceId are required"}' AS [jsonResult];
             RETURN;
         END
 
@@ -100,7 +106,8 @@ BEGIN
                       WHERE l.journalEntryId = e.entryId AND l.credit > 0
                       ORDER BY l.journalEntryLineId) AS creditCode
                FROM dbo.journalEntries e
-              WHERE e.referenceType = @referenceType
+              WHERE e.companyId     = @companyId
+                AND e.referenceType = @referenceType
                 AND e.referenceId   = @referenceId
                 AND (@status IS NULL OR e.status = @status)
               ORDER BY e.entryId

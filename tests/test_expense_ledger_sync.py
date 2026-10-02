@@ -43,8 +43,8 @@ class SyncBase(unittest.TestCase):
         self.row, self.posted = expense_row(), [posted_entry()]
         self.void_error = None
         self.patches = [
-            mock.patch.object(je, '_fetch_expense', side_effect=lambda _id: self.row),
-            mock.patch.object(je, '_fetch_posted_expense_entries', side_effect=lambda _id: list(self.posted)),
+            mock.patch.object(je, '_fetch_expense', side_effect=self._fetch_expense),
+            mock.patch.object(je, '_fetch_posted_expense_entries', side_effect=self._fetch_posted),
             mock.patch.object(je, '_get_account_id', side_effect=lambda c, code: self.catalog.get(c, {}).get(code)),
             mock.patch.object(je, '_sp', side_effect=self._sp),
         ]
@@ -54,6 +54,14 @@ class SyncBase(unittest.TestCase):
     def tearDown(self):
         for p in self.patches:
             p.stop()
+
+    # The SPs filter by companyId: model that, so a test can't pass by
+    # reading another company's row or entries.
+    def _fetch_expense(self, _id, company_id):
+        return self.row if self.row and self.row["companyId"] == company_id else None
+
+    def _fetch_posted(self, _id, company_id):
+        return [e for e in self.posted if e["companyId"] == company_id]
 
     def _sp(self, proc, payload):
         self.assertEqual(proc, 'sp_journalEntries')
@@ -75,13 +83,13 @@ class SyncBase(unittest.TestCase):
 
 class ResyncTest(SyncBase):
     def test_unchanged_expense_touches_nothing(self):
-        out = je.resync_expense_journal_entry(5)
+        out = je.resync_expense_journal_entry(5, 1)
         self.assertEqual(out["status"], "unchanged")
         self.assertEqual(self.calls, [])
 
     def test_changed_total_voids_then_reposts_with_same_date_and_accounts(self):
         self.row = expense_row(total=250.5)
-        out = je.resync_expense_journal_entry(5)
+        out = je.resync_expense_journal_entry(5, 1)
         self.assertEqual(out, {"status": "reposted", "voided": [77]})
         self.assertEqual([c[0] for c in self.calls], ["void", "post"])   # void first: the duplicate guard
         entry = self.posts()[0]
@@ -91,39 +99,40 @@ class ResyncTest(SyncBase):
 
     def test_payment_method_change_moves_credit_caja_to_bancos(self):
         self.row = expense_row(paymentMethod="Tarjeta")
-        je.resync_expense_journal_entry(5)
+        je.resync_expense_journal_entry(5, 1)
         self.assertEqual([l['accountId'] for l in self.posts()[0]['lines']], [505, 105])
 
     def test_expense_type_change_moves_debit_account(self):
         self.row = expense_row(expenseType="payroll")
-        je.resync_expense_journal_entry(5)
+        je.resync_expense_journal_entry(5, 1)
         self.assertEqual([l['accountId'] for l in self.posts()[0]['lines']], [510, 101])
 
-    def test_company_change_voids_in_old_company_and_posts_in_new(self):
-        self.row = expense_row(companyId=1008)
-        je.resync_expense_journal_entry(5)
-        self.assertEqual(self.voids(), [("void", 77, 1)])
-        entry = self.posts()[0]
-        self.assertEqual(entry['companyId'], 1008)
-        self.assertEqual([l['accountId'] for l in entry['lines']], [9505, 9101])
+    def test_lookups_are_scoped_to_the_requesting_company(self):
+        # company 1008 asks about expense 5, which (with its entry) is company 1's:
+        # nothing is visible to it, so nothing is voided or posted anywhere.
+        out = je.resync_expense_journal_entry(5, 1008)
+        self.assertEqual(out["status"], "no_entry")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(je.void_expense_journal_entries(5, 1008)["status"], "no_entry")
+        self.assertEqual(self.calls, [])
 
     def test_new_entry_date_reposts_but_same_date_does_not(self):
-        je.resync_expense_journal_entry(5, new_entry_date="2026-10-01")
+        je.resync_expense_journal_entry(5, 1, new_entry_date="2026-10-01")
         self.assertEqual(self.calls, [])
-        je.resync_expense_journal_entry(5, new_entry_date="2026-09-28")
+        je.resync_expense_journal_entry(5, 1, new_entry_date="2026-09-28")
         self.assertEqual(self.posts()[0]['entryDate'], "2026-09-28")
 
     def test_expense_with_no_entry_is_left_alone(self):
         # historic expenses are the backfill's business, never created by an edit
         self.posted = []
         self.row = expense_row(total=999)
-        self.assertEqual(je.resync_expense_journal_entry(5)["status"], "no_entry")
+        self.assertEqual(je.resync_expense_journal_entry(5, 1)["status"], "no_entry")
         self.assertEqual(self.calls, [])
 
     def test_missing_accounts_keep_the_old_entry(self):
         self.catalog = {1: {'1101': 101}}   # no 5105
         self.row = expense_row(total=250)
-        out = je.resync_expense_journal_entry(5)
+        out = je.resync_expense_journal_entry(5, 1)
         self.assertEqual(out["status"], "skipped_missing_accounts")
         self.assertEqual(self.calls, [])
 
@@ -131,42 +140,42 @@ class ResyncTest(SyncBase):
         self.row = expense_row(total=250)
         self.void_error = "boom"
         with self.assertRaises(RuntimeError):
-            je.resync_expense_journal_entry(5)
+            je.resync_expense_journal_entry(5, 1)
         self.assertEqual(self.posts(), [])
 
     def test_repost_failure_is_reported_not_hidden(self):
         self.row = expense_row(total=250)
         with mock.patch.object(je, '_post_movement_journal_entry', return_value=False):
-            out = je.resync_expense_journal_entry(5)
+            out = je.resync_expense_journal_entry(5, 1)
         self.assertEqual(out, {"status": "voided_repost_failed", "voided": [77]})
 
     def test_duplicate_posted_entries_are_all_voided_and_replaced_by_one(self):
         self.posted = [posted_entry(entryId=77), posted_entry(entryId=78)]
-        out = je.resync_expense_journal_entry(5)
+        out = je.resync_expense_journal_entry(5, 1)
         self.assertEqual(out["voided"], [77, 78])
         self.assertEqual(len(self.posts()), 1)
 
     def test_zero_total_voids_without_reposting(self):
         self.row = expense_row(total=0)
-        out = je.resync_expense_journal_entry(5)
+        out = je.resync_expense_journal_entry(5, 1)
         self.assertEqual((out["status"], len(self.posts())), ("voided", 0))
 
     def test_row_gone_is_treated_as_delete(self):
         self.row = None
-        out = je.resync_expense_journal_entry(5)
+        out = je.resync_expense_journal_entry(5, 1)
         self.assertEqual((out["status"], out["voided"]), ("voided", [77]))
 
 
 class VoidOnDeleteTest(SyncBase):
     def test_deleted_expense_voids_its_entry(self):
-        out = je.void_expense_journal_entries(5)
+        out = je.void_expense_journal_entries(5, 1)
         self.assertEqual(out, {"status": "voided", "voided": [77]})
         self.assertEqual(self.voids(), [("void", 77, 1)])
         self.assertEqual(self.posts(), [])
 
     def test_delete_with_no_entry_is_a_noop_and_idempotent(self):
         self.posted = []
-        self.assertEqual(je.void_expense_journal_entries(5)["status"], "no_entry")
+        self.assertEqual(je.void_expense_journal_entries(5, 1)["status"], "no_entry")
         self.assertEqual(self.calls, [])
 
 
@@ -211,8 +220,9 @@ class HookTest(unittest.TestCase):
         return started
 
     def test_successful_delete_voids_by_expense_id(self):
-        m = self._run({"expenses": [{"action": 3, "expenseId": 1002}]}, [("", "Deleted Successfully", "")])
-        m['void_expense_journal_entries'].assert_called_once_with(1002)
+        m = self._run({"expenses": [{"action": 3, "expenseId": 1002, "companyId": 1}]},
+                      [("", "Deleted Successfully", "")])
+        m['void_expense_journal_entries'].assert_called_once_with(1002, 1)
         m['resync_expense_journal_entry'].assert_not_called()
         m['post_expense_journal_entry'].assert_not_called()
 
@@ -221,13 +231,20 @@ class HookTest(unittest.TestCase):
                                       "paymentDate": "2026-10-02T03:00:00.000Z"}]},
                       [("", "Updated Successfully", "")])
         # 03:00Z on the 2nd is still the 1st in Hermosillo (UTC-7)
-        m['resync_expense_journal_entry'].assert_called_once_with(1002, new_entry_date="2026-10-01")
+        m['resync_expense_journal_entry'].assert_called_once_with(1002, 1, new_entry_date="2026-10-01")
         m['void_expense_journal_entries'].assert_not_called()
 
     def test_update_without_payment_date_keeps_entry_date(self):
-        m = self._run({"expenses": [{"action": 2, "expenseId": 1002, "receiptUrl": "https://x"}]},
+        m = self._run({"expenses": [{"action": 2, "expenseId": 1002, "companyId": 1, "receiptUrl": "https://x"}]},
                       [("", "Updated Successfully", "")])
-        m['resync_expense_journal_entry'].assert_called_once_with(1002, new_entry_date=None)
+        m['resync_expense_journal_entry'].assert_called_once_with(1002, 1, new_entry_date=None)
+
+    def test_update_or_delete_without_company_id_skips_the_sync(self):
+        for action in (2, 3):
+            m = self._run({"expenses": [{"action": action, "expenseId": 1002}]},
+                          [("", "Updated Successfully", "")])
+            m['resync_expense_journal_entry'].assert_not_called()
+            m['void_expense_journal_entries'].assert_not_called()
 
     def test_failed_update_or_delete_never_touches_the_ledger(self):
         for action in (2, 3):
@@ -243,9 +260,10 @@ class HookTest(unittest.TestCase):
         m['void_expense_journal_entries'].assert_not_called()
 
     def test_sync_error_never_breaks_the_expense_response(self):
-        m = self._run({"expenses": [{"action": 3, "expenseId": 1002}]}, [("", "Deleted Successfully", "")],
+        m = self._run({"expenses": [{"action": 3, "expenseId": 1002, "companyId": 1}]},
+                      [("", "Deleted Successfully", "")],
                       void_expense_journal_entries=RuntimeError("ledger down"))
-        m['void_expense_journal_entries'].assert_called_once_with(1002)   # raised inside, swallowed by the hook
+        m['void_expense_journal_entries'].assert_called_once_with(1002, 1)   # raised inside, swallowed by the hook
 
 
 if __name__ == "__main__":
