@@ -134,9 +134,11 @@ def _get_account_id(company_id: int, code: str):
 
 def _post_movement_journal_entry(company_id: int, reference_type: str, reference_id: int,
                                   amount: float, entry_date, description: str,
-                                  debit_code: str, credit_code: str):
+                                  debit_code: str, credit_code: str) -> bool:
+    """Best-effort post of a 2-line entry. Returns True only if an entry was
+    actually posted, so a caller that VOIDed a predecessor can tell."""
     if not company_id or not amount or amount <= 0:
-        return
+        return False
     try:
         debit_account_id = _get_account_id(company_id, debit_code)
         credit_account_id = _get_account_id(company_id, credit_code)
@@ -144,7 +146,7 @@ def _post_movement_journal_entry(company_id: int, reference_type: str, reference
             print(f"[journalEntries] skip auto-post for {reference_type} {reference_id}: "
                   f"missing account {debit_code}/{credit_code} for companyId={company_id} "
                   f"(sp_chartOfAccounts_seed may not have run for this company)")
-            return
+            return False
 
         payload = {"journalEntries": [{
             "action": 1,
@@ -161,10 +163,12 @@ def _post_movement_journal_entry(company_id: int, reference_type: str, reference
         result = _sp("sp_journalEntries", payload)
         if isinstance(result, dict) and result.get("error"):
             print(f"[journalEntries] auto-post FAILED for {reference_type} {reference_id}: {result['error']}")
-        else:
-            print(f"[journalEntries] auto-posted asiento for {reference_type} {reference_id}")
+            return False
+        print(f"[journalEntries] auto-posted asiento for {reference_type} {reference_id}")
+        return True
     except Exception as e:
         print(f"[journalEntries] auto-post EXCEPTION for {reference_type} {reference_id}: {e}")
+        return False
 
 
 def post_income_journal_entry(company_id: int, income_id: int, amount: float, entry_date=None,
@@ -187,6 +191,128 @@ def post_expense_journal_entry(company_id: int, expense_id: int, amount: float, 
         description=f"Egreso #{expense_id}",
         debit_code=expense_account_code(expense_type), credit_code=cash_or_bank_code(payment_method),
     )
+
+
+# ── Expense edit / delete -> ledger ─────────────────────────────────────────
+# sp_expense action 2 (update) overwrites the row in place and action 3
+# (delete) removes it, but the POSTED entry written on insert used to stay
+# as-is, so the books drifted from the expenses table. Journal entries are
+# immutable (only POSTED -> VOID), so a correction is VOID + a fresh post —
+# the same shape as sp_journalEntries_correctDates. Both helpers only ever
+# touch entries that already exist: they never create an entry for an expense
+# that has none (historic expenses are the backfill's business, see
+# accounting-module.md Q1), and they are idempotent, so a retried hook is safe.
+
+def _fetch_expense(expense_id: int):
+    """Current expenses row as a dict, or None if it no longer exists."""
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT companyId, total, paymentMethod, expenseType "
+            "FROM dbo.expenses WHERE expenseId = %s", (int(expense_id),))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {"companyId": row[0], "total": row[1], "paymentMethod": row[2], "expenseType": row[3]}
+    finally:
+        conn.close()
+
+
+def _fetch_posted_expense_entries(expense_id: int) -> list:
+    """POSTED journal entries for this expense (any company), with the account
+    codes they debit/credit, as the 2-line entries the auto-post writes."""
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT e.entryId, e.companyId, CONVERT(VARCHAR(10), e.entryDate, 23), e.totalDebit,
+                   (SELECT TOP 1 c.code FROM dbo.journalEntryLines l
+                      JOIN dbo.chartOfAccounts c ON c.accountId = l.accountId
+                     WHERE l.journalEntryId = e.entryId AND l.debit > 0),
+                   (SELECT TOP 1 c.code FROM dbo.journalEntryLines l
+                      JOIN dbo.chartOfAccounts c ON c.accountId = l.accountId
+                     WHERE l.journalEntryId = e.entryId AND l.credit > 0)
+              FROM dbo.journalEntries e
+             WHERE e.referenceType = 'expense' AND e.referenceId = %s AND e.status = 'POSTED'
+             ORDER BY e.entryId
+            """, (int(expense_id),))
+        return [
+            {"entryId": r[0], "companyId": r[1], "entryDate": r[2],
+             "amount": float(r[3] or 0), "debitCode": r[4], "creditCode": r[5]}
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def _void_entry(entry_id: int, company_id: int) -> None:
+    result = _sp("sp_journalEntries", {"journalEntries": [
+        {"action": 2, "entryId": entry_id, "companyId": company_id, "status": "VOID"}]})
+    if isinstance(result, dict) and result.get("error"):
+        raise RuntimeError(result["error"])
+
+
+def void_expense_journal_entries(expense_id: int) -> dict:
+    """A deleted expense must stop counting in the books: VOID its POSTED entries."""
+    voided = []
+    for entry in _fetch_posted_expense_entries(expense_id):
+        _void_entry(entry["entryId"], entry["companyId"])
+        voided.append(entry["entryId"])
+    return {"status": "voided" if voided else "no_entry", "voided": voided}
+
+
+def resync_expense_journal_entry(expense_id: int, new_entry_date=None) -> dict:
+    """After an expense update, make its POSTED entry match the row.
+
+    Compares the entry against what the row implies today (amount, expense
+    account by expenseType, Caja/Bancos by paymentMethod, company). Equal ->
+    no-op (so a receiptUrl-only update, or a payload that repeats old values,
+    leaves the books alone). Different -> VOID + re-post. `new_entry_date` is
+    the already-normalized business date, passed only when the update payload
+    itself carried a paymentDate; otherwise the entry keeps its date.
+    """
+    expense = _fetch_expense(expense_id)
+    if expense is None:
+        return void_expense_journal_entries(expense_id)
+
+    posted = _fetch_posted_expense_entries(expense_id)
+    if not posted:
+        return {"status": "no_entry", "voided": []}
+
+    company_id = expense["companyId"]
+    amount = round(float(expense["total"] or 0), 2)
+    debit_code = expense_account_code(expense["expenseType"])
+    credit_code = cash_or_bank_code(expense["paymentMethod"])
+    entry_date = new_entry_date or posted[0]["entryDate"]
+
+    if (len(posted) == 1 and posted[0]["companyId"] == company_id
+            and abs(posted[0]["amount"] - amount) < 0.005
+            and posted[0]["debitCode"] == debit_code and posted[0]["creditCode"] == credit_code
+            and posted[0]["entryDate"] == entry_date):
+        return {"status": "unchanged", "voided": []}
+
+    # Never VOID what we cannot replace: a missing account would leave the
+    # expense with no entry at all, which is worse than a stale one.
+    if amount > 0 and (not _get_account_id(company_id, debit_code)
+                       or not _get_account_id(company_id, credit_code)):
+        print(f"[journalEntries] expense {expense_id} changed but accounts {debit_code}/{credit_code} "
+              f"are missing for companyId={company_id}: leaving the old entry")
+        return {"status": "skipped_missing_accounts", "voided": []}
+
+    voided = []
+    for entry in posted:
+        _void_entry(entry["entryId"], entry["companyId"])
+        voided.append(entry["entryId"])
+
+    if amount <= 0:
+        return {"status": "voided", "voided": voided}
+    reposted = _post_movement_journal_entry(
+        company_id, 'expense', expense_id, amount, entry_date,
+        description=f"Egreso #{expense_id}", debit_code=debit_code, credit_code=credit_code,
+    )
+    return {"status": "reposted" if reposted else "voided_repost_failed", "voided": voided}
 
 
 def post_income_commission_journal_entry(company_id: int, income_id: int, commission_amount, entry_date=None):

@@ -10,7 +10,10 @@ from modules.clientFaceRecognitions import (
 )
 from observability import log_workflow_step, log_audit
 from observability.integrations import timed_integration
-from modules.journalEntries import post_expense_journal_entry
+from modules.journalEntries import (
+    _normalize_entry_date, post_expense_journal_entry,
+    resync_expense_journal_entry, void_expense_journal_entries,
+)
 
 app = FastAPI()
 
@@ -83,6 +86,22 @@ def expense_sp(json_file: dict):
                         )
                 except Exception as e:
                     print(f"[expenses] accounting auto-post hook failed: {e}")
+
+            # Best-effort: keep the ledger in step with edits and deletes. A
+            # deleted expense's entry is VOIDed; an updated one is VOIDed and
+            # re-posted only if amount/accounts/company/date actually changed.
+            # Never blocks/fails the expense response; the SP already committed.
+            if not failed and action in (2, 3) and entity_id is not None:
+                try:
+                    if action == 3:
+                        outcome = void_expense_journal_entries(entity_id)
+                    else:
+                        raw_date = first_in.get("paymentDate")
+                        outcome = resync_expense_journal_entry(
+                            entity_id, new_entry_date=_normalize_entry_date(raw_date) if raw_date else None)
+                    print(f"[expenses] ledger sync for expense {entity_id} ({action_label}): {outcome}")
+                except Exception as e:
+                    print(f"[expenses] accounting sync hook failed for expense {entity_id}: {e}")
 
             return JSONResponse(content={"result": result}, status_code=200)
         else:
