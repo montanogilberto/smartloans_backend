@@ -93,6 +93,76 @@ def send_text(channel: dict, to: str, body: str) -> Dict[str, Any]:
     return {"channel": "whatsapp", "to": to_digits, "provider": "meta", "messageId": message_id}
 
 
+# ── Outbound templates ──────────────────────────────────────────────────────
+# Messages WE start (receipts, OTP, offers, reservations) reach people who
+# haven't written in 24h, so Meta only delivers them as approved templates.
+# Template texts to register: docs/whatsapp-templates.md
+
+TEMPLATE_LANG = os.getenv("WA_TEMPLATE_LANG", "es_MX")
+
+
+def outbound_channel() -> dict | None:
+    """The number app-initiated messages go out from (WA_SENDER_PHONE_NUMBER_ID).
+    None → not configured, callers fall back to Twilio. A DB hiccup on the
+    channel lookup must not block a send: WA_ACCESS_TOKEN covers every number."""
+    phone_number_id = os.getenv("WA_SENDER_PHONE_NUMBER_ID")
+    if not phone_number_id:
+        return None
+    try:
+        return whatsappChannels.get_channel(phone_number_id) or {"phoneNumberId": phone_number_id}
+    except Exception:
+        logger.exception("[whatsappCloud] sender channel lookup failed — using WA_ACCESS_TOKEN")
+        return {"phoneNumberId": phone_number_id}
+
+
+def _param_text(value: Any) -> str:
+    """Meta rejects template params with newlines, tabs or 4+ spaces in a row
+    (error 132018), and empty params (131008)."""
+    text = re.sub(r"[\r\n\t]+", " · ", str(value if value is not None else "")).strip(" ·")
+    text = re.sub(r" {4,}", "   ", text)
+    return text or "—"
+
+
+def send_template(channel: dict, to: str, name: str, params: List[Any],
+                  button_param: str | None = None) -> Dict[str, Any]:
+    """Sends approved template `name` with body params {{1}}..{{n}}.
+    button_param fills the copy-code button of AUTHENTICATION templates."""
+    token = whatsappChannels.access_token(channel)
+    phone_number_id = channel["phoneNumberId"]
+
+    to_digits = normalize_mx_number(to)
+    components: List[Dict[str, Any]] = [{
+        "type": "body",
+        "parameters": [{"type": "text", "text": _param_text(p)} for p in params],
+    }]
+    if button_param is not None:
+        components.append({"type": "button", "sub_type": "url", "index": "0",
+                           "parameters": [{"type": "text", "text": button_param}]})
+    request_body = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_digits,
+        "type": "template",
+        "template": {"name": name, "language": {"code": TEMPLATE_LANG}, "components": components},
+    }
+    url = f"https://graph.facebook.com/{GRAPH_VERSION}/{phone_number_id}/messages"
+    # Params are left out of the trace: the OTP template carries the code.
+    with timed_integration("whatsapp_cloud", "send_template",
+                           request={"to": to_digits, "phoneNumberId": phone_number_id,
+                                    "template": name}) as span:
+        resp = httpx.post(url, json=request_body,
+                          headers={"Authorization": f"Bearer {token}"}, timeout=15.0)
+        span.http_status = resp.status_code
+        data = resp.json()
+        span.response = data
+        if resp.status_code >= 400:
+            raise RuntimeError(f"WhatsApp Cloud template {name} failed ({resp.status_code}): {data}")
+
+    message_id = (data.get("messages") or [{}])[0].get("id")
+    logger.info("[whatsappCloud] template sent | to=%s template=%s id=%s", to_digits, name, message_id)
+    return {"channel": "whatsapp", "to": to_digits, "provider": "meta", "messageId": message_id}
+
+
 def _extract_inbound(payload: dict) -> List[Dict[str, Any]]:
     """Flattens Meta's entry[].changes[].value.messages[] into simple dicts.
     Status updates (sent/delivered/read) arrive in value.statuses and are

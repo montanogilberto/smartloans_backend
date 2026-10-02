@@ -8,6 +8,7 @@ from modules.journalEntries import post_income_journal_entry, post_income_commis
 from modules.notificationDispatch import dispatch_notification_connector
 from modules.rewards import earn_points_for_income
 from modules.incomePayments import record_income_payments
+from modules.receiptLinks import receipt_link
 
 app = FastAPI()
 
@@ -24,7 +25,11 @@ def _get_client_phone(conn, client_id) -> str | None:
             return None
         clients = json.loads(json_text).get("clients") or []
         phone = (clients[0].get("cellphone") or "").strip() if clients else ""
-        return phone or None
+        if not phone:
+            return None
+        # Stored numbers are often 10-digit local MX; providers need E.164.
+        from modules.users import _normalize_phone
+        return _normalize_phone(phone)
     except Exception as e:
         print(f"[income] client phone lookup failed: {e}")
         return None
@@ -198,11 +203,9 @@ def income_sp(json_file: dict):
 
             # Best-effort: fire the Push -> WhatsApp -> SMS cascade for the
             # client on a successful income. Never blocks/fails the income
-            # response. NOTE: this runs independently of the existing manual
-            # "Imprimir" ticket flow (ticketApi.ts -> /api/tickets/.../send-*),
-            # which still sends its own WhatsApp/SMS when the cashier taps
-            # Imprimir -- until one of the two paths is retired, a client can
-            # receive two messages for the same sale.
+            # response. This is the ONLY customer notification for a sale:
+            # printing the ticket (useReceiptPrint.ts) no longer dispatches,
+            # so one income = one dispatch (income_created).
             try:
                 if is_new_income:
                     company_id = first_row.get("companyId")
@@ -228,7 +231,11 @@ def income_sp(json_file: dict):
                             "recipientId": client_id,
                             "eventName": "income_created",
                             "phone": phone,
+                            "pushTitle": "Ingreso recibido",
                             "messagePreview": preview,
+                            # Signed /recibo link (None if RECEIPT_LINK_SECRET is unset →
+                            # the message goes out without a link, as before).
+                            "receiptUrl": receipt_link(company_id, income_id),
                         }))
             except Exception as e:
                 print(f"[income] notification dispatch hook failed: {e}")

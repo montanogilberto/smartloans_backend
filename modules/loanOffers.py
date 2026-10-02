@@ -44,10 +44,9 @@ def _offer_contact(client_id) -> dict:
 def _send_offer_published_ticket(offer: dict):
     """Ticket de "capital publicado" por email + WhatsApp. Corre en un hilo
     aparte, best-effort — nunca afecta la respuesta de loan_offers_sp.
-    WhatsApp usa mensaje freeform (sin Content Template aprobado): si el
-    lender no le ha escrito al número de SmartLoans en las últimas 24h,
-    Twilio rechaza con error 63016 — se loguea, no se reintenta ni bloquea
-    el email (ver memoria de proyecto "WhatsApp sender & 24h window")."""
+    WhatsApp sale como template "capital_publicado" por Meta; mientras no
+    esté aprobado cae a freeform por Twilio, que falla con 63016 fuera de la
+    ventana de 24h — se loguea, no se reintenta ni bloquea el email."""
     try:
         client_id = offer.get("lenderId")
         if not client_id:
@@ -100,11 +99,11 @@ def _send_offer_published_ticket(offer: dict):
                     f"SmartLoans: publicaste ${capital:,.2f} MXN de capital disponible "
                     f"(folio {folio}). No implica transferir ni bloquear fondos."
                 )
-                send_whatsapp(_normalize_phone(cellphone), wa_body)
+                send_whatsapp(_normalize_phone(cellphone), wa_body,
+                              "capital_publicado", [f"${capital:,.2f}", folio])
                 print(f"[loanOffers][ticket] whatsapp ENVIADO a {cellphone} folio={folio}")
             except Exception as e:
-                # 63016 esperado si el lender está fuera de la ventana de 24h
-                # y no existe Content Template aprobado todavía — ver memoria.
+                # Meta (template) y Twilio (freeform, 63016 fuera de 24h) fallaron.
                 print(f"[loanOffers][ticket] whatsapp FAILED (non-fatal): {type(e).__name__}: {e}")
         else:
             print(f"[loanOffers][ticket] clientId={client_id} sin cellphone — ticket por WhatsApp omitido")

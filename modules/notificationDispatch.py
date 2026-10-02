@@ -238,6 +238,12 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
         message_preview = payload.get("messagePreview") or ""
         wa_sms_message = payload.get("waSmsMessage") or message_preview
         receipt_url = payload.get("receiptUrl")
+        # Meta template (docs/whatsapp-templates.md) — built before the URL
+        # is appended to the free-form text, which the template carries apart.
+        if receipt_url:
+            wa_template, wa_params = "comprobante_listo", [wa_sms_message, receipt_url]
+        else:
+            wa_template, wa_params = "detalle_compra", [wa_sms_message]
         if receipt_url:
             wa_sms_message = f"{wa_sms_message}\n{receipt_url}"
         push_title = payload.get("pushTitle") or event_name
@@ -327,19 +333,19 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                     continue
                 try:
                     with timed_integration(
-                        "twilio_whatsapp", "dispatch", request={"to": phone},
+                        "whatsapp", "dispatch", request={"to": phone, "template": wa_template},
                     ) as span:
-                        result = send_whatsapp(phone, wa_sms_message)
+                        result = send_whatsapp(phone, wa_sms_message, wa_template, wa_params)
                         span.response = result
                         span.http_status = 200
                     selected_channel = "whatsapp"
-                    provider_name = "twilio_whatsapp"
-                    provider_message_id = result.get("messageSid")
+                    provider_name = f"{result.get('provider', 'twilio')}_whatsapp"
+                    provider_message_id = result.get("messageId") or result.get("messageSid")
                     status = "sent"
                     attempted.append({"channel": "whatsapp", "outcome": "SENT", "at": _now_iso()})
                     break
                 except Exception as e:
-                    # Covers a Twilio 24h-window freeform rejection (error 63016) same as any other Twilio failure.
+                    # Meta and Twilio both failed (e.g. template not approved + Twilio 63016 outside the 24h window).
                     attempted.append({"channel": "whatsapp", "outcome": "WHATSAPP_UNAVAILABLE", "at": _now_iso(), "error": str(e)})
                     fallback_reason = fallback_reason or "WHATSAPP_UNAVAILABLE"
                 continue

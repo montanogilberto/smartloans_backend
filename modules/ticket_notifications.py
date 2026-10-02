@@ -1,7 +1,7 @@
 import os
 import re
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from twilio.rest import Client
 
@@ -65,9 +65,38 @@ def send_sms(phone: str, body: str) -> Dict[str, Any]:
     }
 
 
-def send_whatsapp(phone: str, body: str) -> Dict[str, Any]:
-    """Send a plain WhatsApp message via Twilio. Requires TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM."""
+def send_whatsapp(phone: str, body: str, template: Optional[str] = None,
+                  params: Optional[List[Any]] = None,
+                  button_param: Optional[str] = None) -> Dict[str, Any]:
+    """Send a WhatsApp message. With `template` and WA_SENDER_PHONE_NUMBER_ID
+    set, goes through Meta's Cloud API as that approved template; otherwise —
+    or if Meta rejects it (e.g. template not approved yet, error 132001) —
+    falls back to Twilio free-form `body`, which only lands inside the 24h
+    window (63016 outside it)."""
     _validate_phone_e164(phone)
+
+    meta_error = None
+    if template:
+        # Lazy: whatsappCloud → whatsappReservations → reservations → this module.
+        from modules import whatsappCloud
+        channel = whatsappCloud.outbound_channel()
+        if channel:
+            try:
+                return whatsappCloud.send_template(channel, phone, template, params or [], button_param)
+            except Exception as e:
+                meta_error = e
+                logger.warning("[send_whatsapp] Meta template %s failed, falling back to Twilio: %s", template, e)
+
+    try:
+        return _send_whatsapp_twilio(phone, body)
+    except Exception as e:
+        if meta_error:
+            raise RuntimeError(f"Meta: {meta_error} | Twilio: {e}") from e
+        raise
+
+
+def _send_whatsapp_twilio(phone: str, body: str) -> Dict[str, Any]:
+    """Plain WhatsApp message via Twilio. Requires TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM."""
 
     wa_from = os.getenv("TWILIO_WHATSAPP_FROM")
     if not wa_from:
@@ -110,6 +139,10 @@ def send_ticket_sms(ticket_id: str, phone: str, message: Optional[str] = None, r
 def send_ticket_whatsapp(ticket_id: str, phone: str, message: Optional[str] = None, receipt_url: Optional[str] = None) -> Dict[str, Any]:
     logger.info("[send_ticket_whatsapp] start | ticket_id=%s to=%s", ticket_id, phone)
     body = _build_message(ticket_id, message, receipt_url)
-    result = send_whatsapp(phone, body)
+    detail = message.strip() if message else f"Ticket #{ticket_id}"
+    if receipt_url:
+        result = send_whatsapp(phone, body, "comprobante_listo", [detail, receipt_url])
+    else:
+        result = send_whatsapp(phone, body, "detalle_compra", [detail])
     result["ticketId"] = ticket_id
     return result

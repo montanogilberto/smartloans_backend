@@ -59,7 +59,8 @@ def _sp_registration_reminders(payload: dict) -> dict:
             conn.close()
 
 
-async def _notify_cellphone(user_id: int, company_id, cellphone: str, message: str) -> str:
+async def _notify_cellphone(user_id: int, company_id, cellphone: str, message: str,
+                            missing_text: str) -> str:
     """push -> WhatsApp -> SMS, first one that actually sends. Returns the
     channel used, or '' if there's no cellphone or every channel failed."""
     if not cellphone:
@@ -89,7 +90,7 @@ async def _notify_cellphone(user_id: int, company_id, cellphone: str, message: s
     normalized = _normalize_phone(cellphone)
 
     try:
-        send_whatsapp(normalized, message)
+        send_whatsapp(normalized, message, "registro_pendiente", [missing_text])
         return "whatsapp"
     except Exception as e:
         logger.warning("[registrationReminders] whatsapp attempt failed for userId=%s: %s", user_id, e)
@@ -132,7 +133,8 @@ async def check_registration_completeness(payload: dict):
             except Exception as e:
                 logger.warning("[registrationReminders] email failed for userId=%s: %s", user_id, e)
 
-        channel_used = await _notify_cellphone(user_id, u.get("companyId"), u.get("cellphone"), message)
+        channel_used = await _notify_cellphone(user_id, u.get("companyId"), u.get("cellphone"), message,
+                                              missing_text)
 
         _sp_registration_reminders({
             "action": "markReminded",

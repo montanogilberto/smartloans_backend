@@ -69,7 +69,8 @@ def _send_confirmation_whatsapp(phone: str, name: str, service: str, date: str, 
         f"Te esperamos. Para cancelar responde CANCELAR."
     )
     try:
-        send_whatsapp(phone, body)
+        send_whatsapp(phone, body, "reservacion_confirmada",
+                      [COMPANY_NAME, name, service, date, time_slot, reservation_id])
         logger.info("[reservations] WhatsApp sent to %s for reservation #%d", phone, reservation_id)
     except Exception as e:
         logger.warning("[reservations] WhatsApp failed: %s", e)
@@ -165,7 +166,7 @@ def available_slots(company_id: int, date: str, reservation_service_id: int) -> 
 
 
 def notify_customer(row: dict):
-    """SMS + WhatsApp (Twilio) + email confirmation to the customer."""
+    """SMS (Twilio) + WhatsApp (Meta template, Twilio fallback) + email confirmation to the customer."""
     args = (row.get("phone", ""), row.get("clientName", ""), row.get("serviceType", ""),
             row.get("reservationDate", ""), row.get("timeSlot", ""), row["reservationId"])
     _send_confirmation_sms(*args)
