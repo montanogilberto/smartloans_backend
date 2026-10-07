@@ -57,6 +57,7 @@ from routes_ import (
     chartOfAccounts, journalEntries,
     notificationDispatch,
     posSupportChat,
+    companyTokens,
     client_login,
     posRewards,
     reservations,
@@ -200,6 +201,7 @@ app.include_router(fundingTransactions.router)
 app.include_router(transferEvidence.router)
 app.include_router(paymentHistory.router)
 app.include_router(featureFlags.router)
+app.include_router(companyTokens.router)
 app.include_router(arcade.router)
 app.include_router(arcadeStore.router)
 app.include_router(rewardBenefits.router)

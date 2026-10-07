@@ -203,10 +203,10 @@ def post_expense_journal_entry(company_id: int, expense_id: int, amount: float, 
 # that has none (historic expenses are the backfill's business, see
 # accounting-module.md Q1), and they are idempotent, so a retried hook is safe.
 
-def _fetch_expense(expense_id: int):
-    """Current expenses row as a dict, or None if it no longer exists
-    (sp_expense_one)."""
-    row = _sp("sp_expense_one", {"expenses": [{"expenseId": int(expense_id)}]})
+def _fetch_expense(expense_id: int, company_id: int):
+    """Current expenses row of this company as a dict, or None if it no
+    longer exists (sp_expense_one)."""
+    row = _sp("sp_expense_one", {"expenses": [{"expenseId": int(expense_id), "companyId": int(company_id)}]})
     if isinstance(row, dict) and row.get("error"):
         raise RuntimeError(f"sp_expense_one: {row['error']}")
     if not row:
@@ -215,12 +215,13 @@ def _fetch_expense(expense_id: int):
             "paymentMethod": row.get("paymentMethod"), "expenseType": row.get("expenseType")}
 
 
-def _fetch_posted_expense_entries(expense_id: int) -> list:
-    """POSTED journal entries for this expense (any company), with the account
+def _fetch_posted_expense_entries(expense_id: int, company_id: int) -> list:
+    """This company's POSTED journal entries for this expense, with the account
     codes they debit/credit, as the 2-line entries the auto-post writes
     (sp_journalEntries_byReference)."""
     entries = _sp("sp_journalEntries_byReference", {"journalEntries": [
-        {"referenceType": "expense", "referenceId": int(expense_id), "status": "POSTED"}]})
+        {"companyId": int(company_id), "referenceType": "expense",
+         "referenceId": int(expense_id), "status": "POSTED"}]})
     if isinstance(entries, dict):
         if entries.get("error"):
             raise RuntimeError(f"sp_journalEntries_byReference: {entries['error']}")
@@ -239,16 +240,16 @@ def _void_entry(entry_id: int, company_id: int) -> None:
         raise RuntimeError(result["error"])
 
 
-def void_expense_journal_entries(expense_id: int) -> dict:
+def void_expense_journal_entries(expense_id: int, company_id: int) -> dict:
     """A deleted expense must stop counting in the books: VOID its POSTED entries."""
     voided = []
-    for entry in _fetch_posted_expense_entries(expense_id):
+    for entry in _fetch_posted_expense_entries(expense_id, company_id):
         _void_entry(entry["entryId"], entry["companyId"])
         voided.append(entry["entryId"])
     return {"status": "voided" if voided else "no_entry", "voided": voided}
 
 
-def resync_expense_journal_entry(expense_id: int, new_entry_date=None) -> dict:
+def resync_expense_journal_entry(expense_id: int, company_id: int, new_entry_date=None) -> dict:
     """After an expense update, make its POSTED entry match the row.
 
     Compares the entry against what the row implies today (amount, expense
@@ -258,11 +259,11 @@ def resync_expense_journal_entry(expense_id: int, new_entry_date=None) -> dict:
     the already-normalized business date, passed only when the update payload
     itself carried a paymentDate; otherwise the entry keeps its date.
     """
-    expense = _fetch_expense(expense_id)
+    expense = _fetch_expense(expense_id, company_id)
     if expense is None:
-        return void_expense_journal_entries(expense_id)
+        return void_expense_journal_entries(expense_id, company_id)
 
-    posted = _fetch_posted_expense_entries(expense_id)
+    posted = _fetch_posted_expense_entries(expense_id, company_id)
     if not posted:
         return {"status": "no_entry", "voided": []}
 

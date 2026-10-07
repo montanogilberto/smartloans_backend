@@ -91,14 +91,20 @@ def expense_sp(json_file: dict):
             # deleted expense's entry is VOIDed; an updated one is VOIDed and
             # re-posted only if amount/accounts/company/date actually changed.
             # Never blocks/fails the expense response; the SP already committed.
-            if not failed and action in (2, 3) and entity_id is not None:
+            # Scoped to the request's companyId (multi-tenancy): without it
+            # there is no company to sync, so the ledger is left as-is.
+            sync_company_id = first_in.get("companyId")
+            if not failed and action in (2, 3) and entity_id is not None and not sync_company_id:
+                print(f"[expenses] ledger sync skipped for expense {entity_id}: payload has no companyId")
+            elif not failed and action in (2, 3) and entity_id is not None:
                 try:
                     if action == 3:
-                        outcome = void_expense_journal_entries(entity_id)
+                        outcome = void_expense_journal_entries(entity_id, sync_company_id)
                     else:
                         raw_date = first_in.get("paymentDate")
                         outcome = resync_expense_journal_entry(
-                            entity_id, new_entry_date=_normalize_entry_date(raw_date) if raw_date else None)
+                            entity_id, sync_company_id,
+                            new_entry_date=_normalize_entry_date(raw_date) if raw_date else None)
                     print(f"[expenses] ledger sync for expense {entity_id} ({action_label}): {outcome}")
                 except Exception as e:
                     print(f"[expenses] accounting sync hook failed for expense {entity_id}: {e}")
