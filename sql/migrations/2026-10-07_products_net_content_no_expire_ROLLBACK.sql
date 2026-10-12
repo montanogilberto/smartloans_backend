@@ -1,6 +1,6 @@
 -- ROLLBACK for 2026-10-07_products_net_content_no_expire.sql
 -- Restores sp_products_save / sp_products_all to their 2026-10-02b definitions.
--- The new columns (netContent, unitOfMeasure) are left in place: harmless, and dropping them would lose data.
+-- The new columns (netContent, unitOfMeasure, referencePrice) are left in place: harmless, and dropping them would lose data.
 -- The 1900-01-01 -> NULL cleanup is not reverted (frontend treats both as "no date").
 
 CREATE OR ALTER PROC [dbo].[sp_products_save]

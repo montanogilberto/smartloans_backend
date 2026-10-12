@@ -245,7 +245,7 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
         else:
             wa_template, wa_params = "detalle_compra", [wa_sms_message]
         if receipt_url:
-            wa_sms_message = f"{wa_sms_message}\n{receipt_url}"
+            wa_sms_message = f"{wa_sms_message}\nVer su ticket: {receipt_url}"
         push_title = payload.get("pushTitle") or event_name
         push_message = payload.get("pushMessage") or message_preview
 
@@ -394,7 +394,8 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                 "status": status,
                 "providerMessageId": provider_message_id,
                 "providerName": provider_name,
-                "messagePreview": message_preview,
+                # Column is NVARCHAR(200); the customer still gets the full text.
+                "messagePreview": message_preview[:200],
                 "sentAt": now_iso if status == "sent" else None,
                 "failedAt": now_iso if status == "failed" else None,
             }]

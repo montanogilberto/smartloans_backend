@@ -13,17 +13,19 @@
 -- WHAT:
 --   * dbo.products: + netContent DECIMAL(10,3) NULL, + unitOfMeasure VARCHAR(10) NULL
 --     (g | kg | ml | L | pz; existing rows NULL = not captured).
+--   * dbo.products: + referencePrice DECIMAL(10,2) NULL — competitor/market shelf
+--     price (e.g. OXXO), reference only for the 30% margin check in the wizard.
 --   * sp_products_save: insert/update netContent + unitOfMeasure; '' date -> NULL;
 --     products[].noExpire = true clears dateOfExpire on update.
---   * sp_products_all: also returns netContent, unitOfMeasure.
+--   * sp_products_all: also returns netContent, unitOfMeasure, referencePrice.
 -- Bodies are the 2026-10-02b definitions (read live that day) with only those
 -- lines changed. CREATE OR ALTER, so re-runnable.
--- NOTE: on update, netContent/unitOfMeasure are overwritten with whatever is
+-- NOTE: on update, netContent/unitOfMeasure/referencePrice are overwritten with whatever is
 --   sent (absent = NULL). Only ProductWizard updates products today, and it always
 --   sends both. Any other caller doing action=2 would clear them.
 -- TODO (not visible from the repo, live def has drifted): sp_products_by_company
 --   — the list the Products page loads — must also SELECT p.netContent,
---   p.unitOfMeasure, or edit mode won't show the saved unit (the fallback via
+--   p.unitOfMeasure, p.referencePrice, or edit mode won't show the saved unit (the fallback via
 --   sp_products_all will).
 -- ROLLBACK: 2026-10-07_products_net_content_no_expire_ROLLBACK.sql
 -- =============================================================================
@@ -33,6 +35,9 @@ IF COL_LENGTH('dbo.products','netContent') IS NULL
 GO
 IF COL_LENGTH('dbo.products','unitOfMeasure') IS NULL
     ALTER TABLE dbo.products ADD unitOfMeasure VARCHAR(10) NULL;
+GO
+IF COL_LENGTH('dbo.products','referencePrice') IS NULL
+    ALTER TABLE dbo.products ADD referencePrice DECIMAL(10,2) NULL;
 GO
 
 -- Optional cleanup: legacy "no date" rows stored as 1900-01-01
@@ -72,14 +77,15 @@ BEGIN
            ============================================================ */
         IF @action = 1
         BEGIN
-            INSERT INTO dbo.products (name, barCode, code, dateOfExpire, productFormId, manufactureId, description, createdAt, categoryId, companyId, isSupply, netContent, unitOfMeasure)
+            INSERT INTO dbo.products (name, barCode, code, dateOfExpire, productFormId, manufactureId, description, createdAt, categoryId, companyId, isSupply, netContent, unitOfMeasure, referencePrice)
             SELECT 
                 JSON_VALUE(value, '$.name'), JSON_VALUE(value, '$.barCode'), JSON_VALUE(value, '$.code'),
                 TRY_CONVERT(DATE, NULLIF(JSON_VALUE(value, '$.dateOfExpire'), '')), TRY_CAST(JSON_VALUE(value, '$.productFormId') AS INT),
                 TRY_CAST(JSON_VALUE(value, '$.manufactureId') AS INT), JSON_VALUE(value, '$.description'),
                 GETDATE(), TRY_CAST(JSON_VALUE(value, '$.categoryId') AS INT), @companyId,
                 ISNULL(TRY_CAST(JSON_VALUE(value, '$.isSupply') AS BIT), 0),
-                TRY_CAST(JSON_VALUE(value, '$.netContent') AS DECIMAL(10,3)), NULLIF(JSON_VALUE(value, '$.unitOfMeasure'), '')
+                TRY_CAST(JSON_VALUE(value, '$.netContent') AS DECIMAL(10,3)), NULLIF(JSON_VALUE(value, '$.unitOfMeasure'), ''),
+                TRY_CAST(JSON_VALUE(value, '$.referencePrice') AS DECIMAL(10,2))
             FROM OPENJSON(@pjsonfile, '$.products');
 
             SET @productId = SCOPE_IDENTITY();
@@ -96,9 +102,10 @@ BEGIN
                     WHEN TRY_CAST(JSON_VALUE(j.value, '$.noExpire') AS BIT) = 1 THEN NULL
                     ELSE COALESCE(TRY_CONVERT(DATE, NULLIF(JSON_VALUE(j.value, '$.dateOfExpire'), '')), p.dateOfExpire)
                 END,
-                -- netContent/unitOfMeasure: the wizard always sends both (null = cleared)
+                -- netContent/unitOfMeasure/referencePrice: the wizard always sends all three (null = cleared)
                 p.netContent = TRY_CAST(JSON_VALUE(j.value, '$.netContent') AS DECIMAL(10,3)),
                 p.unitOfMeasure = NULLIF(JSON_VALUE(j.value, '$.unitOfMeasure'), ''),
+                p.referencePrice = TRY_CAST(JSON_VALUE(j.value, '$.referencePrice') AS DECIMAL(10,2)),
                 p.productFormId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.productFormId') AS INT), p.productFormId),
                 p.manufactureId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.manufactureId') AS INT), p.manufactureId),
                 p.description = COALESCE(JSON_VALUE(j.value, '$.description'), p.description),
@@ -243,6 +250,7 @@ BEGIN
         ,isSupply
         ,netContent
         ,unitOfMeasure
+        ,referencePrice
     FROM [montanogilberto_smartloans].[dbo].[products]
     FOR JSON AUTO, ROOT('products');
 
