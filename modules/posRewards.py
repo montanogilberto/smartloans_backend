@@ -175,3 +175,81 @@ def pos_reward_product_counts_sp(json_file: dict):
         return JSONResponse(result, status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Server-side earn + the rewards line of the sale's WhatsApp/push message
+# ---------------------------------------------------------------------------
+WALK_IN_CLIENT_ID = 1  # CartPage's "mostrador" placeholder: never earns
+
+
+def _fmt_points(value) -> str:
+    try:
+        n = float(value or 0)
+    except (TypeError, ValueError):
+        n = 0.0
+    return str(int(n)) if n.is_integer() else f"{n:.2f}"
+
+
+def earn_and_summarize(json_file: dict) -> dict | None:
+    """Posts this sale's POS points and returns what the customer message
+    needs: {pointsEarned, balance, catalog}. None for walk-in sales or on any
+    error: the sale message then simply goes out without a rewards line.
+
+    json_file is the same payload as POST /posRewardTransactions/earn-from-ticket,
+    passed straight to the SP (idempotent per ticket — the cart's own
+    earnFromTicket call afterwards just replays this result):
+        {"posRewardTransactions": [{"companyId": 1, "clientId": 2260, "incomeId": 4868}]}"""
+    row = ((json_file or {}).get("posRewardTransactions") or [{}])[0] or {}
+    company_id, client_id = row.get("companyId"), row.get("clientId")
+    if not company_id or not client_id or int(client_id) == WALK_IN_CLIENT_ID:
+        return None
+    try:
+        earned = _sp("sp_posRewardTransactions_earnFromTicket", json_file)
+        if not isinstance(earned, dict) or earned.get("error"):
+            print(f"[posRewards] earn failed for {row}: {earned}")
+            return None
+        catalog = _sp("sp_posRewardCatalogItems", {"posRewardCatalogItems": [
+            {"action": 0, "companyId": int(company_id), "activeOnly": 1}]})
+        items = []
+        if isinstance(catalog, dict):
+            items = ((catalog.get("result") or [{}])[0] or {}).get("posRewardCatalogItems") or []
+        return {
+            "pointsEarned": float(earned.get("pointsEarned") or 0),
+            "balance": float(earned.get("newBalance") or 0),
+            "catalog": [i for i in items if i.get("isActive") in (True, 1, "1")],
+        }
+    except Exception as e:
+        print(f"[posRewards] earn/summary failed for {row}: {type(e).__name__}: {e}")
+        return None
+
+
+def rewards_label(summary: dict | None) -> str:
+    """One Spanish line for the sale message, e.g.
+    'Puntos: +2 · Saldo: 2 pts · Le falta 1 pt para: Servicio de lavado gratis (3x1)'.
+    '' when there is nothing to say (walk-in, rewards error, no points at all)."""
+    if not summary:
+        return ""
+    earned, balance = summary.get("pointsEarned", 0), summary.get("balance", 0)
+    catalog = sorted(summary.get("catalog") or [], key=lambda i: float(i.get("requiredPoints") or 0))
+    if earned <= 0 and balance <= 0:
+        return ""
+
+    parts = []
+    if earned > 0:
+        parts.append(f"Puntos: +{_fmt_points(earned)}")
+    parts.append(f"Saldo: {_fmt_points(balance)} pts")
+
+    ready = [i for i in catalog if float(i.get("requiredPoints") or 0) <= balance]
+    pending = [i for i in catalog if float(i.get("requiredPoints") or 0) > balance]
+    if ready:
+        # The most valuable reward the balance already covers, plus how many more.
+        best = ready[-1]
+        more = len(ready) - 1
+        parts.append(f"¡Ya puede canjear: {best.get('name')}" + (f" y {more} más" if more else "") + "!")
+    elif pending:
+        nxt = pending[0]
+        missing = float(nxt.get("requiredPoints") or 0) - balance
+        unit = "pt" if missing == 1 else "pts"
+        parts.append(f"Le {'falta' if missing == 1 else 'faltan'} {_fmt_points(missing)} {unit} para: {nxt.get('name')}")
+    return " · ".join(parts)

@@ -7,6 +7,7 @@ import json
 from modules.journalEntries import post_income_journal_entry, post_income_commission_journal_entry
 from modules.notificationDispatch import dispatch_notification_connector
 from modules.rewards import earn_points_for_income
+from modules.posRewards import earn_and_summarize, rewards_label
 from modules.incomePayments import record_income_payments
 from modules.receiptLinks import receipt_link
 
@@ -98,6 +99,25 @@ def _reverse_on_delete(conn, income_id) -> dict:
     keys = ("voidedEntries", "posPointsReversed", "posPointsShortfall",
             "loyaltyPointsReversed", "loyaltyPointsShortfall", "alreadyReversed")
     return dict(zip(keys, row))
+
+
+def sale_message(json_file: dict) -> str:
+    """Customer message for a sale: total, discount (if any) and the POS
+    rewards line (if any), one item per line. The ticket link is added by the
+    dispatch connector (free-form text) or the comprobante_listo template.
+        {"total": 120.0, "discountAmount": 10.0, "promoCode": "X", "rewardsLine": "..."}"""
+    total = json_file.get("total")
+    discount_amount = json_file.get("discountAmount")
+    promo_code = json_file.get("promoCode")
+    rewards_line = json_file.get("rewardsLine") or ""
+    lines = [f"Gracias por su compra. Total: ${total:,.2f} MXN"
+             if isinstance(total, (int, float)) else "Gracias por su compra."]
+    if isinstance(discount_amount, (int, float)) and discount_amount > 0:
+        code_suffix = f" ({promo_code})" if promo_code else ""
+        lines.append(f"Descuento aplicado{code_suffix}: -${discount_amount:,.2f} MXN")
+    if rewards_line:
+        lines.append(rewards_line)
+    return "\n".join(lines)
 
 
 def income_sp(json_file: dict):
@@ -216,13 +236,15 @@ def income_sp(json_file: dict):
                         final_total, discount_amount, promo_code = _get_final_total_and_discount(conn, income_id, company_id)
                         if final_total is None:
                             final_total = first_row.get("total")
-                        preview = (
-                            f"Gracias por su compra. Total: ${final_total:,.2f} MXN"
-                            if isinstance(final_total, (int, float)) else "Gracias por su compra."
-                        )
-                        if isinstance(discount_amount, (int, float)) and discount_amount > 0:
-                            code_suffix = f" ({promo_code})" if promo_code else ""
-                            preview += f"\nDescuento aplicado{code_suffix}: -${discount_amount:,.2f} MXN"
+                        # POS points are posted HERE, before the message is
+                        # built, so the message can say what this sale earned.
+                        # Idempotent: the cart's later earnFromTicket replays it.
+                        rewards_line = rewards_label(earn_and_summarize({"posRewardTransactions": [
+                            {"companyId": int(company_id), "clientId": int(client_id), "incomeId": income_id}]}))
+                        preview = sale_message({
+                            "total": final_total, "discountAmount": discount_amount,
+                            "promoCode": promo_code, "rewardsLine": rewards_line,
+                        })
                         asyncio.run(dispatch_notification_connector({
                             "companyId": company_id,
                             "sourceType": "income",
