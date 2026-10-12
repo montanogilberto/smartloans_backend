@@ -231,7 +231,8 @@ def income_sp(json_file: dict):
                     company_id = first_row.get("companyId")
                     client_id = first_row.get("clientId")
                     income_id = int(result[0]["value"])
-                    if company_id and client_id:
+                    # Walk-in ("mostrador", clientId 1) sales notify no one.
+                    if company_id and client_id and str(client_id) != "1":
                         phone = _get_client_phone(conn, client_id)
                         final_total, discount_amount, promo_code = _get_final_total_and_discount(conn, income_id, company_id)
                         if final_total is None:

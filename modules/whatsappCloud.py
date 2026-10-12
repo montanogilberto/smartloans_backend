@@ -26,6 +26,7 @@ Env vars:
   WA_GRAPH_VERSION     default v25.0
 """
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -214,6 +215,23 @@ def _log_statuses(payload: dict) -> None:
                 else:
                     logger.info("[whatsappCloud] status | to=%s id=%s status=%s",
                                 st.get("recipient_id"), st.get("id"), st.get("status"))
+                _update_dispatch(st.get("id"), st.get("status"))
+
+
+def _update_dispatch(wamid: str | None, status: str | None) -> None:
+    """delivered/read -> the notification dispatch sent with this wamid becomes
+    "confirmed"; failed -> "failed". sent is in-flight and ignored. Runs in the
+    webhook's background task (its own thread), so a fresh event loop is fine.
+    Never raises: a dispatch-log hiccup must not stop the inbound messages."""
+    if not wamid or status not in ("delivered", "read", "failed"):
+        return
+    try:
+        # Lazy: notificationDispatch -> ticket_notifications -> whatsappCloud.
+        from modules.notificationDispatch import apply_provider_status
+        outcome = asyncio.run(apply_provider_status(wamid, status))
+        logger.info("[whatsappCloud] dispatch status | id=%s status=%s -> %s", wamid, status, outcome)
+    except Exception:
+        logger.exception("[whatsappCloud] dispatch status update failed | id=%s", wamid)
 
 
 def _pause_bot_on_staff_replies(payload: dict) -> None:

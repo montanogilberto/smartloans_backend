@@ -1,5 +1,6 @@
 from fastapi import APIRouter
-from modules.products import (products_sp, all_products_sp, one_products_sp, food_products_sp, food_categories_products_sp, by_company_products_sp)
+from modules.products import (products_sp, all_products_sp, one_products_sp, food_products_sp, food_categories_products_sp, by_company_products_sp,
+                             upload_product_image_connector)
 
 router = APIRouter()
 
@@ -50,4 +51,10 @@ def by_company_products(json: dict):
     return  by_company_products_sp(json)
 
 
-
+@router.post(
+    "/products/upload-image",
+    summary="Upload a product photo; returns its blobUrl to save as products[].imageUrl",
+    tags=["connector"],
+)
+async def upload_product_image(json: dict):
+    return await upload_product_image_connector(json)

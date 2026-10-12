@@ -95,6 +95,19 @@ def send_whatsapp(phone: str, body: str, template: Optional[str] = None,
         raise
 
 
+def whatsapp_status_callback_url() -> str:
+    """Where Twilio reports delivery (delivered/read/failed) for WhatsApp.
+    TWILIO_WHATSAPP_STATUS_CALLBACK_URL wins; otherwise this backend's own
+    /whatsapp/status — without a callback URL Twilio never reports back and a
+    rejected message stays "sent" forever (every WhatsApp in Sep–Oct 2026
+    failed with 63005 while the dispatch log said "sent")."""
+    explicit = (os.getenv("TWILIO_WHATSAPP_STATUS_CALLBACK_URL") or "").strip()
+    if explicit:
+        return explicit
+    base = os.getenv("BACKEND_PUBLIC_URL", "https://smartloansbackend.azurewebsites.net").rstrip("/")
+    return f"{base}/whatsapp/status"
+
+
 def _send_whatsapp_twilio(phone: str, body: str) -> Dict[str, Any]:
     """Plain WhatsApp message via Twilio. Requires TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM."""
 
@@ -105,7 +118,7 @@ def _send_whatsapp_twilio(phone: str, body: str) -> Dict[str, Any]:
     client = _twilio_client()
     to_wa = f"whatsapp:{phone}"
     from_wa = wa_from if wa_from.startswith("whatsapp:") else f"whatsapp:{wa_from}"
-    status_callback_url = os.getenv("TWILIO_WHATSAPP_STATUS_CALLBACK_URL")
+    status_callback_url = whatsapp_status_callback_url()
 
     message_kwargs = {
         "body": body,
