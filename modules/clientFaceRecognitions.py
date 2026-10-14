@@ -135,6 +135,8 @@ BLOB_FOLDER_FUNDING_EVIDENCE = "funding_evidence"
 # Photos of a physical receipt/ticket, attached as evidence to a POS expense —
 # see modules/expenses.py::upload_expense_receipt_connector.
 BLOB_FOLDER_EXPENSE_RECEIPTS = "expense_receipts"
+# Product photos (front of the package) shown in the POS catalog.
+BLOB_FOLDER_PRODUCT_IMAGES = "product_images"
 
 
 def client_blob_path(client_id, folder: str, filename: str) -> str:

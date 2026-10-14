@@ -2,11 +2,15 @@
 
 import json
 import logging
+import os
 from fastapi import APIRouter, Request
 from starlette.responses import Response, JSONResponse
+from twilio.request_validator import RequestValidator
 from twilio.twiml.messaging_response import MessagingResponse
 
 from modules.whatsapp import log_message_to_database
+from modules.notificationDispatch import apply_provider_status
+from modules.ticket_notifications import whatsapp_status_callback_url
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -99,6 +103,17 @@ async def whatsapp_webhook(request: Request):
         return JSONResponse(content={"ok": True, "warning": str(e)}, status_code=200)
 
 
+def _twilio_signature_ok(request: Request, params: dict) -> bool:
+    """X-Twilio-Signature over the exact callback URL we gave Twilio (the
+    public one — behind Azure's proxy request.url can differ in scheme/host).
+    Without it, anyone could mark notifications delivered or failed."""
+    token = os.getenv("TWILIO_AUTH_TOKEN")
+    signature = request.headers.get("X-Twilio-Signature", "")
+    if not token or not signature:
+        return False
+    return RequestValidator(token).validate(whatsapp_status_callback_url(), params, signature)
+
+
 @router.post("/whatsapp/status", summary="WhatsApp Status Callback", description="Twilio status callback endpoint for WhatsApp delivery events")
 async def whatsapp_status_callback(request: Request):
     """
@@ -132,6 +147,17 @@ async def whatsapp_status_callback(request: Request):
             )
 
             logger.info("[whatsapp_status_callback] db log done | message_sid=%s", message_sid)
+
+            # Delivered/read -> dispatch "confirmed"; failed/undelivered ->
+            # "failed" (error code in the log: 63005 = WhatsApp rejected the
+            # free-form text, a template is required). Signed callbacks only.
+            if _twilio_signature_ok(request, dict(form)):
+                outcome = await apply_provider_status(message_sid, message_status)
+                logger.info("[whatsapp_status_callback] dispatch | sid=%s status=%s error=%s -> %s",
+                            message_sid, message_status, form.get("ErrorCode") or "", outcome)
+            else:
+                logger.warning("[whatsapp_status_callback] bad/missing Twilio signature | sid=%s — dispatch not updated",
+                               message_sid)
             return JSONResponse(content={"ok": True}, status_code=200)
 
         # JSON fallback

@@ -1,5 +1,6 @@
 from fastapi.responses import JSONResponse
 from databases import connection
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -256,6 +257,12 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                 status_code=400,
             )
 
+        # Walk-in ("mostrador") sales carry clientId 1, a placeholder, not a
+        # person: notifying it pushed every anonymous receipt to whichever
+        # staff account is linked to client 1 (43 of 166 dispatches, Sep–Oct 2026).
+        if is_walk_in(recipient_type, recipient_id):
+            return JSONResponse(content={"skipped": True, "reason": "walk_in_client"}, status_code=200)
+
         conn = connection()
         cursor = conn.cursor()
 
@@ -436,6 +443,72 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
 # ---------------------------------------------------------------------------
 # Connector: POST /notificationDispatch/confirm
 # ---------------------------------------------------------------------------
+
+WALK_IN_CLIENT_ID = 1
+
+# Twilio MessageStatus -> dispatch status. Only terminal states move the row;
+# queued/sending/sent/accepted are in-flight and ignored.
+_TWILIO_TERMINAL = {
+    "delivered": "confirmed",
+    "read": "confirmed",
+    "failed": "failed",
+    "undelivered": "failed",
+}
+
+
+def is_walk_in(recipient_type, recipient_id) -> bool:
+    try:
+        return recipient_type == "client" and int(recipient_id) == WALK_IN_CLIENT_ID
+    except (TypeError, ValueError):
+        return False
+
+
+def dispatch_status_for(provider_status: str) -> str | None:
+    return _TWILIO_TERMINAL.get((provider_status or "").strip().lower())
+
+
+async def apply_provider_status(provider_message_id: str, provider_status: str,
+                                retry_delay_s: float = 2.0) -> dict:
+    """Moves the dispatch sent with this provider message id to confirmed /
+    failed from a provider delivery callback. Never raises.
+
+    Twilio can report a rejection (~1s) before the dispatch row exists — the
+    row is written right after the send call returns — so a miss is retried
+    once after `retry_delay_s`."""
+    new_status = dispatch_status_for(provider_status)
+    if not provider_message_id or not new_status:
+        return {"updated": False, "reason": "not_terminal"}
+    for attempt in range(2):
+        conn = None
+        try:
+            conn = connection()
+            matches = _lookup(conn.cursor(), {"action": "byProviderMessageId",
+                                              "providerMessageId": provider_message_id})
+        except Exception as e:
+            return {"updated": False, "reason": f"lookup_failed: {e}"}
+        finally:
+            if conn:
+                conn.close()
+        if matches:
+            break
+        if attempt == 0 and retry_delay_s:
+            await asyncio.sleep(retry_delay_s)
+    else:
+        return {"updated": False, "reason": "no_dispatch"}
+
+    dispatch_id, company_id = matches[0]["notificationDispatchId"], matches[0]["companyId"]
+    now_iso = _now_iso()
+    response = notificationDispatch_sp({"notificationDispatches": [{
+        "action": 2,
+        "notificationDispatchId": dispatch_id,
+        "companyId": company_id,
+        "status": new_status,
+        "confirmedAt": now_iso if new_status == "confirmed" else None,
+        "failedAt": now_iso if new_status == "failed" else None,
+    }]})
+    ok = getattr(response, "status_code", 500) == 200
+    return {"updated": ok, "notificationDispatchId": dispatch_id, "status": new_status}
+
 
 async def confirm_notification_connector(payload: dict) -> JSONResponse:
     """
