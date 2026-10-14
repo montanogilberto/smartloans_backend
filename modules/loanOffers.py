@@ -74,7 +74,7 @@ def _send_offer_published_ticket(offer: dict):
             "SmartLoans no recibe, retiene ni administra estos fondos — el monto, la tasa y el",
             "plazo se acuerdan directamente con el solicitante cuando aceptes una propuesta.",
             "",
-            "— SmartLoans · POS GMO",
+            "— SmartLoans · GMO",
         ]
         body_text = "\n".join(lineas)
 

@@ -921,9 +921,9 @@ def _send_transaction_receipt_email(tx: dict, intent_id: str,
             lineas.append(f"Abonado a tu cartera: ${net_mxn:,.2f} MXN")
         lineas += [
             "",
-            "Puedes consultar este movimiento en la app SmartLoans → Movimientos.",
+            "Puedes consultar este movimiento en la app GMO → SmartLoans → Movimientos.",
             "",
-            "— SmartLoans · POS GMO",
+            "— SmartLoans · GMO",
             "Este correo es el comprobante informativo de tu transacción.",
         ]
         subject = f"Comprobante SmartLoans — {concepto} ${gross_mxn:,.2f} MXN (folio {folio})"

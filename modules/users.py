@@ -145,7 +145,7 @@ def users_sp(json_file: dict):
 def _send_email_otp(target: str, code: str):
     _send_email(
         target,
-        "Código de verificación — SmartLoans",
+        "Código de verificación — GMO",
         f"Tu código de verificación es:\n\n  {code}\n\n"
         f"Ingresa este código en la pantalla de registro. Expira en 10 minutos.",
     )
@@ -197,7 +197,7 @@ def _normalize_phone(phone: str) -> str:
     return phone  # pass through; Twilio will reject if still wrong
 
 
-def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str = "SmartLoans"):
+def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str = "GMO"):
     """Send OTP via Twilio SMS or WhatsApp, reusing the same Twilio module
     that sends ticket/income receipts (modules/ticket_notifications.py).
     `brand` lets callers with a known companyId (e.g. client_login.py) show
@@ -293,7 +293,7 @@ def verify_code(json_file: dict):
 
 def _account_created_email_body(username: str) -> str:
     return (
-        "¡Bienvenido a SmartLoans!\n\n"
+        "¡Bienvenido a GMO!\n\n"
         "Tu cuenta fue creada exitosamente.\n\n"
         "Tu nombre de usuario para iniciar sesión es:\n\n"
         f"    {username}\n\n"
@@ -304,7 +304,7 @@ def _account_created_email_body(username: str) -> str:
 
 def _account_created_sms_message(username: str) -> str:
     return (
-        f"¡Bienvenido a SmartLoans! Tu cuenta fue creada. "
+        f"¡Bienvenido a GMO! Tu cuenta fue creada. "
         f"Tu usuario para iniciar sesión es: {username}. Guárdalo para acceder."
     )
 
@@ -331,7 +331,7 @@ def send_account_created(json_file: dict):
         with workflow_step("Account Created Notice", workflow_name="client_registration", action=method):
             with timed_integration(service, f"account_created_{method}") as span:
                 if method == "email":
-                    _send_email(target, "Tu cuenta SmartLoans", _account_created_email_body(username))
+                    _send_email(target, "Tu cuenta GMO", _account_created_email_body(username))
                 else:
                     from modules.ticket_notifications import send_sms, send_whatsapp
                     normalized = _normalize_phone(target)
