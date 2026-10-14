@@ -75,10 +75,10 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
 
         # This client's own company, not the _send_sms_otp default of
         # "SmartLoans" -- a Lavanderia POS customer shouldn't get an OTP
-        # that says SmartLoans. "POS GMO" (the client-facing app name, see
+        # that says SmartLoans. "GMO" (the client-facing app name, see
         # ClientLogin.tsx) is the fallback if companies.name is ever missing,
         # not "SmartLoans" -- equally wrong for this audience.
-        brand = status_client.get("companyName") or "POS GMO"
+        brand = status_client.get("companyName") or "GMO"
         _send_sms_otp(phone, code, brand=brand)
 
         log_workflow_step(
