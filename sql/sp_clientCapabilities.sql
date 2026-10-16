@@ -139,7 +139,7 @@ GO
 -- clientType. Safe to run once after the table above exists; safe
 -- to re-run (idempotent via NOT EXISTS). Not executed by this file
 -- automatically -- run manually, same convention as
--- sql/migrations/2026-09-14_add_pos_client_type.sql.
+-- sql/migration_history/migrations/2026-09-14_add_pos_client_type.sql.
 -- ============================================================
 -- INSERT INTO [dbo].[clientCapabilities] (companyId, clientId, capability)
 -- SELECT c.companyId, c.clientId, cap.capability

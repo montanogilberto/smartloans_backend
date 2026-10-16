@@ -4,7 +4,7 @@
 -- Forward-only. NOT YET EXECUTED — run manually against the live DB.
 -- Roadmap: POSVending/docs/accounting-module.md, Step 7 (§7.5).
 -- Test:    sql/tests/2026-10-01i_reconcile_and_backfill_movements_test.sql
--- Repair:  sql/migrations/2026-10-01j_run_books_period_repair.sql (explicit run)
+-- Repair:  sql/migration_history/migrations/2026-10-01j_run_books_period_repair.sql (explicit run)
 --
 -- OWNER DECISION (Q1, 2026-10-01): Option A — formal books start 2026-09-01.
 -- Movements before that date stay operational history and are NEVER posted.

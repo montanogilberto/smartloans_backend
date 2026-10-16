@@ -20,7 +20,7 @@ Builds on the verified baseline in
 
 ## What this PR contains
 
-`sql/migrations/2026-08-11_add_capital_vocabulary.sql` — a single, additive `MERGE ... WHEN NOT
+`sql/migration_history/migrations/2026-08-11_add_capital_vocabulary.sql` — a single, additive `MERGE ... WHEN NOT
 MATCHED` statement adding exactly 3 rows to `dbo.walletTransactions_entryType`:
 
 | entryType | sortOrder | Meaning |
@@ -29,7 +29,7 @@ MATCHED` statement adding exactly 3 rows to `dbo.walletTransactions_entryType`:
 | `CAPITAL_COMMITTED` | 15 | Declared capital committed to a specific loan funding — the point of no return per `docs/payment-domain-state-machines.md` §1: the lender has sent real SPEI with evidence. Money moves lender→borrower directly; SmartLoans never receives or holds it. (Stored `description` is a shortened 93-char form — `NVARCHAR(100)`, see incident note below.) |
 | `CAPITAL_UNDECLARED` | 16 | Previously declared capital released/withdrawn. No money returned by SmartLoans, because none was ever held. |
 
-`sql/migrations/2026-08-11_add_capital_vocabulary_ROLLBACK.sql` — the reverse. Includes a mandatory
+`sql/migration_history/migrations/2026-08-11_add_capital_vocabulary_ROLLBACK.sql` — the reverse. Includes a mandatory
 guard query that must return zero rows before the `DELETE` is allowed to run (protects against
 deleting a lookup value that real ledger rows already reference by the time a rollback is
 considered).
@@ -84,7 +84,7 @@ atomically — **zero rows were inserted**, no partial state. Fixed by shortenin
 2. ~~Confirm the target database is the intended one.~~ ✅
 3. ~~Take a backup/snapshot immediately before running.~~ ✅ (implicit — first attempt failed
    safely, see incident note)
-4. ~~Run `sql/migrations/2026-08-11_add_capital_vocabulary.sql`.~~ ✅ — first attempt failed with
+4. ~~Run `sql/migration_history/migrations/2026-08-11_add_capital_vocabulary.sql`.~~ ✅ — first attempt failed with
    Msg 8152 (see incident note), zero rows written; corrected script ran clean, "inserted 3".
 5. ~~Re-run query 3 to confirm the 3 new rows are present and every pre-existing row is
    unchanged.~~ ✅ — confirmed via direct query, all 3 rows present with correct sortOrder/description.

@@ -2,7 +2,7 @@
 -- WhatsApp numbers (Cloud API) and the company/branch each one belongs to.
 -- The webhook resolves every inbound message with action 5 (by Meta's
 -- phoneNumberId); admin screens use 0/1/2.
--- Table: sql/migrations/2026-09-28_whatsapp_channels.sql
+-- Table: sql/migration_history/migrations/2026-09-28_whatsapp_channels.sql
 -- ============================================================
 
 IF OBJECT_ID('dbo.sp_whatsappChannels', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_whatsappChannels;

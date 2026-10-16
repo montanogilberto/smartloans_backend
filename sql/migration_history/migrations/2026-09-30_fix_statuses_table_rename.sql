@@ -14,7 +14,7 @@
 -- SCOPE: the four SPs that referenced dbo.statuses, table name only.
 --   - sp_employees_all   (INNER JOIN — every employee row needs a status)
 --   - sp_statuses / sp_statuses_all / sp_statuses_one
---   Bodies are otherwise identical to sql/migration/02_programmability.sql;
+--   Bodies are otherwise identical to sql/migration_history/snapshot_2026-08-15/02_programmability.sql;
 --   sp_statuses_all/_one also drop the hardcoded 3-part
 --   [montanogilberto_smartloans].[dbo] prefix.
 --   JSON root keys stay 'statuses' — the frontend reads that key.

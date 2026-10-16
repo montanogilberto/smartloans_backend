@@ -1,5 +1,5 @@
 /* Generado desde [montanogilberto_smartloans] el 2026-08-15 15:50:03
-   por sql/migration/generate_migration.py — NO editar a mano. */
+   por sql/migration_history/snapshot_2026-08-15/generate_migration.py — NO editar a mano. */
 /* PASO 1 de 3 — 141 tablas, 44 foreign keys, 100 indices */
 SET ANSI_NULLS ON;
 GO

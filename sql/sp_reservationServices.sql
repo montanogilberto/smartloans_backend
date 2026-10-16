@@ -2,7 +2,7 @@
 -- Catalog of bookable services per company (any business: Lavado,
 -- Corte de cabello, Lavado de auto, …). Kiosk / WhatsApp / POS list it
 -- (action 0) and send the chosen reservationServiceId to sp_reservations.
--- Table: sql/migrations/2026-09-24_reservation_catalogs.sql
+-- Table: sql/migration_history/migrations/2026-09-24_reservation_catalogs.sql
 -- ============================================================
 
 IF OBJECT_ID('dbo.sp_reservationServices', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_reservationServices;

@@ -3,7 +3,7 @@
 -- (company local time, Hermosillo for now; dayOfWeek 0 = Monday … 6 = Sunday).
 -- No row for a day = closed. sp_reservations action 6 builds the
 -- free slots from these hours.
--- Table: sql/migrations/2026-09-24_reservation_catalogs.sql
+-- Table: sql/migration_history/migrations/2026-09-24_reservation_catalogs.sql
 -- ============================================================
 
 IF OBJECT_ID('dbo.sp_reservationHours', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_reservationHours;

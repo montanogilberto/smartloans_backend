@@ -5,7 +5,7 @@ Se conecta a tempdb (nunca a la base de negocio) y corre cada batch con
 SET PARSEONLY ON, que hace que SQL Server parsee la sentencia y NO la ejecute.
 Doble proteccion: base tempdb + PARSEONLY reactivado antes de cada batch.
 
-Uso:  python sql/migration/validate_scripts.py
+Uso:  python sql/migration_history/snapshot_2026-08-15/validate_scripts.py
 """
 
 import os

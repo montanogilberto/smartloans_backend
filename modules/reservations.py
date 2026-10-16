@@ -230,8 +230,8 @@ def reservations_sp(json_file: dict, background_tasks: BackgroundTasks):
 
 # Run in this order: tables/migrations first, then the SPs that use them.
 _MIGRATION_FILES = (
-    "sql/migrations/2026-09-23_add_reservations.sql",
-    "sql/migrations/2026-09-24_reservation_catalogs.sql",
+    "sql/migration_history/migrations/2026-09-23_add_reservations.sql",
+    "sql/migration_history/migrations/2026-09-24_reservation_catalogs.sql",
     "sql/sp_reservationServices.sql",
     "sql/sp_reservationHours.sql",
     "sql/sp_reservations.sql",

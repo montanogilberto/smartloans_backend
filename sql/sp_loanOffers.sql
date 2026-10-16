@@ -21,7 +21,7 @@ CREATE TABLE [dbo].[loanOffers] (
     expiresAt        DATETIME NULL,
     created_At       DATETIME NOT NULL DEFAULT GETUTCDATE(),
     -- Audit record of the "Declaro que el capital indicado está disponible..."
-    -- checkbox — see sql/migrations/2026-08-13_add_offer_consent.sql for the
+    -- checkbox — see sql/migration_history/migrations/2026-08-13_add_offer_consent.sql for the
     -- ALTER TABLE that adds these to an already-existing table.
     consentAccepted   BIT NOT NULL DEFAULT 0,
     consentAcceptedAt DATETIME NULL

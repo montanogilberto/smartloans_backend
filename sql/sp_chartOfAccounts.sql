@@ -194,7 +194,7 @@ GO
 -- actualiza ni borra una cuenta existente, no toca cuentas propias de la
 -- empresa, y una segunda ejecución no inserta nada. (Hasta 2026-10-01 no
 -- hacía nada si la empresa ya tenía cualquier cuenta — así no podía agregar
--- 1101 Caja / 3205 / 3210; ver sql/migrations/2026-10-01c_chartOfAccounts_ensure_base.sql.)
+-- 1101 Caja / 3205 / 3210; ver sql/migration_history/migrations/2026-10-01c_chartOfAccounts_ensure_base.sql.)
 -- Hoy no existe hook de alta de empresa, así que este archivo la corre para
 -- cada empresa existente (ver abajo).
 -- ============================================================

@@ -7,7 +7,7 @@
 --   4  set last booking
 -- Every action returns the current state:
 --   {"result":[{"pending": {...}|null, "staffPaused": bool, "lastBooked": {...}|null}]}
--- Table: sql/migrations/2026-09-28_whatsapp_channels.sql
+-- Table: sql/migration_history/migrations/2026-09-28_whatsapp_channels.sql
 -- ============================================================
 
 IF OBJECT_ID('dbo.sp_whatsappConversations', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_whatsappConversations;
