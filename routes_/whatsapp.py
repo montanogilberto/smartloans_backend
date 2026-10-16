@@ -152,7 +152,11 @@ async def whatsapp_status_callback(request: Request):
             # "failed" (error code in the log: 63005 = WhatsApp rejected the
             # free-form text, a template is required). Signed callbacks only.
             if _twilio_signature_ok(request, dict(form)):
-                outcome = await apply_provider_status(message_sid, message_status)
+                outcome = await apply_provider_status(
+                    message_sid, message_status,
+                    error_code=form.get("ErrorCode") or None,
+                    error_message=form.get("ErrorMessage") or None,
+                )
                 logger.info("[whatsapp_status_callback] dispatch | sid=%s status=%s error=%s -> %s",
                             message_sid, message_status, form.get("ErrorCode") or "", outcome)
             else:

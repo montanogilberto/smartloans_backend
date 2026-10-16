@@ -208,9 +208,14 @@ def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str 
     logger.info("[_send_sms_otp] raw=%s normalized=%s whatsapp=%s", phone, normalized, via_whatsapp)
     if via_whatsapp:
         # AUTHENTICATION template: Meta fixes its text, so no brand there.
-        send_whatsapp(normalized, message, "codigo_verificacion", [code], button_param=code)
-    else:
-        send_sms(normalized, message)
+        # Twilio WhatsApp is disabled and Meta only allows this template on a
+        # verified business — a code must still arrive, so fall back to SMS.
+        try:
+            send_whatsapp(normalized, message, "codigo_verificacion", [code], button_param=code)
+            return
+        except Exception as e:
+            logger.warning("[_send_sms_otp] WhatsApp code failed, sending by SMS: %s", e)
+    send_sms(normalized, message)
 
 
 def send_verification_code(json_file: dict):
@@ -336,9 +341,16 @@ def send_account_created(json_file: dict):
                     from modules.ticket_notifications import send_sms, send_whatsapp
                     normalized = _normalize_phone(target)
                     message = _account_created_sms_message(username)
+                    sent = False
                     if method == "whatsapp":
-                        send_whatsapp(normalized, message, "cuenta_creada", [username])
-                    else:
+                        # Twilio WhatsApp is disabled: if the Meta template isn't
+                        # approved yet, the username still has to arrive — by SMS.
+                        try:
+                            send_whatsapp(normalized, message, "cuenta_creada", [username])
+                            sent = True
+                        except Exception as e:
+                            logger.warning("[send_account_created] WhatsApp failed, sending by SMS: %s", e)
+                    if not sent:
                         send_sms(normalized, message)
                 span.http_status = 200
 

@@ -18,6 +18,18 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _now_sql() -> str:
+    """UTC timestamp SQL Server DATETIME can parse. isoformat()'s '+00:00'
+    offset and 6-digit fraction made TRY_CONVERT(DATETIME, ...) return NULL,
+    so sentAt/confirmedAt/failedAt were never stored."""
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
+
+
+def _short(text, limit: int) -> str | None:
+    text = (str(text) if text is not None else '').strip()
+    return text[:limit] or None
+
+
 # ---------------------------------------------------------------------------
 # Standard CRUD (sp_notificationDispatches / _all / _one)
 # ---------------------------------------------------------------------------
@@ -290,6 +302,9 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
         provider_name = None
         fallback_reason = None
         status = "failed"
+        # Last provider error, saved on the row when the cascade ends failed.
+        last_error_code = None
+        last_error_message = None
 
         log_workflow_step(
             f"NotificationDispatch cascade start ({event_name})",
@@ -346,15 +361,23 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                         span.response = result
                         span.http_status = 200
                     selected_channel = "whatsapp"
-                    provider_name = f"{result.get('provider', 'twilio')}_whatsapp"
+                    provider_name = f"{result.get('provider', 'meta')}_whatsapp"
                     provider_message_id = result.get("messageId") or result.get("messageSid")
                     status = "sent"
-                    attempted.append({"channel": "whatsapp", "outcome": "SENT", "at": _now_iso()})
+                    sent_entry = {"channel": "whatsapp", "outcome": "SENT", "at": _now_iso()}
+                    # WhatsApp is meant to go through Meta; when it went through
+                    # Twilio instead, keep why (not configured / Meta rejected).
+                    if result.get("metaFallbackReason"):
+                        sent_entry["metaFallbackReason"] = result["metaFallbackReason"]
+                    attempted.append(sent_entry)
                     break
                 except Exception as e:
-                    # Meta and Twilio both failed (e.g. template not approved + Twilio 63016 outside the 24h window).
+                    # Meta failed or isn't set up for this message (no template, not
+                    # approved, WA_SENDER_PHONE_NUMBER_ID unset) — Twilio is disabled.
                     attempted.append({"channel": "whatsapp", "outcome": "WHATSAPP_UNAVAILABLE", "at": _now_iso(), "error": str(e)})
                     fallback_reason = fallback_reason or "WHATSAPP_UNAVAILABLE"
+                    last_error_code = _short(getattr(e, "code", None), 20)
+                    last_error_message = _short(e, 300)
                 continue
 
             if channel == "sms":
@@ -379,12 +402,14 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                     break
                 except Exception as e:
                     attempted.append({"channel": "sms", "outcome": "FAILED", "at": _now_iso(), "error": str(e)})
+                    last_error_code = _short(getattr(e, "code", None), 20)
+                    last_error_message = _short(e, 300)
                 continue
 
         if selected_channel is None:
             selected_channel = channels[-1]
 
-        now_iso = _now_iso()
+        now_sql = _now_sql()
         insert_payload = {
             "notificationDispatches": [{
                 "action": 1,
@@ -403,8 +428,10 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                 "providerName": provider_name,
                 # Column is NVARCHAR(200); the customer still gets the full text.
                 "messagePreview": message_preview[:200],
-                "sentAt": now_iso if status == "sent" else None,
-                "failedAt": now_iso if status == "failed" else None,
+                "sentAt": now_sql if status == "sent" else None,
+                "failedAt": now_sql if status == "failed" else None,
+                "providerErrorCode": last_error_code if status == "failed" else None,
+                "providerErrorMessage": last_error_message if status == "failed" else None,
             }]
         }
 
@@ -468,7 +495,9 @@ def dispatch_status_for(provider_status: str) -> str | None:
 
 
 async def apply_provider_status(provider_message_id: str, provider_status: str,
-                                retry_delay_s: float = 2.0) -> dict:
+                                retry_delay_s: float = 2.0,
+                                error_code: str | None = None,
+                                error_message: str | None = None) -> dict:
     """Moves the dispatch sent with this provider message id to confirmed /
     failed from a provider delivery callback. Never raises.
 
@@ -497,14 +526,18 @@ async def apply_provider_status(provider_message_id: str, provider_status: str,
         return {"updated": False, "reason": "no_dispatch"}
 
     dispatch_id, company_id = matches[0]["notificationDispatchId"], matches[0]["companyId"]
-    now_iso = _now_iso()
+    now_sql = _now_sql()
+    failed = new_status == "failed"
     response = notificationDispatch_sp({"notificationDispatches": [{
         "action": 2,
         "notificationDispatchId": dispatch_id,
         "companyId": company_id,
         "status": new_status,
-        "confirmedAt": now_iso if new_status == "confirmed" else None,
-        "failedAt": now_iso if new_status == "failed" else None,
+        "confirmedAt": now_sql if new_status == "confirmed" else None,
+        "failedAt": now_sql if failed else None,
+        # Why it failed (Twilio ErrorCode / Meta errors[0].code) — shown in the dispatch log.
+        "providerErrorCode": _short(error_code, 20) if failed else None,
+        "providerErrorMessage": _short(error_message, 300) if failed else None,
     }]})
     ok = getattr(response, "status_code", 500) == 200
     return {"updated": ok, "notificationDispatchId": dispatch_id, "status": new_status}
@@ -538,15 +571,15 @@ async def confirm_notification_connector(payload: dict) -> JSONResponse:
             return JSONResponse(content={"error": "No dispatch found for that providerMessageId"}, status_code=404)
 
         dispatch_id, company_id = matches[0]["notificationDispatchId"], matches[0]["companyId"]
-        now_iso = _now_iso()
+        now_sql = _now_sql()
         update_payload = {
             "notificationDispatches": [{
                 "action": 2,
                 "notificationDispatchId": dispatch_id,
                 "companyId": company_id,
                 "status": new_status,
-                "confirmedAt": now_iso if new_status == "confirmed" else None,
-                "failedAt": now_iso if new_status == "failed" else None,
+                "confirmedAt": now_sql if new_status == "confirmed" else None,
+                "failedAt": now_sql if new_status == "failed" else None,
             }]
         }
         return notificationDispatch_sp(update_payload)
