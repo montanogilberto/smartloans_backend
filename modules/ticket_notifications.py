@@ -68,31 +68,58 @@ def send_sms(phone: str, body: str) -> Dict[str, Any]:
 def send_whatsapp(phone: str, body: str, template: Optional[str] = None,
                   params: Optional[List[Any]] = None,
                   button_param: Optional[str] = None) -> Dict[str, Any]:
-    """Send a WhatsApp message. With `template` and WA_SENDER_PHONE_NUMBER_ID
-    set, goes through Meta's Cloud API as that approved template; otherwise —
-    or if Meta rejects it (e.g. template not approved yet, error 132001) —
-    falls back to Twilio free-form `body`, which only lands inside the 24h
-    window (63016 outside it)."""
+    """Send a WhatsApp message through Meta's Cloud API as an approved
+    `template` (needs WA_SENDER_PHONE_NUMBER_ID).
+
+    Twilio is no longer used for WhatsApp (2026-10-16): the fallback below is
+    commented out. When there is no template, Meta isn't configured, or Meta
+    rejects the template, this raises — every caller already handles that
+    (notificationDispatch moves on to SMS, reminders fall back to SMS, the
+    rest log it). `body` is only used by the commented-out Twilio path."""
     _validate_phone_e164(phone)
 
-    meta_error = None
-    if template:
-        # Lazy: whatsappCloud → whatsappReservations → reservations → this module.
-        from modules import whatsappCloud
-        channel = whatsappCloud.outbound_channel()
-        if channel:
-            try:
-                return whatsappCloud.send_template(channel, phone, template, params or [], button_param)
-            except Exception as e:
-                meta_error = e
-                logger.warning("[send_whatsapp] Meta template %s failed, falling back to Twilio: %s", template, e)
+    if not template:
+        raise RuntimeError("WhatsApp requires a Meta template (Twilio disabled): NO_TEMPLATE")
 
+    # Lazy: whatsappCloud → whatsappReservations → reservations → this module.
+    from modules import whatsappCloud
+    channel = whatsappCloud.outbound_channel()
+    if not channel:
+        raise RuntimeError("WhatsApp via Meta not configured (Twilio disabled): "
+                           "META_NOT_CONFIGURED (WA_SENDER_PHONE_NUMBER_ID)")
     try:
-        return _send_whatsapp_twilio(phone, body)
+        return whatsappCloud.send_template(channel, phone, template, params or [], button_param)
     except Exception as e:
-        if meta_error:
-            raise RuntimeError(f"Meta: {meta_error} | Twilio: {e}") from e
-        raise
+        raise RuntimeError(f"Meta template {template} failed (Twilio disabled): {e}") from e
+
+    # ── Twilio fallback — DISABLED 2026-10-16 (WhatsApp goes only through Meta) ──
+    # Free-form `body` via Twilio; only landed inside the 24h window (63016
+    # outside it). To re-enable, restore this block in place of the raises above.
+    #
+    # meta_error = None
+    # if template:
+    #     from modules import whatsappCloud
+    #     channel = whatsappCloud.outbound_channel()
+    #     if channel:
+    #         try:
+    #             return whatsappCloud.send_template(channel, phone, template, params or [], button_param)
+    #         except Exception as e:
+    #             meta_error = e
+    #             logger.warning("[send_whatsapp] Meta template %s failed, falling back to Twilio: %s", template, e)
+    #
+    # try:
+    #     result = _send_whatsapp_twilio(phone, body)
+    #     if meta_error is not None:
+    #         result["metaFallbackReason"] = f"META_REJECTED: {str(meta_error)[:200]}"
+    #     elif not template:
+    #         result["metaFallbackReason"] = "NO_TEMPLATE"
+    #     else:
+    #         result["metaFallbackReason"] = "META_NOT_CONFIGURED (WA_SENDER_PHONE_NUMBER_ID)"
+    #     return result
+    # except Exception as e:
+    #     if meta_error:
+    #         raise RuntimeError(f"Meta: {meta_error} | Twilio: {e}") from e
+    #     raise
 
 
 def whatsapp_status_callback_url() -> str:
@@ -109,7 +136,8 @@ def whatsapp_status_callback_url() -> str:
 
 
 def _send_whatsapp_twilio(phone: str, body: str) -> Dict[str, Any]:
-    """Plain WhatsApp message via Twilio. Requires TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM."""
+    """UNUSED since 2026-10-16 — Twilio WhatsApp disabled, see send_whatsapp.
+    Plain WhatsApp message via Twilio. Requires TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM."""
 
     wa_from = os.getenv("TWILIO_WHATSAPP_FROM")
     if not wa_from:

@@ -104,7 +104,9 @@ TEMPLATE_LANG = os.getenv("WA_TEMPLATE_LANG", "es_MX")
 
 def outbound_channel() -> dict | None:
     """The number app-initiated messages go out from (WA_SENDER_PHONE_NUMBER_ID).
-    None → not configured, callers fall back to Twilio. A DB hiccup on the
+    It is Meta's "Phone number ID" (digits, e.g. 1330937783442101), NOT the
+    phone number. None → not configured: send_whatsapp raises (Twilio is
+    disabled) and notificationDispatch moves on to SMS. A DB hiccup on the
     channel lookup must not block a send: WA_ACCESS_TOKEN covers every number."""
     phone_number_id = os.getenv("WA_SENDER_PHONE_NUMBER_ID")
     if not phone_number_id:
@@ -215,10 +217,13 @@ def _log_statuses(payload: dict) -> None:
                 else:
                     logger.info("[whatsappCloud] status | to=%s id=%s status=%s",
                                 st.get("recipient_id"), st.get("id"), st.get("status"))
-                _update_dispatch(st.get("id"), st.get("status"))
+                err = (st.get("errors") or [{}])[0]
+                _update_dispatch(st.get("id"), st.get("status"),
+                                 err.get("code"), err.get("title") or err.get("message"))
 
 
-def _update_dispatch(wamid: str | None, status: str | None) -> None:
+def _update_dispatch(wamid: str | None, status: str | None,
+                     error_code=None, error_message=None) -> None:
     """delivered/read -> the notification dispatch sent with this wamid becomes
     "confirmed"; failed -> "failed". sent is in-flight and ignored. Runs in the
     webhook's background task (its own thread), so a fresh event loop is fine.
@@ -228,7 +233,11 @@ def _update_dispatch(wamid: str | None, status: str | None) -> None:
     try:
         # Lazy: notificationDispatch -> ticket_notifications -> whatsappCloud.
         from modules.notificationDispatch import apply_provider_status
-        outcome = asyncio.run(apply_provider_status(wamid, status))
+        outcome = asyncio.run(apply_provider_status(
+            wamid, status,
+            error_code=str(error_code) if error_code is not None else None,
+            error_message=error_message,
+        ))
         logger.info("[whatsappCloud] dispatch status | id=%s status=%s -> %s", wamid, status, outcome)
     except Exception:
         logger.exception("[whatsappCloud] dispatch status update failed | id=%s", wamid)

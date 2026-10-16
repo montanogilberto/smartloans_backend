@@ -10,8 +10,8 @@ templates**. Register each one below in **WhatsApp Manager → Message templates
 - **Name:** must match exactly. The backend sends by name (`send_whatsapp(..., template=...)`).
 - **Variables:** `{{1}}`, `{{2}}`… in order. Meta asks for a sample value per
   variable; use the samples given.
-- Until a template is approved, Meta answers `132001` and the backend falls
-  back to Twilio free-form text, which only arrives inside the 24h window.
+- Until a template is approved, Meta answers `132001` and the WhatsApp send
+  fails — Twilio is disabled (2026-10-16); notificationDispatch moves on to SMS.
 
 | Name | Category | Sent from |
 |---|---|---|
@@ -26,6 +26,9 @@ templates**. Register each one below in **WhatsApp Manager → Message templates
 ---
 
 ## codigo_verificacion — Authentication
+
+> Not created (2026-10-16): Meta only allows Authentication templates on a
+> **verified** business. Until then `_send_sms_otp` sends the code by SMS.
 
 Meta writes the text for authentication templates itself; you only pick
 options:
@@ -43,8 +46,11 @@ Backend sends: body `{{1}}` = code, button param = code.
 
 ## cuenta_creada — Utility
 
+> No greeting ("¡Bienvenido…!"): Meta rejected that wording as Marketing
+> (INCORRECT_CATEGORY, 2026-10-16).
+
 ```
-¡Bienvenido a SmartLoans! Tu cuenta fue creada.
+Tu cuenta GMO fue creada.
 
 Tu usuario para iniciar sesión es: {{1}}
 
@@ -86,7 +92,7 @@ Sample: `{{1}}` = `Gracias por su compra. Total: $250.00 MXN · Descuento aplica
 ## capital_publicado — Utility
 
 ```
-SmartLoans: publicaste {{1}} MXN de capital disponible (folio {{2}}).
+GMO: publicaste {{1}} MXN de capital disponible (folio {{2}}).
 
 No implica transferir ni bloquear fondos.
 ```
@@ -115,7 +121,7 @@ Samples: `{{1}}` = `Lavandería GMO`, `{{2}}` = `María`, `{{3}}` = `Lavado y se
 ## registro_pendiente — Utility
 
 ```
-Aún te falta completar tu registro en SmartLoans: {{1}}.
+Aún te falta completar tu registro en GMO: {{1}}.
 
 Termínalo para acceder al sistema.
 ```

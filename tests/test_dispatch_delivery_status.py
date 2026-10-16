@@ -75,6 +75,19 @@ class ApplyProviderStatusTest(unittest.TestCase):
         self.assertIsNone(row["confirmedAt"])
         self.assertEqual(self.lookups[0], {"action": "byProviderMessageId", "providerMessageId": "SM09e9"})
 
+    def test_failed_stores_provider_error_and_sql_parsable_failedAt(self):
+        run(nd.apply_provider_status("SM09e9", "failed", retry_delay_s=0,
+                                     error_code="63016", error_message="Outside the 24h window"))
+        row = self.updates[0]
+        self.assertEqual((row["providerErrorCode"], row["providerErrorMessage"]),
+                         ("63016", "Outside the 24h window"))
+        # DATETIME can't parse '+00:00' or 6-digit fractions (stored NULL before).
+        self.assertRegex(row["failedAt"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$")
+
+    def test_confirmed_never_carries_an_error(self):
+        run(nd.apply_provider_status("SM09e9", "delivered", retry_delay_s=0, error_code="63016"))
+        self.assertIsNone(self.updates[0]["providerErrorCode"])
+
     def test_delivered_marks_confirmed(self):
         run(nd.apply_provider_status("SM09e9", "delivered", retry_delay_s=0))
         self.assertEqual(self.updates[0]["status"], "confirmed")
@@ -160,7 +173,7 @@ class StatusCallbackRouteTest(unittest.TestCase):
         sig = RequestValidator(TOKEN).compute_signature(self.URL, self.FORM)
         resp = self._post(sig)
         self.assertEqual(resp.status_code, 200)
-        self.apply.assert_awaited_once_with("SM09e9", "failed")
+        self.apply.assert_awaited_once_with("SM09e9", "failed", error_code="63005", error_message=None)
 
     def test_unsigned_or_forged_callback_is_logged_but_never_updates(self):
         for sig in (None, "forged"):

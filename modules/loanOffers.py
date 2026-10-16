@@ -103,7 +103,7 @@ def _send_offer_published_ticket(offer: dict):
                               "capital_publicado", [f"${capital:,.2f}", folio])
                 print(f"[loanOffers][ticket] whatsapp ENVIADO a {cellphone} folio={folio}")
             except Exception as e:
-                # Meta (template) y Twilio (freeform, 63016 fuera de 24h) fallaron.
+                # Meta (template) falló o no está configurado — Twilio deshabilitado.
                 print(f"[loanOffers][ticket] whatsapp FAILED (non-fatal): {type(e).__name__}: {e}")
         else:
             print(f"[loanOffers][ticket] clientId={client_id} sin cellphone — ticket por WhatsApp omitido")

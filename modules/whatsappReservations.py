@@ -22,11 +22,17 @@ State (pending proposal, staff pause, last booking) lives in
 dbo.whatsappConversations per (channel, customer), so it is shared by every
 App Service instance and survives restarts.
 
+Handoff: when the customer asks for a person (or the agent can't help), the
+agent proposes REQUEST_HUMAN. That needs no "sí": the bot goes quiet in the
+chat for STAFF_PAUSE_SECONDS and the branch's POS users get a push, so staff
+answer from the WhatsApp Business app.
+
 Env vars:
   NEGOTIATION_AGENT_URL   LoanAgents_SmartLoans base URL (shared with posSupportChat)
 """
 
 import asyncio
+import json
 import logging
 import os
 
@@ -34,6 +40,7 @@ import httpx
 
 from modules import whatsappChannels
 from modules.posSupportChat import _classify_confirmation
+from modules.pushNotifications import pushNotifications_sp
 from modules.reservations import available_slots, create_reservation, notify_pos
 from observability.integrations import timed_integration
 
@@ -49,6 +56,31 @@ _FALLBACK_REPLY = ("Por el momento no puedo procesar tu mensaje. "
 
 def pause_for_staff(channel: dict, phone: str) -> None:
     whatsappChannels.pause_for_staff(channel["channelId"], phone, STAFF_PAUSE_SECONDS)
+
+
+def _hand_off_to_staff(channel: dict, phone: str, profile_name: str | None,
+                      reason: str | None) -> None:
+    """Bot steps aside in this chat and the company's POS users get a push."""
+    whatsappChannels.pause_for_staff(channel["channelId"], phone, STAFF_PAUSE_SECONDS)
+    who = profile_name or phone
+    branch = f" ({channel['branchName']})" if channel.get("branchName") else ""
+    try:
+        asyncio.run(pushNotifications_sp({"pushNotifications": [{
+            "action": 1,
+            "companyId": channel["companyId"],
+            "title": f"💬 Cliente pide atención por WhatsApp{branch}",
+            "message": f"{who} ({phone}): {reason or 'quiere hablar con alguien'}. Responde desde WhatsApp Business.",
+            "notificationType": "Info",
+            "priority": "High",
+            "targetType": "Company",
+            "targetCompanyId": channel["companyId"],
+            "payloadJson": json.dumps({"type": "WhatsAppHandoff", "phone": phone,
+                                       "channelId": channel["channelId"]}),
+        }]}))
+    except Exception:
+        logger.exception("[whatsappReservations] handoff push failed | phone=%s", phone)
+    logger.info("[whatsappReservations] handed off to staff | channel=%s phone=%s reason=%s",
+                channel["channelId"], phone, reason)
 
 
 def _book(channel: dict, phone: str, profile_name: str | None, fields: dict) -> str:
@@ -138,7 +170,13 @@ def reply_to(channel: dict, phone: str, profile_name: str | None, text: str) -> 
         logger.exception("[whatsappReservations] agent call failed | phone=%s", phone)
         return _FALLBACK_REPLY
 
-    if pending_action and pending_action.get("capability") == "CREATE_RESERVATION":
+    capability = (pending_action or {}).get("capability")
+    if capability == "REQUEST_HUMAN":
+        # No confirmation step: asking for a person is not a write the
+        # customer could regret, and waiting for "sí" would just delay them.
+        _hand_off_to_staff(channel, phone, profile_name,
+                           (pending_action.get("fields") or {}).get("reason"))
+    elif capability == "CREATE_RESERVATION":
         whatsappChannels.set_pending(channel_id, phone, pending_action.get("fields") or {},
                                      PENDING_TTL_SECONDS)
     return reply

@@ -66,6 +66,7 @@ from routes_ import (
     roles,
     commissionTerminals,
     whatsappCloud,
+    whatsappAssistant,
 )
 
 app = FastAPI(
@@ -238,6 +239,7 @@ app.include_router(clientCapabilities.router)
 app.include_router(roles.router)
 app.include_router(commissionTerminals.router)
 app.include_router(whatsappCloud.router)
+app.include_router(whatsappAssistant.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job
