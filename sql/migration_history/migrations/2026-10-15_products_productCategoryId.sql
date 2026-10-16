@@ -26,15 +26,22 @@
 -- =============================================================================
 
 -- 1) Pre-check -----------------------------------------------------------------
+-- Dynamic SQL: once the column is renamed, a static "p.categoryId" fails to compile
+-- (Msg 207) even inside a false IF, so re-running this file would error here.
 IF COL_LENGTH('dbo.products', 'categoryId') IS NOT NULL
-   AND EXISTS (
-        SELECT 1
+BEGIN
+    DECLARE @orphans INT;
+    EXEC sp_executesql N'
+        SELECT @n = COUNT(*)
         FROM dbo.products p
         WHERE p.categoryId IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM dbo.productCategories pc
-                          WHERE pc.productCategoryId = p.categoryId)
-   )
-    THROW 50001, 'products.categoryId has values missing in productCategories. Fix them before running this migration.', 1;
+                          WHERE pc.productCategoryId = p.categoryId);',
+        N'@n INT OUTPUT', @n = @orphans OUTPUT;
+
+    IF @orphans > 0
+    BEGIN RAISERROR('products.categoryId has values missing in productCategories. Fix them before running this migration.', 16, 1); SET NOEXEC ON; RETURN; END
+END
 GO
 
 -- 2) Rename + FK + index ---------------------------------------------------------
@@ -58,14 +65,14 @@ BEGIN
         WHERE d.referenced_id = OBJECT_ID('dbo.products')
           AND d.referenced_minor_id = COLUMNPROPERTY(OBJECT_ID('dbo.products'), 'categoryId', 'ColumnId')
           AND d.is_schema_bound_reference = 1;
-        THROW 50002, 'products.categoryId is used by a schema-bound object (listed above). Drop/alter it first.', 1;
+        BEGIN RAISERROR('products.categoryId is used by a schema-bound object (listed above). Drop/alter it first.', 16, 1); SET NOEXEC ON; RETURN; END
     END
 
     EXEC sp_rename N'dbo.products.categoryId', N'productCategoryId', N'COLUMN';
 END
 
 IF COL_LENGTH('dbo.products', 'productCategoryId') IS NULL
-    THROW 50003, 'products.productCategoryId still missing after rename — see the error above.', 1;
+    BEGIN RAISERROR('products.productCategoryId still missing after rename — see the error above.', 16, 1); SET NOEXEC ON; RETURN; END
 
 RAISERROR('OK: dbo.products.productCategoryId exists.', 0, 1) WITH NOWAIT;
 GO
@@ -935,4 +942,8 @@ WHERE m.definition LIKE '%p.categoryId%'
 -- Column check: expect productCategoryId = 1, categoryId = 0
 SELECT CASE WHEN COL_LENGTH('dbo.products', 'productCategoryId') IS NOT NULL THEN 1 ELSE 0 END AS productCategoryId,
        CASE WHEN COL_LENGTH('dbo.products', 'categoryId')        IS NOT NULL THEN 1 ELSE 0 END AS categoryId;
+GO
+
+-- Re-enable execution (a failed pre-check above turns NOEXEC on for the rest of the file).
+SET NOEXEC OFF;
 GO

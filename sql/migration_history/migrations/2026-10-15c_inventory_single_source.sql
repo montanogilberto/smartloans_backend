@@ -42,11 +42,11 @@ GO
 
 -- 0) Pre-checks -------------------------------------------------------------------
 IF OBJECT_ID('dbo.inventoryStock', 'U') IS NULL OR OBJECT_ID('dbo.inventoryMovements', 'U') IS NULL
-    THROW 50101, 'dbo.inventoryStock / dbo.inventoryMovements missing.', 1;
+    BEGIN RAISERROR('dbo.inventoryStock / dbo.inventoryMovements missing.', 16, 1); SET NOEXEC ON; RETURN; END
 IF COL_LENGTH('dbo.expenseDetails', 'quantity') IS NULL
-    THROW 50102, 'expenseDetails.quantity missing — run 2026-10-02b_expense_item_quantity_cost_supplies.sql first.', 1;
+    BEGIN RAISERROR('expenseDetails.quantity missing — run 2026-10-02b_expense_item_quantity_cost_supplies.sql first.', 16, 1); SET NOEXEC ON; RETURN; END
 IF COL_LENGTH('dbo.products', 'productCategoryId') IS NULL
-    THROW 50103, 'products.productCategoryId missing — run 2026-10-15_products_productCategoryId.sql first.', 1;
+    BEGIN RAISERROR('products.productCategoryId missing — run 2026-10-15_products_productCategoryId.sql first.', 16, 1); SET NOEXEC ON; RETURN; END
 GO
 
 -- 1) products.trackInventory (+ first-run backfill) -----------------------------------
@@ -735,4 +735,8 @@ LEFT JOIN (SELECT companyId, productId, SUM(quantityDelta) AS total
            FROM dbo.inventoryMovements GROUP BY companyId, productId) m
        ON m.companyId = s.companyId AND m.productId = s.productId
 WHERE s.stockQuantity <> ISNULL(m.total, 0);
+GO
+
+-- Re-enable execution (a failed pre-check above turns NOEXEC on for the rest of the file).
+SET NOEXEC OFF;
 GO

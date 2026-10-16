@@ -1,6 +1,6 @@
 /* =============================================================================
    ALL FORWARD MIGRATIONS — single execution against the EXISTING live DB
-   Generated 2026-10-15 from sql/migration_history/migrations/ (64 forward files, *_ROLLBACK.sql excluded)
+   Generated 2026-10-15 from sql/migration_history/migrations/ (67 forward files, *_ROLLBACK.sql excluded)
    Do NOT edit by hand: regenerate from sql/migration_history/migrations/ if a file changes.
    =============================================================================
    Not included: sql/migration_history/snapshot_2026-08-15/ (01_schema / 02_programmability / 03_data). That
@@ -12,7 +12,7 @@
         -b = stop at the first error (recommended).
      SSMS / Azure Data Studio: open the file, select the live DB, Execute.
         SSMS keeps going after a failed batch — read the Messages tab for
-        "Msg" errors, and use the ">>> [nn/64]" markers to see where it was.
+        "Msg" errors, and use the ">>> [nn/67]" markers to see where it was.
 
    SAFE TO RE-RUN: every file is written idempotent (IF NOT EXISTS / COL_LENGTH
    guards, CREATE OR ALTER, MERGE, data fixes that only touch unfixed rows).
@@ -89,13 +89,16 @@
      62. 2026-10-15_products_productCategoryId.sql
      63. 2026-10-15b_products_by_company_category_filter.sql
      64. 2026-10-15c_inventory_single_source.sql
+     65. 2026-10-15d_catalog_hierarchy.sql
+     66. 2026-10-15e_option_choice_measurements.sql
+     67. 2026-10-16_gmo_catalog.sql
    ============================================================================= */
 
 SET NOCOUNT ON;
 GO
 
 -- #############################################################################
--- [01/64] 2026-08-11_add_capital_vocabulary.sql
+-- [01/67] 2026-08-11_add_capital_vocabulary.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -108,7 +111,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [01/64] 2026-08-11_add_capital_vocabulary.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [01/67] 2026-08-11_add_capital_vocabulary.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -149,7 +152,7 @@ WHEN NOT MATCHED THEN
 GO
 
 -- #############################################################################
--- [02/64] 2026-08-13_add_offer_consent.sql
+-- [02/67] 2026-08-13_add_offer_consent.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -162,7 +165,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [02/64] 2026-08-13_add_offer_consent.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [02/67] 2026-08-13_add_offer_consent.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -207,7 +210,7 @@ END
 GO
 
 -- #############################################################################
--- [03/64] 2026-09-02_add_expense_type_notes_receipturl.sql
+-- [03/67] 2026-09-02_add_expense_type_notes_receipturl.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -220,7 +223,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [03/64] 2026-09-02_add_expense_type_notes_receipturl.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [03/67] 2026-09-02_add_expense_type_notes_receipturl.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -650,7 +653,7 @@ END
 GO
 
 -- #############################################################################
--- [04/64] 2026-09-03_add_expense_payroll.sql
+-- [04/67] 2026-09-03_add_expense_payroll.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -663,7 +666,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [04/64] 2026-09-03_add_expense_payroll.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [04/67] 2026-09-03_add_expense_payroll.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -1138,7 +1141,7 @@ END
 GO
 
 -- #############################################################################
--- [05/64] 2026-09-08_add_notificationDispatch.sql
+-- [05/67] 2026-09-08_add_notificationDispatch.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -1151,7 +1154,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [05/64] 2026-09-08_add_notificationDispatch.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [05/67] 2026-09-08_add_notificationDispatch.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- notificationDispatch: cost-minimizing Push -> WhatsApp -> SMS notification cascade.
@@ -1472,7 +1475,7 @@ END
 GO
 
 -- #############################################################################
--- [06/64] 2026-09-10_fix_ticket_tracking_print_action.sql
+-- [06/67] 2026-09-10_fix_ticket_tracking_print_action.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -1485,7 +1488,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [06/64] 2026-09-10_fix_ticket_tracking_print_action.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [06/67] 2026-09-10_fix_ticket_tracking_print_action.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- sp_ticket_tracking never had a branch for @action = 'print' -- every call
@@ -1689,7 +1692,7 @@ END
 GO
 
 -- #############################################################################
--- [07/64] 2026-09-11_add_income_monthly.sql
+-- [07/67] 2026-09-11_add_income_monthly.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -1702,7 +1705,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [07/64] 2026-09-11_add_income_monthly.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [07/67] 2026-09-11_add_income_monthly.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -1791,7 +1794,7 @@ END
 GO
 
 -- #############################################################################
--- [08/64] 2026-09-11_add_pos_support_chat.sql
+-- [08/67] 2026-09-11_add_pos_support_chat.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -1804,7 +1807,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [08/64] 2026-09-11_add_pos_support_chat.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [08/67] 2026-09-11_add_pos_support_chat.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -1966,7 +1969,7 @@ END
 GO
 
 -- #############################################################################
--- [09/64] 2026-09-12_add_client_login_codes.sql
+-- [09/67] 2026-09-12_add_client_login_codes.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -1979,7 +1982,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [09/64] 2026-09-12_add_client_login_codes.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [09/67] 2026-09-12_add_client_login_codes.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- clientLoginCodes: persisted SMS one-time-code login for POS customers
@@ -2217,7 +2220,7 @@ END
 GO
 
 -- #############################################################################
--- [10/64] 2026-09-14_add_pos_client_type.sql
+-- [10/67] 2026-09-14_add_pos_client_type.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -2230,7 +2233,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [10/64] 2026-09-14_add_pos_client_type.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [10/67] 2026-09-14_add_pos_client_type.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -2273,7 +2276,7 @@ ALTER TABLE dbo.clients
 GO
 
 -- #############################################################################
--- [11/64] 2026-09-14_add_pos_support_chat_close_conversation.sql
+-- [11/67] 2026-09-14_add_pos_support_chat_close_conversation.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -2286,7 +2289,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [11/64] 2026-09-14_add_pos_support_chat_close_conversation.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [11/67] 2026-09-14_add_pos_support_chat_close_conversation.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -2432,7 +2435,7 @@ END
 GO
 
 -- #############################################################################
--- [12/64] 2026-09-14_fix_pos_support_chat_list_messages_scoping.sql
+-- [12/67] 2026-09-14_fix_pos_support_chat_list_messages_scoping.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -2445,7 +2448,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [12/64] 2026-09-14_fix_pos_support_chat_list_messages_scoping.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [12/67] 2026-09-14_fix_pos_support_chat_list_messages_scoping.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -2611,7 +2614,7 @@ END
 GO
 
 -- #############################################################################
--- [13/64] 2026-09-18_backfill_clienttype_pos_companies.sql
+-- [13/67] 2026-09-18_backfill_clienttype_pos_companies.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -2624,7 +2627,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [13/64] 2026-09-18_backfill_clienttype_pos_companies.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [13/67] 2026-09-18_backfill_clienttype_pos_companies.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -2702,7 +2705,7 @@ ORDER BY companyId, clientType;
 GO
 
 -- #############################################################################
--- [14/64] 2026-09-18_rename_client_role_to_pos.sql
+-- [14/67] 2026-09-18_rename_client_role_to_pos.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -2715,7 +2718,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [14/64] 2026-09-18_rename_client_role_to_pos.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [14/67] 2026-09-18_rename_client_role_to_pos.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -2770,7 +2773,7 @@ SELECT userId, companyId, roleId, roleName FROM dbo.userCompanies WHERE roleName
 GO
 
 -- #############################################################################
--- [15/64] 2026-09-23_add_income_one.sql
+-- [15/67] 2026-09-23_add_income_one.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -2783,7 +2786,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [15/64] 2026-09-23_add_income_one.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [15/67] 2026-09-23_add_income_one.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -2851,7 +2854,7 @@ END
 GO
 
 -- #############################################################################
--- [16/64] 2026-09-23_add_loanInstallments_one.sql
+-- [16/67] 2026-09-23_add_loanInstallments_one.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -2864,7 +2867,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [16/64] 2026-09-23_add_loanInstallments_one.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [16/67] 2026-09-23_add_loanInstallments_one.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -2936,7 +2939,7 @@ END
 GO
 
 -- #############################################################################
--- [17/64] 2026-09-23_add_ml_oauth_states_sp.sql
+-- [17/67] 2026-09-23_add_ml_oauth_states_sp.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -2949,7 +2952,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [17/64] 2026-09-23_add_ml_oauth_states_sp.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [17/67] 2026-09-23_add_ml_oauth_states_sp.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -3043,7 +3046,7 @@ END
 GO
 
 -- #############################################################################
--- [18/64] 2026-09-23_add_ml_tokens_sp.sql
+-- [18/67] 2026-09-23_add_ml_tokens_sp.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -3056,7 +3059,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [18/64] 2026-09-23_add_ml_tokens_sp.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [18/67] 2026-09-23_add_ml_tokens_sp.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -3182,7 +3185,7 @@ END
 GO
 
 -- #############################################################################
--- [19/64] 2026-09-23_add_notificationDispatchPolicy_one.sql
+-- [19/67] 2026-09-23_add_notificationDispatchPolicy_one.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -3195,7 +3198,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [19/64] 2026-09-23_add_notificationDispatchPolicy_one.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [19/67] 2026-09-23_add_notificationDispatchPolicy_one.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -3249,7 +3252,7 @@ END
 GO
 
 -- #############################################################################
--- [20/64] 2026-09-23_add_notificationDispatches_lookup.sql
+-- [20/67] 2026-09-23_add_notificationDispatches_lookup.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -3262,7 +3265,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [20/64] 2026-09-23_add_notificationDispatches_lookup.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [20/67] 2026-09-23_add_notificationDispatches_lookup.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -3355,7 +3358,7 @@ END
 GO
 
 -- #############################################################################
--- [21/64] 2026-09-23_add_pushNotifications_resolveUsers.sql
+-- [21/67] 2026-09-23_add_pushNotifications_resolveUsers.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -3368,7 +3371,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [21/64] 2026-09-23_add_pushNotifications_resolveUsers.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [21/67] 2026-09-23_add_pushNotifications_resolveUsers.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -3438,7 +3441,7 @@ END;
 GO
 
 -- #############################################################################
--- [22/64] 2026-09-23_add_reservations.sql
+-- [22/67] 2026-09-23_add_reservations.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -3451,7 +3454,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [22/64] 2026-09-23_add_reservations.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [22/67] 2026-09-23_add_reservations.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- Kiosk reservation booking: customers book Lavado/Secado time slots from the PWA kiosk.
@@ -3483,7 +3486,7 @@ GO
 GO
 
 -- #############################################################################
--- [23/64] 2026-09-23_add_userCompanies_role.sql
+-- [23/67] 2026-09-23_add_userCompanies_role.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -3496,7 +3499,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [23/64] 2026-09-23_add_userCompanies_role.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [23/67] 2026-09-23_add_userCompanies_role.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -3559,7 +3562,7 @@ END
 GO
 
 -- #############################################################################
--- [24/64] 2026-09-23_ticket_discount_fields.sql
+-- [24/67] 2026-09-23_ticket_discount_fields.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -3572,7 +3575,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [24/64] 2026-09-23_ticket_discount_fields.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [24/67] 2026-09-23_ticket_discount_fields.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- ============================================================
@@ -3859,7 +3862,7 @@ END
 GO
 
 -- #############################################################################
--- [25/64] 2026-09-24_reservation_catalogs.sql
+-- [25/67] 2026-09-24_reservation_catalogs.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -3872,7 +3875,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [25/64] 2026-09-24_reservation_catalogs.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [25/67] 2026-09-24_reservation_catalogs.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- Reservation catalogs: the services a customer can book and the business
@@ -3965,7 +3968,7 @@ END
 GO
 
 -- #############################################################################
--- [26/64] 2026-09-28_whatsapp_channels.sql
+-- [26/67] 2026-09-28_whatsapp_channels.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -3978,7 +3981,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [26/64] 2026-09-28_whatsapp_channels.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [26/67] 2026-09-28_whatsapp_channels.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- WhatsApp Cloud API, multi-company: one WhatsApp number per branch.
@@ -4032,7 +4035,7 @@ CREATE TABLE [dbo].[whatsappConversations] (
 GO
 
 -- #############################################################################
--- [27/64] 2026-09-29_income_monthly_any_month.sql
+-- [27/67] 2026-09-29_income_monthly_any_month.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -4045,7 +4048,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [27/64] 2026-09-29_income_monthly_any_month.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [27/67] 2026-09-29_income_monthly_any_month.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -4125,7 +4128,7 @@ END
 GO
 
 -- #############################################################################
--- [28/64] 2026-09-30_add_employees_ui_feature.sql
+-- [28/67] 2026-09-30_add_employees_ui_feature.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -4138,7 +4141,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [28/64] 2026-09-30_add_employees_ui_feature.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [28/67] 2026-09-30_add_employees_ui_feature.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -4201,7 +4204,7 @@ ORDER BY r.code;
 GO
 
 -- #############################################################################
--- [29/64] 2026-09-30_employees_companyId.sql
+-- [29/67] 2026-09-30_employees_companyId.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -4214,7 +4217,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [29/64] 2026-09-30_employees_companyId.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [29/67] 2026-09-30_employees_companyId.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -4588,7 +4591,7 @@ END;
 GO
 
 -- #############################################################################
--- [30/64] 2026-09-30_expense_all_return_new_columns.sql
+-- [30/67] 2026-09-30_expense_all_return_new_columns.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -4601,7 +4604,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [30/64] 2026-09-30_expense_all_return_new_columns.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [30/67] 2026-09-30_expense_all_return_new_columns.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -4658,7 +4661,7 @@ END
 GO
 
 -- #############################################################################
--- [31/64] 2026-09-30_expense_monthly.sql
+-- [31/67] 2026-09-30_expense_monthly.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -4671,7 +4674,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [31/64] 2026-09-30_expense_monthly.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [31/67] 2026-09-30_expense_monthly.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -4773,7 +4776,7 @@ END
 GO
 
 -- #############################################################################
--- [32/64] 2026-09-30_fix_expense_paymentdate_midnight.sql
+-- [32/67] 2026-09-30_fix_expense_paymentdate_midnight.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -4786,7 +4789,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [32/64] 2026-09-30_fix_expense_paymentdate_midnight.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [32/67] 2026-09-30_fix_expense_paymentdate_midnight.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -4838,7 +4841,7 @@ WHERE CAST(paymentDate AS TIME) = '00:00:00';
 GO
 
 -- #############################################################################
--- [33/64] 2026-09-30_fix_income_monthly_dateadd.sql
+-- [33/67] 2026-09-30_fix_income_monthly_dateadd.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -4851,7 +4854,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [33/64] 2026-09-30_fix_income_monthly_dateadd.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [33/67] 2026-09-30_fix_income_monthly_dateadd.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -4938,7 +4941,7 @@ END
 GO
 
 -- #############################################################################
--- [34/64] 2026-09-30_fix_statuses_table_rename.sql
+-- [34/67] 2026-09-30_fix_statuses_table_rename.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -4951,7 +4954,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [34/64] 2026-09-30_fix_statuses_table_rename.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [34/67] 2026-09-30_fix_statuses_table_rename.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -5153,7 +5156,7 @@ END
 GO
 
 -- #############################################################################
--- [35/64] 2026-09-30_income_terminal_commission.sql
+-- [35/67] 2026-09-30_income_terminal_commission.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -5166,7 +5169,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [35/64] 2026-09-30_income_terminal_commission.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [35/67] 2026-09-30_income_terminal_commission.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -5358,7 +5361,7 @@ END
 GO
 
 -- #############################################################################
--- [36/64] 2026-09-30_mercadopago_rate_4_2.sql
+-- [36/67] 2026-09-30_mercadopago_rate_4_2.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -5371,7 +5374,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [36/64] 2026-09-30_mercadopago_rate_4_2.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [36/67] 2026-09-30_mercadopago_rate_4_2.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -5407,7 +5410,7 @@ SELECT commissionTerminalId, provider, commissionRatePct, updatedAt
 GO
 
 -- #############################################################################
--- [37/64] 2026-09-30_redeploy_commissionTerminals_sps.sql
+-- [37/67] 2026-09-30_redeploy_commissionTerminals_sps.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -5420,7 +5423,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [37/64] 2026-09-30_redeploy_commissionTerminals_sps.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [37/67] 2026-09-30_redeploy_commissionTerminals_sps.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -5584,7 +5587,7 @@ END
 GO
 
 -- #############################################################################
--- [38/64] 2026-09-30_redeploy_sp_suppliers_quoted_identifier.sql
+-- [38/67] 2026-09-30_redeploy_sp_suppliers_quoted_identifier.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -5597,7 +5600,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [38/64] 2026-09-30_redeploy_sp_suppliers_quoted_identifier.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [38/67] 2026-09-30_redeploy_sp_suppliers_quoted_identifier.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -5813,7 +5816,7 @@ END;
 GO
 
 -- #############################################################################
--- [39/64] 2026-10-01_fix_trialBalance_aggregation.sql
+-- [39/67] 2026-10-01_fix_trialBalance_aggregation.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -5826,7 +5829,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [39/64] 2026-10-01_fix_trialBalance_aggregation.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [39/67] 2026-10-01_fix_trialBalance_aggregation.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -5922,7 +5925,7 @@ SELECT CASE WHEN OBJECT_DEFINITION(OBJECT_ID('dbo.sp_journalEntries_trialBalance
 GO
 
 -- #############################################################################
--- [40/64] 2026-10-01b_journal_accountTotals_fn.sql
+-- [40/67] 2026-10-01b_journal_accountTotals_fn.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -5935,7 +5938,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [40/64] 2026-10-01b_journal_accountTotals_fn.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [40/67] 2026-10-01b_journal_accountTotals_fn.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -6049,7 +6052,7 @@ SELECT
 GO
 
 -- #############################################################################
--- [41/64] 2026-10-01c_chartOfAccounts_ensure_base.sql
+-- [41/67] 2026-10-01c_chartOfAccounts_ensure_base.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -6062,7 +6065,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [41/64] 2026-10-01c_chartOfAccounts_ensure_base.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [41/67] 2026-10-01c_chartOfAccounts_ensure_base.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -6232,7 +6235,7 @@ ORDER BY 1, 2;
 GO
 
 -- #############################################################################
--- [42/64] 2026-10-01d_journalEntries_duplicate_guard.sql
+-- [42/67] 2026-10-01d_journalEntries_duplicate_guard.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -6245,7 +6248,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [42/64] 2026-10-01d_journalEntries_duplicate_guard.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [42/67] 2026-10-01d_journalEntries_duplicate_guard.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -6517,7 +6520,7 @@ SET NOEXEC OFF;
 GO
 
 -- #############################################################################
--- [43/64] 2026-10-01e_backfill_income_commissions_sp.sql
+-- [43/67] 2026-10-01e_backfill_income_commissions_sp.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -6530,7 +6533,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [43/64] 2026-10-01e_backfill_income_commissions_sp.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [43/67] 2026-10-01e_backfill_income_commissions_sp.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -6686,7 +6689,7 @@ EXEC dbo.sp_journalEntries_backfillIncomeCommissions @companyId = NULL, @fromDat
 GO
 
 -- #############################################################################
--- [44/64] 2026-10-01f_run_income_commission_backfill.sql
+-- [44/67] 2026-10-01f_run_income_commission_backfill.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -6699,7 +6702,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [44/64] 2026-10-01f_run_income_commission_backfill.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [44/67] 2026-10-01f_run_income_commission_backfill.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -6771,7 +6774,7 @@ EXEC dbo.sp_journalEntries_backfillIncomeCommissions @companyId = NULL, @fromDat
 GO
 
 -- #############################################################################
--- [45/64] 2026-10-01g_income_reverse_on_delete.sql
+-- [45/67] 2026-10-01g_income_reverse_on_delete.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -6784,7 +6787,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [45/64] 2026-10-01g_income_reverse_on_delete.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [45/67] 2026-10-01g_income_reverse_on_delete.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -6977,7 +6980,7 @@ GROUP BY e.companyId, e.referenceType;
 GO
 
 -- #############################################################################
--- [46/64] 2026-10-01h_opening_balance_guard.sql
+-- [46/67] 2026-10-01h_opening_balance_guard.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -6990,7 +6993,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [46/64] 2026-10-01h_opening_balance_guard.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [46/67] 2026-10-01h_opening_balance_guard.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -7269,7 +7272,7 @@ SET NOEXEC OFF;
 GO
 
 -- #############################################################################
--- [47/64] 2026-10-01i_reconcile_and_backfill_movements.sql
+-- [47/67] 2026-10-01i_reconcile_and_backfill_movements.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -7282,7 +7285,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [47/64] 2026-10-01i_reconcile_and_backfill_movements.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [47/67] 2026-10-01i_reconcile_and_backfill_movements.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -7557,7 +7560,7 @@ DROP TABLE #rec;
 GO
 
 -- #############################################################################
--- [48/64] 2026-10-01j_run_books_period_repair.sql
+-- [48/67] 2026-10-01j_run_books_period_repair.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -7570,7 +7573,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [48/64] 2026-10-01j_run_books_period_repair.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [48/67] 2026-10-01j_run_books_period_repair.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -7683,7 +7686,7 @@ SET NOEXEC OFF;
 GO
 
 -- #############################################################################
--- [49/64] 2026-10-01k_add_income_payments.sql
+-- [49/67] 2026-10-01k_add_income_payments.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -7696,7 +7699,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [49/64] 2026-10-01k_add_income_payments.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [49/67] 2026-10-01k_add_income_payments.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- incomePayments: itemized payment-method breakdown for a split-payment
@@ -7801,7 +7804,7 @@ END
 GO
 
 -- #############################################################################
--- [50/64] 2026-10-01k_balance_sheet.sql
+-- [50/67] 2026-10-01k_balance_sheet.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -7814,7 +7817,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [50/64] 2026-10-01k_balance_sheet.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [50/67] 2026-10-01k_balance_sheet.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -7983,7 +7986,7 @@ SELECT CASE WHEN OBJECT_ID('dbo.fn_journalEntries_balanceSheet', 'IF') IS NOT NU
 GO
 
 -- #############################################################################
--- [51/64] 2026-10-01l_add_expense_service.sql
+-- [51/67] 2026-10-01l_add_expense_service.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -7996,7 +7999,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [51/64] 2026-10-01l_add_expense_service.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [51/67] 2026-10-01l_add_expense_service.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -8569,7 +8572,7 @@ END
 GO
 
 -- #############################################################################
--- [52/64] 2026-10-01l_correct_entry_dates.sql
+-- [52/67] 2026-10-01l_correct_entry_dates.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -8582,7 +8585,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [52/64] 2026-10-01l_correct_entry_dates.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [52/67] 2026-10-01l_correct_entry_dates.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -8715,7 +8718,7 @@ EXEC dbo.sp_journalEntries_correctDates @companyId = NULL, @fromDate = '2026-09-
 GO
 
 -- #############################################################################
--- [53/64] 2026-10-01m_run_correct_entry_dates.sql
+-- [53/67] 2026-10-01m_run_correct_entry_dates.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -8728,7 +8731,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [53/64] 2026-10-01m_run_correct_entry_dates.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [53/67] 2026-10-01m_run_correct_entry_dates.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -8772,7 +8775,7 @@ SELECT 'journal',
 GO
 
 -- #############################################################################
--- [54/64] 2026-10-02_expense_return_serviceid.sql
+-- [54/67] 2026-10-02_expense_return_serviceid.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -8785,7 +8788,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [54/64] 2026-10-02_expense_return_serviceid.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [54/67] 2026-10-02_expense_return_serviceid.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -8907,7 +8910,7 @@ END
 GO
 
 -- #############################################################################
--- [55/64] 2026-10-02b_expense_item_quantity_cost_supplies.sql
+-- [55/67] 2026-10-02b_expense_item_quantity_cost_supplies.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -8920,7 +8923,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [55/64] 2026-10-02b_expense_item_quantity_cost_supplies.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [55/67] 2026-10-02b_expense_item_quantity_cost_supplies.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -8957,7 +8960,6 @@ IF COL_LENGTH('dbo.expenseDetails','unitCost') IS NULL
 IF COL_LENGTH('dbo.products','isSupply') IS NULL
     ALTER TABLE dbo.products ADD isSupply BIT NOT NULL CONSTRAINT DF_products_isSupply DEFAULT 0;
 GO
-
 CREATE OR ALTER PROC [dbo].[sp_expense]
   @pjsonfile NVARCHAR(MAX)
 AS
@@ -9257,16 +9259,17 @@ BEGIN
   FROM OPENJSON(@Outputmessage, '$.result');
 END
 GO
-
-CREATE OR ALTER PROC [dbo].[sp_products_save]
+-- [run-all] skipped once products.categoryId is renamed (superseded by 2026-10-15)
+IF COL_LENGTH('dbo.products', 'categoryId') IS NOT NULL
+    EXEC (N'CREATE OR ALTER PROC [dbo].[sp_products_save]
     @pjsonfile NVARCHAR(MAX)
 AS
 BEGIN
     SET NOCOUNT ON;
 
     DECLARE 
-        @Outputmessage NVARCHAR(MAX) = '{"result":[{ "value":"", "msg":"", "error":"" }]}',
-        @Error NVARCHAR(500) = '',
+        @Outputmessage NVARCHAR(MAX) = ''{"result":[{ "value":"", "msg":"", "error":"" }]}'',
+        @Error NVARCHAR(500) = '''',
         @action INT,
         @companyId INT,
         @productId INT;
@@ -9274,15 +9277,15 @@ BEGIN
     BEGIN TRY
         -- 1. Extract Root Context
         SELECT TOP (1)
-            @action = TRY_CAST(JSON_VALUE(value, '$.action') AS INT),
-            @companyId = TRY_CAST(JSON_VALUE(value, '$.companyId') AS INT),
-            @productId = TRY_CAST(JSON_VALUE(value, '$.productId') AS INT)
-        FROM OPENJSON(@pjsonfile, '$.products');
+            @action = TRY_CAST(JSON_VALUE(value, ''$.action'') AS INT),
+            @companyId = TRY_CAST(JSON_VALUE(value, ''$.companyId'') AS INT),
+            @productId = TRY_CAST(JSON_VALUE(value, ''$.productId'') AS INT)
+        FROM OPENJSON(@pjsonfile, ''$.products'');
 
         -- Validations
-        IF @action IS NULL RAISERROR('action is required (1=insert, 2=update, 3=delete).', 16, 1);
-        IF @companyId IS NULL RAISERROR('companyId is required.', 16, 1);
-        IF @companyId <> 1 RAISERROR('Invalid companyId.', 16, 1);
+        IF @action IS NULL RAISERROR(''action is required (1=insert, 2=update, 3=delete).'', 16, 1);
+        IF @companyId IS NULL RAISERROR(''companyId is required.'', 16, 1);
+        IF @companyId <> 1 RAISERROR(''Invalid companyId.'', 16, 1);
 
         BEGIN TRANSACTION;
 
@@ -9293,32 +9296,32 @@ BEGIN
         BEGIN
             INSERT INTO dbo.products (name, barCode, code, dateOfExpire, productFormId, manufactureId, description, createdAt, categoryId, companyId, isSupply)
             SELECT 
-                JSON_VALUE(value, '$.name'), JSON_VALUE(value, '$.barCode'), JSON_VALUE(value, '$.code'),
-                JSON_VALUE(value, '$.dateOfExpire'), TRY_CAST(JSON_VALUE(value, '$.productFormId') AS INT),
-                TRY_CAST(JSON_VALUE(value, '$.manufactureId') AS INT), JSON_VALUE(value, '$.description'),
-                GETDATE(), TRY_CAST(JSON_VALUE(value, '$.categoryId') AS INT), @companyId,
-                ISNULL(TRY_CAST(JSON_VALUE(value, '$.isSupply') AS BIT), 0)
-            FROM OPENJSON(@pjsonfile, '$.products');
+                JSON_VALUE(value, ''$.name''), JSON_VALUE(value, ''$.barCode''), JSON_VALUE(value, ''$.code''),
+                JSON_VALUE(value, ''$.dateOfExpire''), TRY_CAST(JSON_VALUE(value, ''$.productFormId'') AS INT),
+                TRY_CAST(JSON_VALUE(value, ''$.manufactureId'') AS INT), JSON_VALUE(value, ''$.description''),
+                GETDATE(), TRY_CAST(JSON_VALUE(value, ''$.categoryId'') AS INT), @companyId,
+                ISNULL(TRY_CAST(JSON_VALUE(value, ''$.isSupply'') AS BIT), 0)
+            FROM OPENJSON(@pjsonfile, ''$.products'');
 
             SET @productId = SCOPE_IDENTITY();
         END
         ELSE IF @action = 2
         BEGIN
-            IF @productId IS NULL RAISERROR('productId is required for update.', 16, 1);
+            IF @productId IS NULL RAISERROR(''productId is required for update.'', 16, 1);
 
             UPDATE p
-            SET p.name = COALESCE(JSON_VALUE(j.value, '$.name'), p.name),
-                p.barCode = COALESCE(JSON_VALUE(j.value, '$.barCode'), p.barCode),
-                p.code = COALESCE(JSON_VALUE(j.value, '$.code'), p.code),
-                p.dateOfExpire = COALESCE(JSON_VALUE(j.value, '$.dateOfExpire'), p.dateOfExpire),
-                p.productFormId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.productFormId') AS INT), p.productFormId),
-                p.manufactureId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.manufactureId') AS INT), p.manufactureId),
-                p.description = COALESCE(JSON_VALUE(j.value, '$.description'), p.description),
+            SET p.name = COALESCE(JSON_VALUE(j.value, ''$.name''), p.name),
+                p.barCode = COALESCE(JSON_VALUE(j.value, ''$.barCode''), p.barCode),
+                p.code = COALESCE(JSON_VALUE(j.value, ''$.code''), p.code),
+                p.dateOfExpire = COALESCE(JSON_VALUE(j.value, ''$.dateOfExpire''), p.dateOfExpire),
+                p.productFormId = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.productFormId'') AS INT), p.productFormId),
+                p.manufactureId = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.manufactureId'') AS INT), p.manufactureId),
+                p.description = COALESCE(JSON_VALUE(j.value, ''$.description''), p.description),
                 p.updatedAt = GETDATE(),
-                p.categoryId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.categoryId') AS INT), p.categoryId),
-                p.isSupply = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.isSupply') AS BIT), p.isSupply)
+                p.categoryId = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.categoryId'') AS INT), p.categoryId),
+                p.isSupply = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.isSupply'') AS BIT), p.isSupply)
             FROM dbo.products p
-            CROSS APPLY OPENJSON(@pjsonfile, '$.products') j
+            CROSS APPLY OPENJSON(@pjsonfile, ''$.products'') j
             WHERE p.productId = @productId AND p.companyId = @companyId;
         END
         ELSE IF @action = 3
@@ -9327,14 +9330,14 @@ BEGIN
             DELETE FROM dbo.productOptionChoices WHERE productOptionId IN (SELECT productOptionId FROM dbo.productOptions WHERE productId = @productId);
             DELETE FROM dbo.productOptions WHERE productId = @productId;
             DELETE FROM dbo.productDetails WHERE productId = @productId;
-            IF OBJECT_ID('dbo.productsDescription', 'U') IS NOT NULL DELETE FROM dbo.productsDescription WHERE productId = @productId;
+            IF OBJECT_ID(''dbo.productsDescription'', ''U'') IS NOT NULL DELETE FROM dbo.productsDescription WHERE productId = @productId;
             DELETE FROM dbo.products WHERE productId = @productId AND companyId = @companyId;
 
             COMMIT TRANSACTION;
             
             -- Early return on successful delete
-            SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@productId AS NVARCHAR(50))), '$.result[0].msg', 'Deleted Successfully');
-            SELECT JSON_VALUE(value, '$.value') AS [value], JSON_VALUE(value, '$.msg') AS [msg], JSON_VALUE(value, '$.error') AS [error] FROM OPENJSON(@Outputmessage, '$.result');
+            SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, ''$.result[0].value'', CAST(@productId AS NVARCHAR(50))), ''$.result[0].msg'', ''Deleted Successfully'');
+            SELECT JSON_VALUE(value, ''$.value'') AS [value], JSON_VALUE(value, ''$.msg'') AS [msg], JSON_VALUE(value, ''$.error'') AS [error] FROM OPENJSON(@Outputmessage, ''$.result'');
             RETURN;
         END
 
@@ -9344,10 +9347,10 @@ BEGIN
         DECLARE @stock INT, @uPrice DECIMAL(10,2), @sPrice DECIMAL(10,2);
         
         SELECT 
-            @stock = TRY_CAST(JSON_VALUE(value, '$.stockQuantity') AS INT),
-            @uPrice = TRY_CAST(JSON_VALUE(value, '$.unitPrice') AS DECIMAL(10,2)),
-            @sPrice = TRY_CAST(JSON_VALUE(value, '$.salePrice') AS DECIMAL(10,2))
-        FROM OPENJSON(@pjsonfile, '$.productDetails');
+            @stock = TRY_CAST(JSON_VALUE(value, ''$.stockQuantity'') AS INT),
+            @uPrice = TRY_CAST(JSON_VALUE(value, ''$.unitPrice'') AS DECIMAL(10,2)),
+            @sPrice = TRY_CAST(JSON_VALUE(value, ''$.salePrice'') AS DECIMAL(10,2))
+        FROM OPENJSON(@pjsonfile, ''$.productDetails'');
 
         IF EXISTS (SELECT 1 FROM dbo.productDetails WHERE productId = @productId)
         BEGIN
@@ -9367,17 +9370,17 @@ BEGIN
         /* ============================================================
            STEP 3: PRODUCT DESCRIPTIONS
            ============================================================ */
-        IF OBJECT_ID('dbo.productsDescription', 'U') IS NOT NULL
+        IF OBJECT_ID(''dbo.productsDescription'', ''U'') IS NOT NULL
         BEGIN
             DELETE FROM dbo.productsDescription WHERE productId = @productId;
 
             INSERT INTO dbo.productsDescription (productId, Dosage, measurementId, is_principal, activeIngredientId)
             SELECT 
-                @productId, JSON_VALUE(value, '$.Dosage'), 
-                TRY_CAST(JSON_VALUE(value, '$.measurementId') AS INT), 
-                JSON_VALUE(value, '$.is_principal'), 
-                TRY_CAST(JSON_VALUE(value, '$.activeIngredientId') AS INT)
-            FROM OPENJSON(@pjsonfile, '$.productDescriptions');
+                @productId, JSON_VALUE(value, ''$.Dosage''), 
+                TRY_CAST(JSON_VALUE(value, ''$.measurementId'') AS INT), 
+                JSON_VALUE(value, ''$.is_principal''), 
+                TRY_CAST(JSON_VALUE(value, ''$.activeIngredientId'') AS INT)
+            FROM OPENJSON(@pjsonfile, ''$.productDescriptions'');
         END
 
         /* ============================================================
@@ -9389,16 +9392,16 @@ BEGIN
 
         -- We use a cursor or simple loop over the array index to keep identities synchronized
         DECLARE @index INT = 0, @maxOptions INT;
-        SET @maxOptions = (SELECT COUNT(*) FROM OPENJSON(@pjsonfile, '$.productOptions'));
+        SET @maxOptions = (SELECT COUNT(*) FROM OPENJSON(@pjsonfile, ''$.productOptions''));
 
         WHILE @index < @maxOptions
         BEGIN
-            DECLARE @optPath NVARCHAR(100) = '$.productOptions[' + CAST(@index AS NVARCHAR(10)) + ']';
+            DECLARE @optPath NVARCHAR(100) = ''$.productOptions['' + CAST(@index AS NVARCHAR(10)) + '']'';
             DECLARE @newOptId INT;
 
             -- Insert the Option Node
             INSERT INTO dbo.productOptions (productId, optionKey, name, type, createdAt, updatedAt)
-            SELECT @productId, JSON_VALUE(@pjsonfile, @optPath + '.optionKey'), JSON_VALUE(@pjsonfile, @optPath + '.name'), JSON_VALUE(@pjsonfile, @optPath + '.type'), GETDATE(), GETDATE();
+            SELECT @productId, JSON_VALUE(@pjsonfile, @optPath + ''.optionKey''), JSON_VALUE(@pjsonfile, @optPath + ''.name''), JSON_VALUE(@pjsonfile, @optPath + ''.type''), GETDATE(), GETDATE();
             
             SET @newOptId = SCOPE_IDENTITY();
 
@@ -9406,13 +9409,13 @@ BEGIN
             INSERT INTO dbo.productOptionChoices (productOptionId, choiceKey, name, price, description, createdAt, updatedAt)
             SELECT 
                 @newOptId,
-                JSON_VALUE(value, '$.choiceKey'),
-                JSON_VALUE(value, '$.name'),
-                COALESCE(TRY_CAST(JSON_VALUE(value, '$.price') AS DECIMAL(10,2)), 0.00),
-                COALESCE(JSON_VALUE(value, '$.description'), ''),
+                JSON_VALUE(value, ''$.choiceKey''),
+                JSON_VALUE(value, ''$.name''),
+                COALESCE(TRY_CAST(JSON_VALUE(value, ''$.price'') AS DECIMAL(10,2)), 0.00),
+                COALESCE(JSON_VALUE(value, ''$.description''), ''''),
                 GETDATE(),
                 GETDATE()
-            FROM OPENJSON(@pjsonfile, @optPath + '.optionChoices');
+            FROM OPENJSON(@pjsonfile, @optPath + ''.optionChoices'');
 
             SET @index = @index + 1;
         END
@@ -9420,20 +9423,19 @@ BEGIN
         COMMIT TRANSACTION;
 
         -- Success Output Compilation
-        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@productId AS NVARCHAR(50))), '$.result[0].msg', CASE WHEN @action = 1 THEN 'Inserted Successfully' ELSE 'Updated Successfully' END);
+        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, ''$.result[0].value'', CAST(@productId AS NVARCHAR(50))), ''$.result[0].msg'', CASE WHEN @action = 1 THEN ''Inserted Successfully'' ELSE ''Updated Successfully'' END);
 
     END TRY
     BEGIN CATCH
         IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SET @Error = ERROR_MESSAGE();
-        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].error', '1'), '$.result[0].msg', @Error);
+        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, ''$.result[0].error'', ''1''), ''$.result[0].msg'', @Error);
     END CATCH;
 
     -- Return Status Response
-    SELECT JSON_VALUE(value, '$.value') AS [value], JSON_VALUE(value, '$.msg') AS [msg], JSON_VALUE(value, '$.error') AS [error] FROM OPENJSON(@Outputmessage, '$.result');
-END
+    SELECT JSON_VALUE(value, ''$.value'') AS [value], JSON_VALUE(value, ''$.msg'') AS [msg], JSON_VALUE(value, ''$.error'') AS [error] FROM OPENJSON(@Outputmessage, ''$.result'');
+END');
 GO
-
 CREATE OR ALTER PROC [dbo].[sp_products_all]
 AS
 SET NOCOUNT ON
@@ -9459,8 +9461,9 @@ BEGIN
 END
 GO
 
+
 -- #############################################################################
--- [56/64] 2026-10-02c_company_token_ledger.sql
+-- [56/67] 2026-10-02c_company_token_ledger.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -9473,7 +9476,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [56/64] 2026-10-02c_company_token_ledger.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [56/67] 2026-10-02c_company_token_ledger.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -9636,7 +9639,7 @@ END
 GO
 
 -- #############################################################################
--- [57/64] 2026-10-02c_expense_ledger_sync_reads.sql
+-- [57/67] 2026-10-02c_expense_ledger_sync_reads.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -9649,7 +9652,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [57/64] 2026-10-02c_expense_ledger_sync_reads.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [57/67] 2026-10-02c_expense_ledger_sync_reads.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -9776,7 +9779,7 @@ END
 GO
 
 -- #############################################################################
--- [58/64] 2026-10-06_backfill_client_companyId_from_sales.sql
+-- [58/67] 2026-10-06_backfill_client_companyId_from_sales.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -9789,7 +9792,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [58/64] 2026-10-06_backfill_client_companyId_from_sales.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [58/67] 2026-10-06_backfill_client_companyId_from_sales.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -9857,7 +9860,7 @@ ORDER BY c.created_At DESC;
 GO
 
 -- #############################################################################
--- [59/64] 2026-10-07_products_net_content_no_expire.sql
+-- [59/67] 2026-10-07_products_net_content_no_expire.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -9870,7 +9873,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [59/64] 2026-10-07_products_net_content_no_expire.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [59/67] 2026-10-07_products_net_content_no_expire.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -9914,20 +9917,20 @@ GO
 IF COL_LENGTH('dbo.products','referencePrice') IS NULL
     ALTER TABLE dbo.products ADD referencePrice DECIMAL(10,2) NULL;
 GO
-
 -- Optional cleanup: legacy "no date" rows stored as 1900-01-01
 UPDATE dbo.products SET dateOfExpire = NULL WHERE dateOfExpire = '1900-01-01';
 GO
-
-CREATE OR ALTER PROC [dbo].[sp_products_save]
+-- [run-all] skipped once products.categoryId is renamed (superseded by 2026-10-15)
+IF COL_LENGTH('dbo.products', 'categoryId') IS NOT NULL
+    EXEC (N'CREATE OR ALTER PROC [dbo].[sp_products_save]
     @pjsonfile NVARCHAR(MAX)
 AS
 BEGIN
     SET NOCOUNT ON;
 
     DECLARE 
-        @Outputmessage NVARCHAR(MAX) = '{"result":[{ "value":"", "msg":"", "error":"" }]}',
-        @Error NVARCHAR(500) = '',
+        @Outputmessage NVARCHAR(MAX) = ''{"result":[{ "value":"", "msg":"", "error":"" }]}'',
+        @Error NVARCHAR(500) = '''',
         @action INT,
         @companyId INT,
         @productId INT;
@@ -9935,15 +9938,15 @@ BEGIN
     BEGIN TRY
         -- 1. Extract Root Context
         SELECT TOP (1)
-            @action = TRY_CAST(JSON_VALUE(value, '$.action') AS INT),
-            @companyId = TRY_CAST(JSON_VALUE(value, '$.companyId') AS INT),
-            @productId = TRY_CAST(JSON_VALUE(value, '$.productId') AS INT)
-        FROM OPENJSON(@pjsonfile, '$.products');
+            @action = TRY_CAST(JSON_VALUE(value, ''$.action'') AS INT),
+            @companyId = TRY_CAST(JSON_VALUE(value, ''$.companyId'') AS INT),
+            @productId = TRY_CAST(JSON_VALUE(value, ''$.productId'') AS INT)
+        FROM OPENJSON(@pjsonfile, ''$.products'');
 
         -- Validations
-        IF @action IS NULL RAISERROR('action is required (1=insert, 2=update, 3=delete).', 16, 1);
-        IF @companyId IS NULL RAISERROR('companyId is required.', 16, 1);
-        IF @companyId <> 1 RAISERROR('Invalid companyId.', 16, 1);
+        IF @action IS NULL RAISERROR(''action is required (1=insert, 2=update, 3=delete).'', 16, 1);
+        IF @companyId IS NULL RAISERROR(''companyId is required.'', 16, 1);
+        IF @companyId <> 1 RAISERROR(''Invalid companyId.'', 16, 1);
 
         BEGIN TRANSACTION;
 
@@ -9954,41 +9957,41 @@ BEGIN
         BEGIN
             INSERT INTO dbo.products (name, barCode, code, dateOfExpire, productFormId, manufactureId, description, createdAt, categoryId, companyId, isSupply, netContent, unitOfMeasure, referencePrice)
             SELECT 
-                JSON_VALUE(value, '$.name'), JSON_VALUE(value, '$.barCode'), JSON_VALUE(value, '$.code'),
-                TRY_CONVERT(DATE, NULLIF(JSON_VALUE(value, '$.dateOfExpire'), '')), TRY_CAST(JSON_VALUE(value, '$.productFormId') AS INT),
-                TRY_CAST(JSON_VALUE(value, '$.manufactureId') AS INT), JSON_VALUE(value, '$.description'),
-                GETDATE(), TRY_CAST(JSON_VALUE(value, '$.categoryId') AS INT), @companyId,
-                ISNULL(TRY_CAST(JSON_VALUE(value, '$.isSupply') AS BIT), 0),
-                TRY_CAST(JSON_VALUE(value, '$.netContent') AS DECIMAL(10,3)), NULLIF(JSON_VALUE(value, '$.unitOfMeasure'), ''),
-                TRY_CAST(JSON_VALUE(value, '$.referencePrice') AS DECIMAL(10,2))
-            FROM OPENJSON(@pjsonfile, '$.products');
+                JSON_VALUE(value, ''$.name''), JSON_VALUE(value, ''$.barCode''), JSON_VALUE(value, ''$.code''),
+                TRY_CONVERT(DATE, NULLIF(JSON_VALUE(value, ''$.dateOfExpire''), '''')), TRY_CAST(JSON_VALUE(value, ''$.productFormId'') AS INT),
+                TRY_CAST(JSON_VALUE(value, ''$.manufactureId'') AS INT), JSON_VALUE(value, ''$.description''),
+                GETDATE(), TRY_CAST(JSON_VALUE(value, ''$.categoryId'') AS INT), @companyId,
+                ISNULL(TRY_CAST(JSON_VALUE(value, ''$.isSupply'') AS BIT), 0),
+                TRY_CAST(JSON_VALUE(value, ''$.netContent'') AS DECIMAL(10,3)), NULLIF(JSON_VALUE(value, ''$.unitOfMeasure''), ''''),
+                TRY_CAST(JSON_VALUE(value, ''$.referencePrice'') AS DECIMAL(10,2))
+            FROM OPENJSON(@pjsonfile, ''$.products'');
 
             SET @productId = SCOPE_IDENTITY();
         END
         ELSE IF @action = 2
         BEGIN
-            IF @productId IS NULL RAISERROR('productId is required for update.', 16, 1);
+            IF @productId IS NULL RAISERROR(''productId is required for update.'', 16, 1);
 
             UPDATE p
-            SET p.name = COALESCE(JSON_VALUE(j.value, '$.name'), p.name),
-                p.barCode = COALESCE(JSON_VALUE(j.value, '$.barCode'), p.barCode),
-                p.code = COALESCE(JSON_VALUE(j.value, '$.code'), p.code),
+            SET p.name = COALESCE(JSON_VALUE(j.value, ''$.name''), p.name),
+                p.barCode = COALESCE(JSON_VALUE(j.value, ''$.barCode''), p.barCode),
+                p.code = COALESCE(JSON_VALUE(j.value, ''$.code''), p.code),
                 p.dateOfExpire = CASE
-                    WHEN TRY_CAST(JSON_VALUE(j.value, '$.noExpire') AS BIT) = 1 THEN NULL
-                    ELSE COALESCE(TRY_CONVERT(DATE, NULLIF(JSON_VALUE(j.value, '$.dateOfExpire'), '')), p.dateOfExpire)
+                    WHEN TRY_CAST(JSON_VALUE(j.value, ''$.noExpire'') AS BIT) = 1 THEN NULL
+                    ELSE COALESCE(TRY_CONVERT(DATE, NULLIF(JSON_VALUE(j.value, ''$.dateOfExpire''), '''')), p.dateOfExpire)
                 END,
                 -- netContent/unitOfMeasure/referencePrice: the wizard always sends all three (null = cleared)
-                p.netContent = TRY_CAST(JSON_VALUE(j.value, '$.netContent') AS DECIMAL(10,3)),
-                p.unitOfMeasure = NULLIF(JSON_VALUE(j.value, '$.unitOfMeasure'), ''),
-                p.referencePrice = TRY_CAST(JSON_VALUE(j.value, '$.referencePrice') AS DECIMAL(10,2)),
-                p.productFormId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.productFormId') AS INT), p.productFormId),
-                p.manufactureId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.manufactureId') AS INT), p.manufactureId),
-                p.description = COALESCE(JSON_VALUE(j.value, '$.description'), p.description),
+                p.netContent = TRY_CAST(JSON_VALUE(j.value, ''$.netContent'') AS DECIMAL(10,3)),
+                p.unitOfMeasure = NULLIF(JSON_VALUE(j.value, ''$.unitOfMeasure''), ''''),
+                p.referencePrice = TRY_CAST(JSON_VALUE(j.value, ''$.referencePrice'') AS DECIMAL(10,2)),
+                p.productFormId = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.productFormId'') AS INT), p.productFormId),
+                p.manufactureId = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.manufactureId'') AS INT), p.manufactureId),
+                p.description = COALESCE(JSON_VALUE(j.value, ''$.description''), p.description),
                 p.updatedAt = GETDATE(),
-                p.categoryId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.categoryId') AS INT), p.categoryId),
-                p.isSupply = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.isSupply') AS BIT), p.isSupply)
+                p.categoryId = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.categoryId'') AS INT), p.categoryId),
+                p.isSupply = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.isSupply'') AS BIT), p.isSupply)
             FROM dbo.products p
-            CROSS APPLY OPENJSON(@pjsonfile, '$.products') j
+            CROSS APPLY OPENJSON(@pjsonfile, ''$.products'') j
             WHERE p.productId = @productId AND p.companyId = @companyId;
         END
         ELSE IF @action = 3
@@ -9997,14 +10000,14 @@ BEGIN
             DELETE FROM dbo.productOptionChoices WHERE productOptionId IN (SELECT productOptionId FROM dbo.productOptions WHERE productId = @productId);
             DELETE FROM dbo.productOptions WHERE productId = @productId;
             DELETE FROM dbo.productDetails WHERE productId = @productId;
-            IF OBJECT_ID('dbo.productsDescription', 'U') IS NOT NULL DELETE FROM dbo.productsDescription WHERE productId = @productId;
+            IF OBJECT_ID(''dbo.productsDescription'', ''U'') IS NOT NULL DELETE FROM dbo.productsDescription WHERE productId = @productId;
             DELETE FROM dbo.products WHERE productId = @productId AND companyId = @companyId;
 
             COMMIT TRANSACTION;
             
             -- Early return on successful delete
-            SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@productId AS NVARCHAR(50))), '$.result[0].msg', 'Deleted Successfully');
-            SELECT JSON_VALUE(value, '$.value') AS [value], JSON_VALUE(value, '$.msg') AS [msg], JSON_VALUE(value, '$.error') AS [error] FROM OPENJSON(@Outputmessage, '$.result');
+            SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, ''$.result[0].value'', CAST(@productId AS NVARCHAR(50))), ''$.result[0].msg'', ''Deleted Successfully'');
+            SELECT JSON_VALUE(value, ''$.value'') AS [value], JSON_VALUE(value, ''$.msg'') AS [msg], JSON_VALUE(value, ''$.error'') AS [error] FROM OPENJSON(@Outputmessage, ''$.result'');
             RETURN;
         END
 
@@ -10014,10 +10017,10 @@ BEGIN
         DECLARE @stock INT, @uPrice DECIMAL(10,2), @sPrice DECIMAL(10,2);
         
         SELECT 
-            @stock = TRY_CAST(JSON_VALUE(value, '$.stockQuantity') AS INT),
-            @uPrice = TRY_CAST(JSON_VALUE(value, '$.unitPrice') AS DECIMAL(10,2)),
-            @sPrice = TRY_CAST(JSON_VALUE(value, '$.salePrice') AS DECIMAL(10,2))
-        FROM OPENJSON(@pjsonfile, '$.productDetails');
+            @stock = TRY_CAST(JSON_VALUE(value, ''$.stockQuantity'') AS INT),
+            @uPrice = TRY_CAST(JSON_VALUE(value, ''$.unitPrice'') AS DECIMAL(10,2)),
+            @sPrice = TRY_CAST(JSON_VALUE(value, ''$.salePrice'') AS DECIMAL(10,2))
+        FROM OPENJSON(@pjsonfile, ''$.productDetails'');
 
         IF EXISTS (SELECT 1 FROM dbo.productDetails WHERE productId = @productId)
         BEGIN
@@ -10037,17 +10040,17 @@ BEGIN
         /* ============================================================
            STEP 3: PRODUCT DESCRIPTIONS
            ============================================================ */
-        IF OBJECT_ID('dbo.productsDescription', 'U') IS NOT NULL
+        IF OBJECT_ID(''dbo.productsDescription'', ''U'') IS NOT NULL
         BEGIN
             DELETE FROM dbo.productsDescription WHERE productId = @productId;
 
             INSERT INTO dbo.productsDescription (productId, Dosage, measurementId, is_principal, activeIngredientId)
             SELECT 
-                @productId, JSON_VALUE(value, '$.Dosage'), 
-                TRY_CAST(JSON_VALUE(value, '$.measurementId') AS INT), 
-                JSON_VALUE(value, '$.is_principal'), 
-                TRY_CAST(JSON_VALUE(value, '$.activeIngredientId') AS INT)
-            FROM OPENJSON(@pjsonfile, '$.productDescriptions');
+                @productId, JSON_VALUE(value, ''$.Dosage''), 
+                TRY_CAST(JSON_VALUE(value, ''$.measurementId'') AS INT), 
+                JSON_VALUE(value, ''$.is_principal''), 
+                TRY_CAST(JSON_VALUE(value, ''$.activeIngredientId'') AS INT)
+            FROM OPENJSON(@pjsonfile, ''$.productDescriptions'');
         END
 
         /* ============================================================
@@ -10059,16 +10062,16 @@ BEGIN
 
         -- We use a cursor or simple loop over the array index to keep identities synchronized
         DECLARE @index INT = 0, @maxOptions INT;
-        SET @maxOptions = (SELECT COUNT(*) FROM OPENJSON(@pjsonfile, '$.productOptions'));
+        SET @maxOptions = (SELECT COUNT(*) FROM OPENJSON(@pjsonfile, ''$.productOptions''));
 
         WHILE @index < @maxOptions
         BEGIN
-            DECLARE @optPath NVARCHAR(100) = '$.productOptions[' + CAST(@index AS NVARCHAR(10)) + ']';
+            DECLARE @optPath NVARCHAR(100) = ''$.productOptions['' + CAST(@index AS NVARCHAR(10)) + '']'';
             DECLARE @newOptId INT;
 
             -- Insert the Option Node
             INSERT INTO dbo.productOptions (productId, optionKey, name, type, createdAt, updatedAt)
-            SELECT @productId, JSON_VALUE(@pjsonfile, @optPath + '.optionKey'), JSON_VALUE(@pjsonfile, @optPath + '.name'), JSON_VALUE(@pjsonfile, @optPath + '.type'), GETDATE(), GETDATE();
+            SELECT @productId, JSON_VALUE(@pjsonfile, @optPath + ''.optionKey''), JSON_VALUE(@pjsonfile, @optPath + ''.name''), JSON_VALUE(@pjsonfile, @optPath + ''.type''), GETDATE(), GETDATE();
             
             SET @newOptId = SCOPE_IDENTITY();
 
@@ -10076,13 +10079,13 @@ BEGIN
             INSERT INTO dbo.productOptionChoices (productOptionId, choiceKey, name, price, description, createdAt, updatedAt)
             SELECT 
                 @newOptId,
-                JSON_VALUE(value, '$.choiceKey'),
-                JSON_VALUE(value, '$.name'),
-                COALESCE(TRY_CAST(JSON_VALUE(value, '$.price') AS DECIMAL(10,2)), 0.00),
-                COALESCE(JSON_VALUE(value, '$.description'), ''),
+                JSON_VALUE(value, ''$.choiceKey''),
+                JSON_VALUE(value, ''$.name''),
+                COALESCE(TRY_CAST(JSON_VALUE(value, ''$.price'') AS DECIMAL(10,2)), 0.00),
+                COALESCE(JSON_VALUE(value, ''$.description''), ''''),
                 GETDATE(),
                 GETDATE()
-            FROM OPENJSON(@pjsonfile, @optPath + '.optionChoices');
+            FROM OPENJSON(@pjsonfile, @optPath + ''.optionChoices'');
 
             SET @index = @index + 1;
         END
@@ -10090,20 +10093,19 @@ BEGIN
         COMMIT TRANSACTION;
 
         -- Success Output Compilation
-        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@productId AS NVARCHAR(50))), '$.result[0].msg', CASE WHEN @action = 1 THEN 'Inserted Successfully' ELSE 'Updated Successfully' END);
+        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, ''$.result[0].value'', CAST(@productId AS NVARCHAR(50))), ''$.result[0].msg'', CASE WHEN @action = 1 THEN ''Inserted Successfully'' ELSE ''Updated Successfully'' END);
 
     END TRY
     BEGIN CATCH
         IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SET @Error = ERROR_MESSAGE();
-        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].error', '1'), '$.result[0].msg', @Error);
+        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, ''$.result[0].error'', ''1''), ''$.result[0].msg'', @Error);
     END CATCH;
 
     -- Return Status Response
-    SELECT JSON_VALUE(value, '$.value') AS [value], JSON_VALUE(value, '$.msg') AS [msg], JSON_VALUE(value, '$.error') AS [error] FROM OPENJSON(@Outputmessage, '$.result');
-END
+    SELECT JSON_VALUE(value, ''$.value'') AS [value], JSON_VALUE(value, ''$.msg'') AS [msg], JSON_VALUE(value, ''$.error'') AS [error] FROM OPENJSON(@Outputmessage, ''$.result'');
+END');
 GO
-
 CREATE OR ALTER PROC [dbo].[sp_products_all]
 AS
 SET NOCOUNT ON
@@ -10132,8 +10134,9 @@ BEGIN
 END
 GO
 
+
 -- #############################################################################
--- [60/64] 2026-10-11_products_auto_code.sql
+-- [60/67] 2026-10-11_products_auto_code.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -10146,15 +10149,17 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [60/64] 2026-10-11_products_auto_code.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [60/67] 2026-10-11_products_auto_code.sql', 0, 1) WITH NOWAIT;
 GO
 
--- =============================================================================
+-- [run-all] skipped once products.categoryId is renamed (superseded by 2026-10-15)
+IF COL_LENGTH('dbo.products', 'categoryId') IS NOT NULL
+    EXEC (N'-- =============================================================================
 -- Products: auto-assigned product code (next = MAX numeric code + 1)
 -- =============================================================================
 -- NOT YET EXECUTED. Run manually against the live DB AFTER
 -- 2026-10-07_products_net_content_no_expire.sql, and BEFORE deploying the
--- frontend that no longer asks for "Código" (it sends code '' on create).
+-- frontend that no longer asks for "Código" (it sends code '''' on create).
 --
 -- WHY: "Código" was typed by hand (duplicates, "1", "PROD001"…). It must behave
 -- like an identity: the next number after the highest one in dbo.products.
@@ -10178,8 +10183,8 @@ BEGIN
     SET NOCOUNT ON;
 
     DECLARE 
-        @Outputmessage NVARCHAR(MAX) = '{"result":[{ "value":"", "msg":"", "error":"" }]}',
-        @Error NVARCHAR(500) = '',
+        @Outputmessage NVARCHAR(MAX) = ''{"result":[{ "value":"", "msg":"", "error":"" }]}'',
+        @Error NVARCHAR(500) = '''',
         @action INT,
         @companyId INT,
         @productId INT;
@@ -10187,15 +10192,15 @@ BEGIN
     BEGIN TRY
         -- 1. Extract Root Context
         SELECT TOP (1)
-            @action = TRY_CAST(JSON_VALUE(value, '$.action') AS INT),
-            @companyId = TRY_CAST(JSON_VALUE(value, '$.companyId') AS INT),
-            @productId = TRY_CAST(JSON_VALUE(value, '$.productId') AS INT)
-        FROM OPENJSON(@pjsonfile, '$.products');
+            @action = TRY_CAST(JSON_VALUE(value, ''$.action'') AS INT),
+            @companyId = TRY_CAST(JSON_VALUE(value, ''$.companyId'') AS INT),
+            @productId = TRY_CAST(JSON_VALUE(value, ''$.productId'') AS INT)
+        FROM OPENJSON(@pjsonfile, ''$.products'');
 
         -- Validations
-        IF @action IS NULL RAISERROR('action is required (1=insert, 2=update, 3=delete).', 16, 1);
-        IF @companyId IS NULL RAISERROR('companyId is required.', 16, 1);
-        IF @companyId <> 1 RAISERROR('Invalid companyId.', 16, 1);
+        IF @action IS NULL RAISERROR(''action is required (1=insert, 2=update, 3=delete).'', 16, 1);
+        IF @companyId IS NULL RAISERROR(''companyId is required.'', 16, 1);
+        IF @companyId <> 1 RAISERROR(''Invalid companyId.'', 16, 1);
 
         BEGIN TRANSACTION;
 
@@ -10214,41 +10219,41 @@ BEGIN
 
             INSERT INTO dbo.products (name, barCode, code, dateOfExpire, productFormId, manufactureId, description, createdAt, categoryId, companyId, isSupply, netContent, unitOfMeasure, referencePrice)
             SELECT 
-                JSON_VALUE(value, '$.name'), JSON_VALUE(value, '$.barCode'), @nextCode,
-                TRY_CONVERT(DATE, NULLIF(JSON_VALUE(value, '$.dateOfExpire'), '')), TRY_CAST(JSON_VALUE(value, '$.productFormId') AS INT),
-                TRY_CAST(JSON_VALUE(value, '$.manufactureId') AS INT), JSON_VALUE(value, '$.description'),
-                GETDATE(), TRY_CAST(JSON_VALUE(value, '$.categoryId') AS INT), @companyId,
-                ISNULL(TRY_CAST(JSON_VALUE(value, '$.isSupply') AS BIT), 0),
-                TRY_CAST(JSON_VALUE(value, '$.netContent') AS DECIMAL(10,3)), NULLIF(JSON_VALUE(value, '$.unitOfMeasure'), ''),
-                TRY_CAST(JSON_VALUE(value, '$.referencePrice') AS DECIMAL(10,2))
-            FROM OPENJSON(@pjsonfile, '$.products');
+                JSON_VALUE(value, ''$.name''), JSON_VALUE(value, ''$.barCode''), @nextCode,
+                TRY_CONVERT(DATE, NULLIF(JSON_VALUE(value, ''$.dateOfExpire''), '''')), TRY_CAST(JSON_VALUE(value, ''$.productFormId'') AS INT),
+                TRY_CAST(JSON_VALUE(value, ''$.manufactureId'') AS INT), JSON_VALUE(value, ''$.description''),
+                GETDATE(), TRY_CAST(JSON_VALUE(value, ''$.categoryId'') AS INT), @companyId,
+                ISNULL(TRY_CAST(JSON_VALUE(value, ''$.isSupply'') AS BIT), 0),
+                TRY_CAST(JSON_VALUE(value, ''$.netContent'') AS DECIMAL(10,3)), NULLIF(JSON_VALUE(value, ''$.unitOfMeasure''), ''''),
+                TRY_CAST(JSON_VALUE(value, ''$.referencePrice'') AS DECIMAL(10,2))
+            FROM OPENJSON(@pjsonfile, ''$.products'');
 
             SET @productId = SCOPE_IDENTITY();
         END
         ELSE IF @action = 2
         BEGIN
-            IF @productId IS NULL RAISERROR('productId is required for update.', 16, 1);
+            IF @productId IS NULL RAISERROR(''productId is required for update.'', 16, 1);
 
             UPDATE p
-            SET p.name = COALESCE(JSON_VALUE(j.value, '$.name'), p.name),
-                p.barCode = COALESCE(JSON_VALUE(j.value, '$.barCode'), p.barCode),
+            SET p.name = COALESCE(JSON_VALUE(j.value, ''$.name''), p.name),
+                p.barCode = COALESCE(JSON_VALUE(j.value, ''$.barCode''), p.barCode),
                 -- code is never changed after insert (auto-assigned identity)
                 p.dateOfExpire = CASE
-                    WHEN TRY_CAST(JSON_VALUE(j.value, '$.noExpire') AS BIT) = 1 THEN NULL
-                    ELSE COALESCE(TRY_CONVERT(DATE, NULLIF(JSON_VALUE(j.value, '$.dateOfExpire'), '')), p.dateOfExpire)
+                    WHEN TRY_CAST(JSON_VALUE(j.value, ''$.noExpire'') AS BIT) = 1 THEN NULL
+                    ELSE COALESCE(TRY_CONVERT(DATE, NULLIF(JSON_VALUE(j.value, ''$.dateOfExpire''), '''')), p.dateOfExpire)
                 END,
                 -- netContent/unitOfMeasure/referencePrice: the wizard always sends all three (null = cleared)
-                p.netContent = TRY_CAST(JSON_VALUE(j.value, '$.netContent') AS DECIMAL(10,3)),
-                p.unitOfMeasure = NULLIF(JSON_VALUE(j.value, '$.unitOfMeasure'), ''),
-                p.referencePrice = TRY_CAST(JSON_VALUE(j.value, '$.referencePrice') AS DECIMAL(10,2)),
-                p.productFormId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.productFormId') AS INT), p.productFormId),
-                p.manufactureId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.manufactureId') AS INT), p.manufactureId),
-                p.description = COALESCE(JSON_VALUE(j.value, '$.description'), p.description),
+                p.netContent = TRY_CAST(JSON_VALUE(j.value, ''$.netContent'') AS DECIMAL(10,3)),
+                p.unitOfMeasure = NULLIF(JSON_VALUE(j.value, ''$.unitOfMeasure''), ''''),
+                p.referencePrice = TRY_CAST(JSON_VALUE(j.value, ''$.referencePrice'') AS DECIMAL(10,2)),
+                p.productFormId = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.productFormId'') AS INT), p.productFormId),
+                p.manufactureId = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.manufactureId'') AS INT), p.manufactureId),
+                p.description = COALESCE(JSON_VALUE(j.value, ''$.description''), p.description),
                 p.updatedAt = GETDATE(),
-                p.categoryId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.categoryId') AS INT), p.categoryId),
-                p.isSupply = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.isSupply') AS BIT), p.isSupply)
+                p.categoryId = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.categoryId'') AS INT), p.categoryId),
+                p.isSupply = COALESCE(TRY_CAST(JSON_VALUE(j.value, ''$.isSupply'') AS BIT), p.isSupply)
             FROM dbo.products p
-            CROSS APPLY OPENJSON(@pjsonfile, '$.products') j
+            CROSS APPLY OPENJSON(@pjsonfile, ''$.products'') j
             WHERE p.productId = @productId AND p.companyId = @companyId;
         END
         ELSE IF @action = 3
@@ -10257,14 +10262,14 @@ BEGIN
             DELETE FROM dbo.productOptionChoices WHERE productOptionId IN (SELECT productOptionId FROM dbo.productOptions WHERE productId = @productId);
             DELETE FROM dbo.productOptions WHERE productId = @productId;
             DELETE FROM dbo.productDetails WHERE productId = @productId;
-            IF OBJECT_ID('dbo.productsDescription', 'U') IS NOT NULL DELETE FROM dbo.productsDescription WHERE productId = @productId;
+            IF OBJECT_ID(''dbo.productsDescription'', ''U'') IS NOT NULL DELETE FROM dbo.productsDescription WHERE productId = @productId;
             DELETE FROM dbo.products WHERE productId = @productId AND companyId = @companyId;
 
             COMMIT TRANSACTION;
             
             -- Early return on successful delete
-            SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@productId AS NVARCHAR(50))), '$.result[0].msg', 'Deleted Successfully');
-            SELECT JSON_VALUE(value, '$.value') AS [value], JSON_VALUE(value, '$.msg') AS [msg], JSON_VALUE(value, '$.error') AS [error] FROM OPENJSON(@Outputmessage, '$.result');
+            SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, ''$.result[0].value'', CAST(@productId AS NVARCHAR(50))), ''$.result[0].msg'', ''Deleted Successfully'');
+            SELECT JSON_VALUE(value, ''$.value'') AS [value], JSON_VALUE(value, ''$.msg'') AS [msg], JSON_VALUE(value, ''$.error'') AS [error] FROM OPENJSON(@Outputmessage, ''$.result'');
             RETURN;
         END
 
@@ -10274,10 +10279,10 @@ BEGIN
         DECLARE @stock INT, @uPrice DECIMAL(10,2), @sPrice DECIMAL(10,2);
         
         SELECT 
-            @stock = TRY_CAST(JSON_VALUE(value, '$.stockQuantity') AS INT),
-            @uPrice = TRY_CAST(JSON_VALUE(value, '$.unitPrice') AS DECIMAL(10,2)),
-            @sPrice = TRY_CAST(JSON_VALUE(value, '$.salePrice') AS DECIMAL(10,2))
-        FROM OPENJSON(@pjsonfile, '$.productDetails');
+            @stock = TRY_CAST(JSON_VALUE(value, ''$.stockQuantity'') AS INT),
+            @uPrice = TRY_CAST(JSON_VALUE(value, ''$.unitPrice'') AS DECIMAL(10,2)),
+            @sPrice = TRY_CAST(JSON_VALUE(value, ''$.salePrice'') AS DECIMAL(10,2))
+        FROM OPENJSON(@pjsonfile, ''$.productDetails'');
 
         IF EXISTS (SELECT 1 FROM dbo.productDetails WHERE productId = @productId)
         BEGIN
@@ -10297,17 +10302,17 @@ BEGIN
         /* ============================================================
            STEP 3: PRODUCT DESCRIPTIONS
            ============================================================ */
-        IF OBJECT_ID('dbo.productsDescription', 'U') IS NOT NULL
+        IF OBJECT_ID(''dbo.productsDescription'', ''U'') IS NOT NULL
         BEGIN
             DELETE FROM dbo.productsDescription WHERE productId = @productId;
 
             INSERT INTO dbo.productsDescription (productId, Dosage, measurementId, is_principal, activeIngredientId)
             SELECT 
-                @productId, JSON_VALUE(value, '$.Dosage'), 
-                TRY_CAST(JSON_VALUE(value, '$.measurementId') AS INT), 
-                JSON_VALUE(value, '$.is_principal'), 
-                TRY_CAST(JSON_VALUE(value, '$.activeIngredientId') AS INT)
-            FROM OPENJSON(@pjsonfile, '$.productDescriptions');
+                @productId, JSON_VALUE(value, ''$.Dosage''), 
+                TRY_CAST(JSON_VALUE(value, ''$.measurementId'') AS INT), 
+                JSON_VALUE(value, ''$.is_principal''), 
+                TRY_CAST(JSON_VALUE(value, ''$.activeIngredientId'') AS INT)
+            FROM OPENJSON(@pjsonfile, ''$.productDescriptions'');
         END
 
         /* ============================================================
@@ -10319,16 +10324,16 @@ BEGIN
 
         -- We use a cursor or simple loop over the array index to keep identities synchronized
         DECLARE @index INT = 0, @maxOptions INT;
-        SET @maxOptions = (SELECT COUNT(*) FROM OPENJSON(@pjsonfile, '$.productOptions'));
+        SET @maxOptions = (SELECT COUNT(*) FROM OPENJSON(@pjsonfile, ''$.productOptions''));
 
         WHILE @index < @maxOptions
         BEGIN
-            DECLARE @optPath NVARCHAR(100) = '$.productOptions[' + CAST(@index AS NVARCHAR(10)) + ']';
+            DECLARE @optPath NVARCHAR(100) = ''$.productOptions['' + CAST(@index AS NVARCHAR(10)) + '']'';
             DECLARE @newOptId INT;
 
             -- Insert the Option Node
             INSERT INTO dbo.productOptions (productId, optionKey, name, type, createdAt, updatedAt)
-            SELECT @productId, JSON_VALUE(@pjsonfile, @optPath + '.optionKey'), JSON_VALUE(@pjsonfile, @optPath + '.name'), JSON_VALUE(@pjsonfile, @optPath + '.type'), GETDATE(), GETDATE();
+            SELECT @productId, JSON_VALUE(@pjsonfile, @optPath + ''.optionKey''), JSON_VALUE(@pjsonfile, @optPath + ''.name''), JSON_VALUE(@pjsonfile, @optPath + ''.type''), GETDATE(), GETDATE();
             
             SET @newOptId = SCOPE_IDENTITY();
 
@@ -10336,13 +10341,13 @@ BEGIN
             INSERT INTO dbo.productOptionChoices (productOptionId, choiceKey, name, price, description, createdAt, updatedAt)
             SELECT 
                 @newOptId,
-                JSON_VALUE(value, '$.choiceKey'),
-                JSON_VALUE(value, '$.name'),
-                COALESCE(TRY_CAST(JSON_VALUE(value, '$.price') AS DECIMAL(10,2)), 0.00),
-                COALESCE(JSON_VALUE(value, '$.description'), ''),
+                JSON_VALUE(value, ''$.choiceKey''),
+                JSON_VALUE(value, ''$.name''),
+                COALESCE(TRY_CAST(JSON_VALUE(value, ''$.price'') AS DECIMAL(10,2)), 0.00),
+                COALESCE(JSON_VALUE(value, ''$.description''), ''''),
                 GETDATE(),
                 GETDATE()
-            FROM OPENJSON(@pjsonfile, @optPath + '.optionChoices');
+            FROM OPENJSON(@pjsonfile, @optPath + ''.optionChoices'');
 
             SET @index = @index + 1;
         END
@@ -10350,22 +10355,23 @@ BEGIN
         COMMIT TRANSACTION;
 
         -- Success Output Compilation
-        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@productId AS NVARCHAR(50))), '$.result[0].msg', CASE WHEN @action = 1 THEN 'Inserted Successfully' ELSE 'Updated Successfully' END);
+        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, ''$.result[0].value'', CAST(@productId AS NVARCHAR(50))), ''$.result[0].msg'', CASE WHEN @action = 1 THEN ''Inserted Successfully'' ELSE ''Updated Successfully'' END);
 
     END TRY
     BEGIN CATCH
         IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SET @Error = ERROR_MESSAGE();
-        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].error', '1'), '$.result[0].msg', @Error);
+        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, ''$.result[0].error'', ''1''), ''$.result[0].msg'', @Error);
     END CATCH;
 
     -- Return Status Response
-    SELECT JSON_VALUE(value, '$.value') AS [value], JSON_VALUE(value, '$.msg') AS [msg], JSON_VALUE(value, '$.error') AS [error] FROM OPENJSON(@Outputmessage, '$.result');
-END
+    SELECT JSON_VALUE(value, ''$.value'') AS [value], JSON_VALUE(value, ''$.msg'') AS [msg], JSON_VALUE(value, ''$.error'') AS [error] FROM OPENJSON(@Outputmessage, ''$.result'');
+END');
 GO
 
+
 -- #############################################################################
--- [61/64] 2026-10-11b_products_by_company_all_products.sql
+-- [61/67] 2026-10-11b_products_by_company_all_products.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -10378,10 +10384,12 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [61/64] 2026-10-11b_products_by_company_all_products.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [61/67] 2026-10-11b_products_by_company_all_products.sql', 0, 1) WITH NOWAIT;
 GO
 
--- =============================================================================
+-- [run-all] skipped once products.categoryId is renamed (superseded by 2026-10-15)
+IF COL_LENGTH('dbo.products', 'categoryId') IS NOT NULL
+    EXEC (N'-- =============================================================================
 -- sp_products_by_company: list every sellable product (not only ones with
 -- options) and return the fields the product wizard edits
 -- =============================================================================
@@ -10420,14 +10428,14 @@ BEGIN
     SET NOCOUNT ON;
 
     /*
-    DECLARE @pjsonfile VARCHAR(MAX) = '{ "products": [ { "companyId": "1" } ] }'
+    DECLARE @pjsonfile VARCHAR(MAX) = ''{ "products": [ { "companyId": "1" } ] }''
     */
 
     DECLARE @companyId INT;
 
     SET @companyId = CAST(
-        (SELECT JSON_VALUE(value, '$.companyId')
-         FROM OPENJSON(@pjsonfile, '$.products')) AS INT
+        (SELECT JSON_VALUE(value, ''$.companyId'')
+         FROM OPENJSON(@pjsonfile, ''$.products'')) AS INT
     );
 
     SELECT
@@ -10438,8 +10446,8 @@ BEGIN
         ISNULL(pd.salePrice, 0) AS price,
         NULL AS [image],
         p.categoryId,
-        ISNULL(p.code, '') AS code,
-        ISNULL(p.barCode, '') AS barCode,
+        ISNULL(p.code, '''') AS code,
+        ISNULL(p.barCode, '''') AS barCode,
         p.dateOfExpire,
         p.netContent,
         p.unitOfMeasure,
@@ -10491,12 +10499,13 @@ BEGIN
     WHERE p.companyId = @companyId
       AND ISNULL(p.isSupply, 0) = 0
     ORDER BY p.name
-    FOR JSON PATH, ROOT('products');
-END
+    FOR JSON PATH, ROOT(''products'');
+END');
 GO
 
+
 -- #############################################################################
--- [62/64] 2026-10-15_products_productCategoryId.sql
+-- [62/67] 2026-10-15_products_productCategoryId.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -10509,7 +10518,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [62/64] 2026-10-15_products_productCategoryId.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [62/67] 2026-10-15_products_productCategoryId.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -10540,15 +10549,22 @@ GO
 -- =============================================================================
 
 -- 1) Pre-check -----------------------------------------------------------------
+-- Dynamic SQL: once the column is renamed, a static "p.categoryId" fails to compile
+-- (Msg 207) even inside a false IF, so re-running this file would error here.
 IF COL_LENGTH('dbo.products', 'categoryId') IS NOT NULL
-   AND EXISTS (
-        SELECT 1
+BEGIN
+    DECLARE @orphans INT;
+    EXEC sp_executesql N'
+        SELECT @n = COUNT(*)
         FROM dbo.products p
         WHERE p.categoryId IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM dbo.productCategories pc
-                          WHERE pc.productCategoryId = p.categoryId)
-   )
-    THROW 50001, 'products.categoryId has values missing in productCategories. Fix them before running this migration.', 1;
+                          WHERE pc.productCategoryId = p.categoryId);',
+        N'@n INT OUTPUT', @n = @orphans OUTPUT;
+
+    IF @orphans > 0
+    BEGIN RAISERROR('products.categoryId has values missing in productCategories. Fix them before running this migration.', 16, 1); SET NOEXEC ON; RETURN; END
+END
 GO
 
 -- 2) Rename + FK + index ---------------------------------------------------------
@@ -10572,14 +10588,14 @@ BEGIN
         WHERE d.referenced_id = OBJECT_ID('dbo.products')
           AND d.referenced_minor_id = COLUMNPROPERTY(OBJECT_ID('dbo.products'), 'categoryId', 'ColumnId')
           AND d.is_schema_bound_reference = 1;
-        THROW 50002, 'products.categoryId is used by a schema-bound object (listed above). Drop/alter it first.', 1;
+        BEGIN RAISERROR('products.categoryId is used by a schema-bound object (listed above). Drop/alter it first.', 16, 1); SET NOEXEC ON; RETURN; END
     END
 
     EXEC sp_rename N'dbo.products.categoryId', N'productCategoryId', N'COLUMN';
 END
 
 IF COL_LENGTH('dbo.products', 'productCategoryId') IS NULL
-    THROW 50003, 'products.productCategoryId still missing after rename — see the error above.', 1;
+    BEGIN RAISERROR('products.productCategoryId still missing after rename — see the error above.', 16, 1); SET NOEXEC ON; RETURN; END
 
 RAISERROR('OK: dbo.products.productCategoryId exists.', 0, 1) WITH NOWAIT;
 GO
@@ -11451,8 +11467,12 @@ SELECT CASE WHEN COL_LENGTH('dbo.products', 'productCategoryId') IS NOT NULL THE
        CASE WHEN COL_LENGTH('dbo.products', 'categoryId')        IS NOT NULL THEN 1 ELSE 0 END AS categoryId;
 GO
 
+-- Re-enable execution (a failed pre-check above turns NOEXEC on for the rest of the file).
+SET NOEXEC OFF;
+GO
+
 -- #############################################################################
--- [63/64] 2026-10-15b_products_by_company_category_filter.sql
+-- [63/67] 2026-10-15b_products_by_company_category_filter.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -11465,7 +11485,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [63/64] 2026-10-15b_products_by_company_category_filter.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [63/67] 2026-10-15b_products_by_company_category_filter.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -11583,7 +11603,7 @@ END
 GO
 
 -- #############################################################################
--- [64/64] 2026-10-15c_inventory_single_source.sql
+-- [64/67] 2026-10-15c_inventory_single_source.sql
 -- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
@@ -11596,7 +11616,7 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> [64/64] 2026-10-15c_inventory_single_source.sql', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [64/67] 2026-10-15c_inventory_single_source.sql', 0, 1) WITH NOWAIT;
 GO
 
 -- =============================================================================
@@ -11643,11 +11663,11 @@ GO
 
 -- 0) Pre-checks -------------------------------------------------------------------
 IF OBJECT_ID('dbo.inventoryStock', 'U') IS NULL OR OBJECT_ID('dbo.inventoryMovements', 'U') IS NULL
-    THROW 50101, 'dbo.inventoryStock / dbo.inventoryMovements missing.', 1;
+    BEGIN RAISERROR('dbo.inventoryStock / dbo.inventoryMovements missing.', 16, 1); SET NOEXEC ON; RETURN; END
 IF COL_LENGTH('dbo.expenseDetails', 'quantity') IS NULL
-    THROW 50102, 'expenseDetails.quantity missing — run 2026-10-02b_expense_item_quantity_cost_supplies.sql first.', 1;
+    BEGIN RAISERROR('expenseDetails.quantity missing — run 2026-10-02b_expense_item_quantity_cost_supplies.sql first.', 16, 1); SET NOEXEC ON; RETURN; END
 IF COL_LENGTH('dbo.products', 'productCategoryId') IS NULL
-    THROW 50103, 'products.productCategoryId missing — run 2026-10-15_products_productCategoryId.sql first.', 1;
+    BEGIN RAISERROR('products.productCategoryId missing — run 2026-10-15_products_productCategoryId.sql first.', 16, 1); SET NOEXEC ON; RETURN; END
 GO
 
 -- 1) products.trackInventory (+ first-run backfill) -----------------------------------
@@ -12338,6 +12358,13 @@ LEFT JOIN (SELECT companyId, productId, SUM(quantityDelta) AS total
 WHERE s.stockQuantity <> ISNULL(m.total, 0);
 GO
 
+-- Re-enable execution (a failed pre-check above turns NOEXEC on for the rest of the file).
+SET NOEXEC OFF;
+GO
+
+-- #############################################################################
+-- [65/67] 2026-10-15d_catalog_hierarchy.sql
+-- #############################################################################
 SET NOEXEC OFF;
 SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
@@ -12349,5 +12376,1512 @@ BEGIN
     RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
 END
 GO
-RAISERROR('>>> DONE: 64/64 migration files executed.', 0, 1) WITH NOWAIT;
+RAISERROR('>>> [65/67] 2026-10-15d_catalog_hierarchy.sql', 0, 1) WITH NOWAIT;
+GO
+
+-- =============================================================================
+-- Catalog hierarchy: Categoría → Subcategoría → Producto (+ required options, inactive products)
+-- =============================================================================
+-- NOT YET EXECUTED. Run manually against the live DB AFTER
+-- 2026-10-15c_inventory_single_source.sql (redeploys the product SPs from it).
+--
+-- WHY (GMO Lavandería catalog): products need a 3-level catalog — Servicios › Lavado
+--   › Servicio de lavado — and options such as "Ciclo" must be mandatory, otherwise
+--   a wash can be sold at the $0 base price. Old pseudo-products ("Bebidas",
+--   "Productos Limpieza", whose options were the real items) must disappear from
+--   the POS without deleting them (past sales point to them).
+--
+-- WHAT:
+--   1. productCategories.parentCategoryId (NULL = top-level). Two levels only: the
+--      parent must be a top-level category of the same company. FK to itself.
+--      products.productCategoryId keeps pointing to ONE category (normally the
+--      subcategory), so existing products and categories keep working as top-level.
+--   2. productOptions.isRequired BIT (default 0). Price model unchanged:
+--      line = base salePrice + Σ chosen choices ("base $0 + Básico $40 = $40").
+--   3. products.isActive BIT (default 1). Inactive products are hidden from the POS.
+--   4. SPs:
+--      sp_products_categories      insert/update parentCategoryId (validated); insert
+--                                  returns the new id in result[0].value.
+--      sp_products_categories_all  returns parentCategoryId (top-level first).
+--      sp_products_by_company      hides isActive = 0 (unless "includeInactive": 1);
+--                                  categoryId of a top-level category also returns its
+--                                  subcategories' products; returns isActive,
+--                                  category.parentCategoryId, options[].isRequired.
+--      sp_products_one             returns isActive and productOptions[].isRequired.
+--      sp_products_save            accepts isActive and productOptions[].isRequired.
+--   NOTE: sp_products_save re-creates options on every save — a client that does
+--   not send isRequired yet resets it to 0. Ship the frontend toggle with this.
+-- ROLLBACK: 2026-10-15d_catalog_hierarchy_ROLLBACK.sql
+-- =============================================================================
+
+SET ANSI_NULLS ON;
+GO
+SET QUOTED_IDENTIFIER ON;
+GO
+
+IF COL_LENGTH('dbo.products', 'trackInventory') IS NULL
+    BEGIN RAISERROR('products.trackInventory missing — run 2026-10-15c_inventory_single_source.sql first.', 16, 1); SET NOEXEC ON; RETURN; END
+GO
+
+-- 1) productCategories.parentCategoryId ------------------------------------------------
+IF COL_LENGTH('dbo.productCategories', 'parentCategoryId') IS NULL
+    ALTER TABLE dbo.productCategories ADD parentCategoryId INT NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_productCategories_parent')
+    EXEC (N'ALTER TABLE dbo.productCategories WITH CHECK
+            ADD CONSTRAINT FK_productCategories_parent
+            FOREIGN KEY (parentCategoryId) REFERENCES dbo.productCategories (productCategoryId);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_productCategories_parent'
+               AND object_id = OBJECT_ID('dbo.productCategories'))
+    EXEC (N'CREATE NONCLUSTERED INDEX IX_productCategories_parent ON dbo.productCategories (companyId, parentCategoryId);');
+RAISERROR('OK: productCategories.parentCategoryId', 0, 1) WITH NOWAIT;
+GO
+
+-- 2) productOptions.isRequired ---------------------------------------------------------
+IF COL_LENGTH('dbo.productOptions', 'isRequired') IS NULL
+    ALTER TABLE dbo.productOptions ADD isRequired BIT NOT NULL
+        CONSTRAINT DF_productOptions_isRequired DEFAULT (0);
+RAISERROR('OK: productOptions.isRequired', 0, 1) WITH NOWAIT;
+GO
+
+-- 3) products.isActive -----------------------------------------------------------------
+IF COL_LENGTH('dbo.products', 'isActive') IS NULL
+    ALTER TABLE dbo.products ADD isActive BIT NOT NULL
+        CONSTRAINT DF_products_isActive DEFAULT (1);
+RAISERROR('OK: products.isActive', 0, 1) WITH NOWAIT;
+GO
+
+-- 4) Stored procedures -----------------------------------------------------------------
+
+-- dbo.sp_products_categories
+CREATE OR ALTER PROC [dbo].[sp_products_categories]
+    @pjsonfile NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    /*
+    -- EXAMPLES --
+
+    
+
+    -- 1) INSERT (one or many)
+    DECLARE @pjsonfile NVARCHAR(MAX) = '{
+      "productCategories": [
+        { "action": 1, "name": "Detergentes", "image": "detergentes.png", "companyId": 3 },
+        { "action": 1, "name": "Suavizantes", "image": "suavizantes.png", "companyId": 3 }
+      ]
+    }';
+
+    */
+
+    DECLARE 
+        @Outputmessage NVARCHAR(MAX) = '{
+          "result":[{ "value":"", "msg":"", "error":"" }]
+        }',
+        @Error NVARCHAR(500) = '',
+        @action INT,
+        @filterCompanyId INT = NULL,
+        @filterCategoryId INT = NULL;
+
+    -- Read action and optional filters from the first element
+    SELECT TOP (1)
+        @action = TRY_CAST(JSON_VALUE(value, '$.action') AS INT),
+        @filterCompanyId = TRY_CAST(JSON_VALUE(value, '$.companyId') AS INT),
+        @filterCategoryId = TRY_CAST(JSON_VALUE(value, '$.categoryId') AS INT)
+    FROM OPENJSON(@pjsonfile, '$.productCategories');
+
+    BEGIN TRY
+
+        BEGIN TRANSACTION;
+
+        -- Subcategories: parentCategoryId must be a TOP-LEVEL category of the same
+        -- company (two levels: Categoría → Subcategoría). 0 on update = make it top-level.
+        IF EXISTS (
+            SELECT 1
+            FROM OPENJSON(@pjsonfile, '$.productCategories') j
+            CROSS APPLY (SELECT NULLIF(TRY_CAST(JSON_VALUE(j.value, '$.parentCategoryId') AS INT), 0) AS parentId,
+                                TRY_CAST(JSON_VALUE(j.value, '$.productCategoryId') AS INT) AS selfId,
+                                TRY_CAST(JSON_VALUE(j.value, '$.companyId') AS INT) AS companyId) x
+            WHERE TRY_CAST(JSON_VALUE(j.value, '$.action') AS INT) IN (1, 2)
+              AND x.parentId IS NOT NULL
+              AND (x.parentId = x.selfId
+                   OR NOT EXISTS (SELECT 1 FROM dbo.productCategories pc
+                                  WHERE pc.productCategoryId = x.parentId
+                                    AND pc.parentCategoryId IS NULL
+                                    AND (x.companyId IS NULL OR pc.companyId = x.companyId))
+                   OR EXISTS (SELECT 1 FROM dbo.productCategories ch WHERE ch.parentCategoryId = x.selfId))
+        )
+            THROW 50201, 'parentCategoryId inválido: debe ser una categoría principal de la misma empresa (y una categoría con subcategorías no puede ser subcategoría).', 1;
+
+        IF @action = 1
+        BEGIN
+            -- INSERT (supports multiple rows)
+            DECLARE @Inserted TABLE (productCategoryId INT);
+
+            INSERT INTO [dbo].[productCategories] ([name], [image], [companyId], [parentCategoryId])
+            OUTPUT inserted.productCategoryId INTO @Inserted(productCategoryId)
+            SELECT
+                JSON_VALUE(j.value, '$.name'),
+                JSON_VALUE(j.value, '$.image'),
+                TRY_CAST(JSON_VALUE(j.value, '$.companyId') AS INT),
+                NULLIF(TRY_CAST(JSON_VALUE(j.value, '$.parentCategoryId') AS INT), 0)
+            FROM OPENJSON(@pjsonfile, '$.productCategories') AS j
+            WHERE TRY_CAST(JSON_VALUE(j.value, '$.action') AS INT) = 1;
+
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST((SELECT MAX(productCategoryId) FROM @Inserted) AS NVARCHAR(20)));
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg', CONCAT('Inserted Successfully (', (SELECT COUNT(*) FROM @Inserted), ' row(s))'));
+        END
+        ELSE IF @action = 2
+        BEGIN
+            -- UPDATE (supports multiple rows)
+            UPDATE pc
+            SET
+                pc.[name]  = COALESCE(JSON_VALUE(j.value, '$.name'), pc.[name]),
+                pc.[image] = COALESCE(JSON_VALUE(j.value, '$.image'), pc.[image]),
+                pc.[companyId] = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.companyId') AS INT), pc.[companyId]),
+                -- missing/null = keep, 0 = top-level, n = subcategory of n
+                pc.[parentCategoryId] = CASE
+                    WHEN TRY_CAST(JSON_VALUE(j.value, '$.parentCategoryId') AS INT) IS NULL THEN pc.[parentCategoryId]
+                    ELSE NULLIF(TRY_CAST(JSON_VALUE(j.value, '$.parentCategoryId') AS INT), 0)
+                END
+            FROM [dbo].[productCategories] pc
+            INNER JOIN OPENJSON(@pjsonfile, '$.productCategories') j
+                ON pc.productCategoryId = TRY_CAST(JSON_VALUE(j.value, '$.productCategoryId') AS INT)
+            WHERE TRY_CAST(JSON_VALUE(j.value, '$.action') AS INT) = 2;
+
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg', 'Updated Successfully');
+        END
+        ELSE IF @action = 3
+        BEGIN
+            -- DELETE (supports multiple ids)
+            DELETE pc
+            FROM [dbo].[productCategories] pc
+            INNER JOIN OPENJSON(@pjsonfile, '$.productCategories') j
+                ON pc.productCategoryId = TRY_CAST(JSON_VALUE(j.value, '$.productCategoryId') AS INT)
+            WHERE TRY_CAST(JSON_VALUE(j.value, '$.action') AS INT) = 3;
+
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg', 'Deleted Successfully');
+        END
+        ELSE
+        BEGIN
+            -- Unknown action
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].error', '1');
+            SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg', 'Invalid or missing action (use 0=list, 1=insert, 2=update, 3=delete)');
+        END
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK TRANSACTION;
+        SET @Error = ERROR_MESSAGE();
+        SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].error', '1');
+        SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg', @Error);
+    END CATCH
+
+    -- Unified status response for non-list actions
+    -- Unified status response for non-list actions
+SELECT 
+    (
+        SELECT
+            JSON_VALUE(value, '$.value') AS [value],
+            JSON_VALUE(value, '$.msg')   AS [msg],
+            JSON_VALUE(value, '$.error') AS [error]
+        FROM OPENJSON(@Outputmessage, '$.result')
+        FOR JSON PATH, ROOT('result')
+    ) AS json_output;
+
+END
+GO
+
+-- dbo.sp_products_categories_all
+CREATE OR ALTER PROC [dbo].[sp_products_categories_all]
+    @pjsonfile NVARCHAR(MAX)
+AS
+
+BEGIN
+    SET NOCOUNT ON;
+
+   /*
+    DECLARE @pjsonfile NVARCHAR(MAX) = '{
+      "productCategories": [
+        { "companyId": 1, "categoryId": null }
+      ]
+    }';
+    */
+
+    DECLARE 
+        @Outputmessage NVARCHAR(MAX) = '{
+          "result":[{ "value":"", "msg":"", "error":"" }]
+        }',
+        @Error NVARCHAR(500) = '',
+        @action INT,
+        @filterCompanyId INT = NULL,
+        @filterCategoryId INT = NULL;
+
+    -- Read action and optional filters from the first element
+    SELECT TOP (1)
+        @action = TRY_CAST(JSON_VALUE(value, '$.action') AS INT),
+        @filterCompanyId = TRY_CAST(JSON_VALUE(value, '$.companyId') AS INT),
+        @filterCategoryId = TRY_CAST(JSON_VALUE(value, '$.categoryId') AS INT)
+    FROM OPENJSON(@pjsonfile, '$.productCategories');
+
+    
+    -- LIST
+    SELECT
+        [productCategoryId] AS [categoryId],
+        [name],
+        [image],
+        [companyId],
+        [parentCategoryId]          -- NULL = top-level category; otherwise a subcategory of it
+    FROM [dbo].[productCategories]
+    WHERE (@filterCompanyId IS NULL OR companyId = @filterCompanyId)
+        AND (@filterCategoryId IS NULL OR productCategoryId = @filterCategoryId)
+    ORDER BY CASE WHEN [parentCategoryId] IS NULL THEN 0 ELSE 1 END, [name]
+    FOR JSON PATH, ROOT('productCategories');
+
+END
+GO
+
+-- dbo.sp_products_by_company
+CREATE OR ALTER PROC [dbo].[sp_products_by_company]
+   @pjsonfile VARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    /*
+    DECLARE @pjsonfile VARCHAR(MAX) = '{ "products": [ { "companyId": "1" } ] }'                         -- all
+    DECLARE @pjsonfile VARCHAR(MAX) = '{ "products": [ { "companyId": "1", "categoryId": "1002" } ] }'  -- one category
+    */
+
+    DECLARE @companyId INT;
+    DECLARE @categoryId INT;
+    DECLARE @includeInactive BIT;
+
+    SET @companyId = CAST(
+        (SELECT JSON_VALUE(value, '$.companyId')
+         FROM OPENJSON(@pjsonfile, '$.products')) AS INT
+    );
+
+    -- Optional: productCategoryId (or legacy "categoryId"); missing/0 = all categories.
+    SELECT TOP (1)
+        @categoryId = NULLIF(TRY_CAST(COALESCE(JSON_VALUE(value, '$.productCategoryId'),
+                                               JSON_VALUE(value, '$.categoryId')) AS INT), 0)
+    FROM OPENJSON(@pjsonfile, '$.products');
+
+    -- Admin screens send includeInactive = 1 to see (and reactivate) hidden products; the POS never does.
+    SELECT TOP (1) @includeInactive = ISNULL(TRY_CAST(JSON_VALUE(value, '$.includeInactive') AS BIT), 0)
+    FROM OPENJSON(@pjsonfile, '$.products');
+
+    SELECT
+        p.productId AS [id],
+        p.productId,
+        p.name,
+        p.description,
+        ISNULL(pd.salePrice, 0) AS price,
+        NULL AS [image],
+        p.productCategoryId AS categoryId,
+        ISNULL(p.code, '') AS code,
+        ISNULL(p.barCode, '') AS barCode,
+        p.dateOfExpire,
+        p.netContent,
+        p.unitOfMeasure,
+        p.referencePrice,
+        p.companyId,
+        p.trackInventory,
+        p.isActive,
+        -- Stock lives only in inventoryStock (phase 1); details[] keeps its shape.
+        ISNULL(inv.stockQuantity, 0) AS stockQuantity,
+        (
+            SELECT d.productDetailId, ISNULL(inv.stockQuantity, 0) AS stockQuantity, d.unitPrice, d.salePrice
+            FROM productDetails d
+            WHERE d.productId = p.productId
+            FOR JSON PATH
+        ) AS details,
+        JSON_QUERY((
+            SELECT TOP 1 c.productCategoryId, c.name, c.parentCategoryId
+            FROM productCategories c
+            WHERE c.productCategoryId = p.productCategoryId
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        )) AS category,
+        (
+            SELECT ds.productDescriptionId, ds.Dosage, ds.measurementId, ds.is_principal, ds.activeIngredientId
+            FROM productsDescription ds
+            WHERE ds.productId = p.productId
+            FOR JSON PATH
+        ) AS descriptions,
+        (
+            SELECT
+                o.productOptionId AS [productOptionId],
+                o.name,
+                o.type,
+                o.isRequired,
+                (
+                    SELECT
+                        c.productOptionChoiceId AS [productOptionChoiceId],
+                        c.name,
+                        c.price
+                    FROM productOptionChoices c
+                    WHERE c.productOptionId = o.productOptionId
+                    FOR JSON PATH
+                ) AS choices
+            FROM productOptions o
+            WHERE o.productId = p.productId
+            FOR JSON PATH
+        ) AS options
+    FROM products p
+    LEFT JOIN dbo.inventoryStock inv
+        ON inv.companyId = p.companyId AND inv.productId = p.productId
+    OUTER APPLY (
+        SELECT TOP 1 x.salePrice
+        FROM productDetails x
+        WHERE x.productId = p.productId
+        ORDER BY x.productDetailId
+    ) pd
+    WHERE p.companyId = @companyId
+      AND ISNULL(p.isSupply, 0) = 0
+      AND (p.isActive = 1 OR @includeInactive = 1)
+      -- A category also matches the products of its subcategories.
+      AND (@categoryId IS NULL
+           OR p.productCategoryId = @categoryId
+           OR p.productCategoryId IN (SELECT sc.productCategoryId FROM dbo.productCategories sc
+                                      WHERE sc.parentCategoryId = @categoryId))
+    ORDER BY p.name
+    FOR JSON PATH, ROOT('products');
+END
+GO
+
+-- dbo.sp_products_one
+CREATE OR ALTER PROC [dbo].[sp_products_one] (@pjsonfile VARCHAR(MAX))
+AS
+SET NOCOUNT ON
+BEGIN
+
+    /*
+    DECLARE @pjsonfile VARCHAR(MAX) = '{
+    "products": [
+        {
+        "productId": "1"
+        }
+     ]   
+    }'
+    */
+
+    DECLARE @productId INT;
+
+    -- Extracting ProductId safely
+    SET @productId = TRY_CAST((SELECT JSON_VALUE(value, '$.productId') FROM OPENJSON(@pjsonfile, '$.products')) AS INT);
+
+    -- Complete JSON structure generation matching the layout used by your application
+    SELECT 
+        p.[productId]
+        ,p.[name]
+        ,ISNULL(p.[barCode],'') AS barCode
+        ,ISNULL(p.[code],'') AS code
+        ,ISNULL(p.[dateOfExpire],'') AS dateOfExpire
+        ,p.[productFormId]
+        ,p.[manufactureId]
+        ,ISNULL(p.[description],'') AS description
+        ,p.[productCategoryId] AS categoryId
+        ,p.[companyId]
+        ,p.[trackInventory]
+        ,p.[isActive]
+        ,ISNULL(inv.stockQuantity, 0) AS stockQuantity
+        ,p.[createdAt]
+        ,ISNULL(p.[updatedAt],'') AS updatedAt
+        
+        -- 1. Nested Details Object (Returns as an array/object matching your save logic)
+        ,(
+            SELECT 
+                ISNULL(inv.stockQuantity, 0) AS stockQuantity
+                ,pd.unitPrice
+                ,pd.salePrice
+            FROM dbo.productDetails pd
+            WHERE pd.productId = p.productId
+            FOR JSON PATH
+        ) AS productDetails
+
+        -- 2. Nested Descriptions Array
+        ,(
+            SELECT 
+                pdesc.Dosage
+                ,pdesc.measurementId
+                ,pdesc.is_principal
+                ,pdesc.activeIngredientId
+            FROM dbo.productsDescription pdesc
+            WHERE pdesc.productId = p.productId
+            FOR JSON PATH
+        ) AS productDescriptions
+
+        -- 3. Nested Options and nested Choices Array
+        ,(
+            SELECT 
+                po.optionKey
+                ,po.name
+                ,po.type
+                ,po.isRequired
+                ,(
+                    SELECT 
+                        poc.choiceKey
+                        ,poc.name
+                        ,poc.price
+                        ,poc.description
+                    FROM dbo.productOptionChoices poc
+                    WHERE poc.productOptionId = po.productOptionId
+                    FOR JSON PATH
+                ) AS optionChoices
+            FROM dbo.productOptions po
+            WHERE po.productId = p.productId
+            FOR JSON PATH
+        ) AS productOptions
+
+    FROM 
+        [dbo].[products] p
+    LEFT JOIN dbo.inventoryStock inv
+        ON inv.companyId = p.companyId AND inv.productId = p.productId
+    WHERE
+        p.productId = @productId
+    FOR JSON PATH, ROOT('products');
+
+END
+GO
+
+-- dbo.sp_products_save
+CREATE OR ALTER PROC [dbo].[sp_products_save]
+    @pjsonfile NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE 
+        @Outputmessage NVARCHAR(MAX) = '{"result":[{ "value":"", "msg":"", "error":"" }]}',
+        @Error NVARCHAR(500) = '',
+        @action INT,
+        @companyId INT,
+        @productId INT;
+
+    BEGIN TRY
+        -- 1. Extract Root Context
+        SELECT TOP (1)
+            @action = TRY_CAST(JSON_VALUE(value, '$.action') AS INT),
+            @companyId = TRY_CAST(JSON_VALUE(value, '$.companyId') AS INT),
+            @productId = TRY_CAST(JSON_VALUE(value, '$.productId') AS INT)
+        FROM OPENJSON(@pjsonfile, '$.products');
+
+        -- Validations
+        IF @action IS NULL RAISERROR('action is required (1=insert, 2=update, 3=delete).', 16, 1);
+        IF @companyId IS NULL RAISERROR('companyId is required.', 16, 1);
+        IF @companyId <> 1 RAISERROR('Invalid companyId.', 16, 1);
+
+        BEGIN TRANSACTION;
+
+        /* ============================================================
+           STEP 1: BASE PRODUCTS
+           ============================================================ */
+        IF @action = 1
+        BEGIN
+            -- Code is an identity-like counter per company: MAX(numeric code) + 1,
+            -- never typed by the user. UPDLOCK+HOLDLOCK keeps two concurrent
+            -- inserts from reading the same MAX (we are inside the transaction).
+            DECLARE @nextCode VARCHAR(100) = CAST(
+                ISNULL((SELECT MAX(TRY_CAST(code AS BIGINT))
+                        FROM dbo.products WITH (UPDLOCK, HOLDLOCK)
+                        WHERE companyId = @companyId), 0) + 1 AS VARCHAR(100));
+
+            INSERT INTO dbo.products (name, barCode, code, dateOfExpire, productFormId, manufactureId, description, createdAt, productCategoryId, companyId, isSupply, netContent, unitOfMeasure, referencePrice, trackInventory, isActive)
+            SELECT 
+                JSON_VALUE(value, '$.name'), JSON_VALUE(value, '$.barCode'), @nextCode,
+                TRY_CONVERT(DATE, NULLIF(JSON_VALUE(value, '$.dateOfExpire'), '')), TRY_CAST(JSON_VALUE(value, '$.productFormId') AS INT),
+                TRY_CAST(JSON_VALUE(value, '$.manufactureId') AS INT), JSON_VALUE(value, '$.description'),
+                GETDATE(), TRY_CAST(COALESCE(JSON_VALUE(value, '$.productCategoryId'), JSON_VALUE(value, '$.categoryId')) AS INT), @companyId,
+                ISNULL(TRY_CAST(JSON_VALUE(value, '$.isSupply') AS BIT), 0),
+                TRY_CAST(JSON_VALUE(value, '$.netContent') AS DECIMAL(10,3)), NULLIF(JSON_VALUE(value, '$.unitOfMeasure'), ''),
+                TRY_CAST(JSON_VALUE(value, '$.referencePrice') AS DECIMAL(10,2)),
+                -- trackInventory: explicit value wins; otherwise physical goods (barcode / supply) are tracked.
+                COALESCE(TRY_CAST(JSON_VALUE(value, '$.trackInventory') AS BIT),
+                         CASE WHEN NULLIF(LTRIM(RTRIM(JSON_VALUE(value, '$.barCode'))), '') IS NOT NULL
+                                OR TRY_CAST(JSON_VALUE(value, '$.isSupply') AS BIT) = 1 THEN 1 ELSE 0 END),
+                ISNULL(TRY_CAST(JSON_VALUE(value, '$.isActive') AS BIT), 1)
+            FROM OPENJSON(@pjsonfile, '$.products');
+
+            SET @productId = SCOPE_IDENTITY();
+        END
+        ELSE IF @action = 2
+        BEGIN
+            IF @productId IS NULL RAISERROR('productId is required for update.', 16, 1);
+
+            UPDATE p
+            SET p.name = COALESCE(JSON_VALUE(j.value, '$.name'), p.name),
+                p.barCode = COALESCE(JSON_VALUE(j.value, '$.barCode'), p.barCode),
+                -- code is never changed after insert (auto-assigned identity)
+                p.dateOfExpire = CASE
+                    WHEN TRY_CAST(JSON_VALUE(j.value, '$.noExpire') AS BIT) = 1 THEN NULL
+                    ELSE COALESCE(TRY_CONVERT(DATE, NULLIF(JSON_VALUE(j.value, '$.dateOfExpire'), '')), p.dateOfExpire)
+                END,
+                -- netContent/unitOfMeasure/referencePrice: the wizard always sends all three (null = cleared)
+                p.netContent = TRY_CAST(JSON_VALUE(j.value, '$.netContent') AS DECIMAL(10,3)),
+                p.unitOfMeasure = NULLIF(JSON_VALUE(j.value, '$.unitOfMeasure'), ''),
+                p.referencePrice = TRY_CAST(JSON_VALUE(j.value, '$.referencePrice') AS DECIMAL(10,2)),
+                p.productFormId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.productFormId') AS INT), p.productFormId),
+                p.manufactureId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.manufactureId') AS INT), p.manufactureId),
+                p.description = COALESCE(JSON_VALUE(j.value, '$.description'), p.description),
+                p.updatedAt = GETDATE(),
+                p.productCategoryId = COALESCE(TRY_CAST(COALESCE(JSON_VALUE(j.value, '$.productCategoryId'), JSON_VALUE(j.value, '$.categoryId')) AS INT), p.productCategoryId),
+                p.isSupply = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.isSupply') AS BIT), p.isSupply),
+                p.trackInventory = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.trackInventory') AS BIT), p.trackInventory),
+                p.isActive = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.isActive') AS BIT), p.isActive)
+            FROM dbo.products p
+            CROSS APPLY OPENJSON(@pjsonfile, '$.products') j
+            WHERE p.productId = @productId AND p.companyId = @companyId;
+        END
+        ELSE IF @action = 3
+        BEGIN
+            -- Clean up everything associated with this product (Cascade Delete)
+            DELETE FROM dbo.productOptionChoices WHERE productOptionId IN (SELECT productOptionId FROM dbo.productOptions WHERE productId = @productId);
+            DELETE FROM dbo.productOptions WHERE productId = @productId;
+            DELETE FROM dbo.productDetails WHERE productId = @productId;
+            DELETE FROM dbo.inventoryStock WHERE productId = @productId AND companyId = @companyId;
+            IF OBJECT_ID('dbo.productsDescription', 'U') IS NOT NULL DELETE FROM dbo.productsDescription WHERE productId = @productId;
+            DELETE FROM dbo.products WHERE productId = @productId AND companyId = @companyId;
+
+            COMMIT TRANSACTION;
+            
+            -- Early return on successful delete
+            SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@productId AS NVARCHAR(50))), '$.result[0].msg', 'Deleted Successfully');
+            SELECT JSON_VALUE(value, '$.value') AS [value], JSON_VALUE(value, '$.msg') AS [msg], JSON_VALUE(value, '$.error') AS [error] FROM OPENJSON(@Outputmessage, '$.result');
+            RETURN;
+        END
+
+        /* ============================================================
+           STEP 2: PRODUCT DETAILS (Simple IF EXISTS Check)
+           ============================================================ */
+        DECLARE @stock INT, @uPrice DECIMAL(10,2), @sPrice DECIMAL(10,2);
+        
+        SELECT 
+            @stock = TRY_CAST(JSON_VALUE(value, '$.stockQuantity') AS INT),
+            @uPrice = TRY_CAST(JSON_VALUE(value, '$.unitPrice') AS DECIMAL(10,2)),
+            @sPrice = TRY_CAST(JSON_VALUE(value, '$.salePrice') AS DECIMAL(10,2))
+        FROM OPENJSON(@pjsonfile, '$.productDetails');
+
+        -- productDetails keeps prices only. stockQuantity there is frozen since phase 1
+        -- (2026-10-15c): the only stock is dbo.inventoryStock + dbo.inventoryMovements.
+        IF EXISTS (SELECT 1 FROM dbo.productDetails WHERE productId = @productId)
+        BEGIN
+            UPDATE dbo.productDetails
+            SET unitPrice = COALESCE(@uPrice, unitPrice),
+                salePrice = COALESCE(@sPrice, salePrice),
+                updatedAt = GETDATE()
+            WHERE productId = @productId;
+        END
+        ELSE
+        BEGIN
+            INSERT INTO dbo.productDetails (productId, stockQuantity, unitPrice, salePrice, createdAt, updatedAt)
+            VALUES (@productId, 0, COALESCE(@uPrice, 0), COALESCE(@sPrice, 0), GETDATE(), GETDATE());
+        END
+
+        -- The stock typed in the wizard is a target count: post the difference as
+        -- 'opening' (first count) or 'adjustment' (recount). A non-zero stock turns
+        -- tracking on; a 0 on an untracked product (e.g. made-to-order food) is ignored.
+        IF @stock IS NOT NULL
+           AND (@stock <> 0 OR EXISTS (SELECT 1 FROM dbo.products
+                                       WHERE productId = @productId AND trackInventory = 1))
+        BEGIN
+            DECLARE @current DECIMAL(18,3), @hasStockRow BIT = 0, @stockUserId INT,
+                    @stockDelta DECIMAL(18,3), @stockReason VARCHAR(30);
+
+            SELECT @current = stockQuantity, @hasStockRow = 1
+            FROM dbo.inventoryStock WITH (UPDLOCK, HOLDLOCK)
+            WHERE companyId = @companyId AND productId = @productId;
+
+            SELECT TOP (1) @stockUserId = TRY_CAST(JSON_VALUE(value, '$.userId') AS INT)
+            FROM OPENJSON(@pjsonfile, '$.products');
+
+            UPDATE dbo.products SET trackInventory = 1
+            WHERE productId = @productId AND trackInventory = 0;
+
+            SET @stockDelta  = @stock - ISNULL(@current, 0);
+            SET @stockReason = CASE WHEN @hasStockRow = 1 THEN 'adjustment' ELSE 'opening' END;
+
+            IF @stockDelta <> 0
+                EXEC dbo.sp_inventory_post
+                    @companyId = @companyId,
+                    @productId = @productId,
+                    @quantityDelta = @stockDelta,
+                    @reason = @stockReason,
+                    @refType = 'product_save',
+                    @refId = @productId,
+                    @userId = @stockUserId,
+                    @notes = N'Stock capturado en el asistente de producto';
+        END
+
+        /* ============================================================
+           STEP 3: PRODUCT DESCRIPTIONS
+           ============================================================ */
+        IF OBJECT_ID('dbo.productsDescription', 'U') IS NOT NULL
+        BEGIN
+            DELETE FROM dbo.productsDescription WHERE productId = @productId;
+
+            INSERT INTO dbo.productsDescription (productId, Dosage, measurementId, is_principal, activeIngredientId)
+            SELECT 
+                @productId, JSON_VALUE(value, '$.Dosage'), 
+                TRY_CAST(JSON_VALUE(value, '$.measurementId') AS INT), 
+                JSON_VALUE(value, '$.is_principal'), 
+                TRY_CAST(JSON_VALUE(value, '$.activeIngredientId') AS INT)
+            FROM OPENJSON(@pjsonfile, '$.productDescriptions');
+        END
+
+        /* ============================================================
+           STEP 4: OPTIONS AND CHOICES (Simple Loop/Insert Pattern)
+           ============================================================ */
+        -- Clear old configurations to avoid messy updates
+        DELETE FROM dbo.productOptionChoices WHERE productOptionId IN (SELECT productOptionId FROM dbo.productOptions WHERE productId = @productId);
+        DELETE FROM dbo.productOptions WHERE productId = @productId;
+
+        -- We use a cursor or simple loop over the array index to keep identities synchronized
+        DECLARE @index INT = 0, @maxOptions INT;
+        SET @maxOptions = (SELECT COUNT(*) FROM OPENJSON(@pjsonfile, '$.productOptions'));
+
+        WHILE @index < @maxOptions
+        BEGIN
+            DECLARE @optPath NVARCHAR(100) = '$.productOptions[' + CAST(@index AS NVARCHAR(10)) + ']';
+            DECLARE @newOptId INT;
+
+            -- Insert the Option Node
+            INSERT INTO dbo.productOptions (productId, optionKey, name, type, isRequired, createdAt, updatedAt)
+            SELECT @productId, JSON_VALUE(@pjsonfile, @optPath + '.optionKey'), JSON_VALUE(@pjsonfile, @optPath + '.name'), JSON_VALUE(@pjsonfile, @optPath + '.type'),
+                   ISNULL(TRY_CAST(JSON_VALUE(@pjsonfile, @optPath + '.isRequired') AS BIT), 0), GETDATE(), GETDATE();
+            
+            SET @newOptId = SCOPE_IDENTITY();
+
+            -- Insert Nested Choices matching this exact option index
+            INSERT INTO dbo.productOptionChoices (productOptionId, choiceKey, name, price, description, createdAt, updatedAt)
+            SELECT 
+                @newOptId,
+                JSON_VALUE(value, '$.choiceKey'),
+                JSON_VALUE(value, '$.name'),
+                COALESCE(TRY_CAST(JSON_VALUE(value, '$.price') AS DECIMAL(10,2)), 0.00),
+                COALESCE(JSON_VALUE(value, '$.description'), ''),
+                GETDATE(),
+                GETDATE()
+            FROM OPENJSON(@pjsonfile, @optPath + '.optionChoices');
+
+            SET @index = @index + 1;
+        END
+
+        COMMIT TRANSACTION;
+
+        -- Success Output Compilation
+        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@productId AS NVARCHAR(50))), '$.result[0].msg', CASE WHEN @action = 1 THEN 'Inserted Successfully' ELSE 'Updated Successfully' END);
+
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        SET @Error = ERROR_MESSAGE();
+        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].error', '1'), '$.result[0].msg', @Error);
+    END CATCH;
+
+    -- Return Status Response
+    SELECT JSON_VALUE(value, '$.value') AS [value], JSON_VALUE(value, '$.msg') AS [msg], JSON_VALUE(value, '$.error') AS [error] FROM OPENJSON(@Outputmessage, '$.result');
+END
+GO
+
+-- 5) Verify ------------------------------------------------------------------------------
+SELECT
+    CASE WHEN COL_LENGTH('dbo.productCategories', 'parentCategoryId') IS NOT NULL THEN 1 ELSE 0 END AS parentCategoryId,
+    CASE WHEN COL_LENGTH('dbo.productOptions', 'isRequired')          IS NOT NULL THEN 1 ELSE 0 END AS isRequired,
+    CASE WHEN COL_LENGTH('dbo.products', 'isActive')                  IS NOT NULL THEN 1 ELSE 0 END AS isActive;
+
+EXEC dbo.sp_products_categories_all '{ "productCategories": [ { "companyId": 1 } ] }';
+GO
+
+-- Re-enable execution (a failed pre-check above turns NOEXEC on for the rest of the file).
+SET NOEXEC OFF;
+GO
+
+-- #############################################################################
+-- [66/67] 2026-10-15e_option_choice_measurements.sql
+-- #############################################################################
+SET NOEXEC OFF;
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+SET XACT_ABORT OFF;
+IF OBJECT_ID('tempdb..#rec') IS NOT NULL DROP TABLE #rec;
+IF @@TRANCOUNT > 0
+BEGIN
+    ROLLBACK TRANSACTION;
+    RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
+END
+GO
+RAISERROR('>>> [66/67] 2026-10-15e_option_choice_measurements.sql', 0, 1) WITH NOWAIT;
+GO
+
+-- =============================================================================
+-- Option choices carry their own quantity + unit (19 L, 600 ml, 100 ml)
+-- =============================================================================
+-- NOT YET EXECUTED. Run manually against the live DB AFTER
+-- 2026-10-15d_catalog_hierarchy.sql (redeploys the product SPs from it).
+--
+-- WHY: a single option offers choices of different sizes — Garrafón › Tamaño:
+--   19 L / 10 L / 3 L; Té Arizona › Sabor: Negro 600 ml / Mango 450 ml. The size
+--   belongs to the CHOICE, not to the product, and the unit must be a reusable
+--   catalog value instead of free text repeated in every name.
+--
+-- WHAT:
+--   1. dbo.measurements gets the units the POS wizard already uses (prefix = code):
+--      g, kg, ml, L, pz (mg already exists). Unique index on prefix.
+--   2. productOptionChoices.quantity DECIMAL(10,3) NULL + measurementId INT NULL
+--      (FK → measurements). Both optional: services ("Básico", "40 Min") have none.
+--   3. SPs:
+--      sp_products_save        choices accept "quantity" and "measurementId" or the
+--                              unit code "unit" ("ml", "L"…, resolved by prefix).
+--      sp_products_by_company  options[].choices[] return quantity, measurementId, unit.
+--      sp_products_one         productOptions[].optionChoices[] return the same.
+--   Prices unchanged: line = productDetails.salePrice + Σ chosen choice prices.
+--   NOT changed on purpose: products.netContent / unitOfMeasure (the size of the
+--   base product itself, used by the wizard's price-per-unit hint) and
+--   products.productFormId → productForms (legacy pharmacy packing).
+--   A choice is a variant WITHOUT its own stock or barcode: if a size must be
+--   counted in inventory or scanned, make it its own product.
+-- ROLLBACK: 2026-10-15e_option_choice_measurements_ROLLBACK.sql
+-- =============================================================================
+
+SET ANSI_NULLS ON;
+GO
+SET QUOTED_IDENTIFIER ON;
+GO
+
+IF COL_LENGTH('dbo.productOptions', 'isRequired') IS NULL
+    BEGIN RAISERROR('productOptions.isRequired missing — run 2026-10-15d_catalog_hierarchy.sql first.', 16, 1); SET NOEXEC ON; RETURN; END
+GO
+
+-- 1) Units --------------------------------------------------------------------------------
+INSERT INTO dbo.measurements (name, prefix)
+SELECT u.name, u.prefix
+FROM (VALUES ('grams', 'g'), ('kilograms', 'kg'), ('milliliters', 'ml'),
+             ('liters', 'L'), ('pieces', 'pz'), ('milligrams', 'mg')) AS u(name, prefix)
+WHERE NOT EXISTS (SELECT 1 FROM dbo.measurements m WHERE m.prefix = u.prefix);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UQ_measurements_prefix'
+               AND object_id = OBJECT_ID('dbo.measurements'))
+   AND NOT EXISTS (SELECT prefix FROM dbo.measurements GROUP BY prefix HAVING COUNT(*) > 1)
+    CREATE UNIQUE NONCLUSTERED INDEX UQ_measurements_prefix ON dbo.measurements (prefix);
+
+SELECT measurementId, name, prefix FROM dbo.measurements ORDER BY measurementId;
+GO
+
+-- 2) productOptionChoices.quantity + measurementId ----------------------------------------
+IF COL_LENGTH('dbo.productOptionChoices', 'quantity') IS NULL
+    ALTER TABLE dbo.productOptionChoices ADD quantity DECIMAL(10,3) NULL;
+IF COL_LENGTH('dbo.productOptionChoices', 'measurementId') IS NULL
+    ALTER TABLE dbo.productOptionChoices ADD measurementId INT NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_productOptionChoices_measurements')
+    EXEC (N'ALTER TABLE dbo.productOptionChoices WITH CHECK
+            ADD CONSTRAINT FK_productOptionChoices_measurements
+            FOREIGN KEY (measurementId) REFERENCES dbo.measurements (measurementId);');
+RAISERROR('OK: productOptionChoices.quantity / measurementId', 0, 1) WITH NOWAIT;
+GO
+
+-- 3) Stored procedures ---------------------------------------------------------------------
+
+-- dbo.sp_products_by_company
+CREATE OR ALTER PROC [dbo].[sp_products_by_company]
+   @pjsonfile VARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    /*
+    DECLARE @pjsonfile VARCHAR(MAX) = '{ "products": [ { "companyId": "1" } ] }'                         -- all
+    DECLARE @pjsonfile VARCHAR(MAX) = '{ "products": [ { "companyId": "1", "categoryId": "1002" } ] }'  -- one category
+    */
+
+    DECLARE @companyId INT;
+    DECLARE @categoryId INT;
+    DECLARE @includeInactive BIT;
+
+    SET @companyId = CAST(
+        (SELECT JSON_VALUE(value, '$.companyId')
+         FROM OPENJSON(@pjsonfile, '$.products')) AS INT
+    );
+
+    -- Optional: productCategoryId (or legacy "categoryId"); missing/0 = all categories.
+    SELECT TOP (1)
+        @categoryId = NULLIF(TRY_CAST(COALESCE(JSON_VALUE(value, '$.productCategoryId'),
+                                               JSON_VALUE(value, '$.categoryId')) AS INT), 0)
+    FROM OPENJSON(@pjsonfile, '$.products');
+
+    -- Admin screens send includeInactive = 1 to see (and reactivate) hidden products; the POS never does.
+    SELECT TOP (1) @includeInactive = ISNULL(TRY_CAST(JSON_VALUE(value, '$.includeInactive') AS BIT), 0)
+    FROM OPENJSON(@pjsonfile, '$.products');
+
+    SELECT
+        p.productId AS [id],
+        p.productId,
+        p.name,
+        p.description,
+        ISNULL(pd.salePrice, 0) AS price,
+        NULL AS [image],
+        p.productCategoryId AS categoryId,
+        ISNULL(p.code, '') AS code,
+        ISNULL(p.barCode, '') AS barCode,
+        p.dateOfExpire,
+        p.netContent,
+        p.unitOfMeasure,
+        p.referencePrice,
+        p.companyId,
+        p.trackInventory,
+        p.isActive,
+        -- Stock lives only in inventoryStock (phase 1); details[] keeps its shape.
+        ISNULL(inv.stockQuantity, 0) AS stockQuantity,
+        (
+            SELECT d.productDetailId, ISNULL(inv.stockQuantity, 0) AS stockQuantity, d.unitPrice, d.salePrice
+            FROM productDetails d
+            WHERE d.productId = p.productId
+            FOR JSON PATH
+        ) AS details,
+        JSON_QUERY((
+            SELECT TOP 1 c.productCategoryId, c.name, c.parentCategoryId
+            FROM productCategories c
+            WHERE c.productCategoryId = p.productCategoryId
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        )) AS category,
+        (
+            SELECT ds.productDescriptionId, ds.Dosage, ds.measurementId, ds.is_principal, ds.activeIngredientId
+            FROM productsDescription ds
+            WHERE ds.productId = p.productId
+            FOR JSON PATH
+        ) AS descriptions,
+        (
+            SELECT
+                o.productOptionId AS [productOptionId],
+                o.name,
+                o.type,
+                o.isRequired,
+                (
+                    SELECT
+                        c.productOptionChoiceId AS [productOptionChoiceId],
+                        c.name,
+                        c.price,
+                        c.quantity,                -- e.g. 19
+                        c.measurementId,
+                        m.prefix AS unit           -- e.g. 'L'
+                    FROM productOptionChoices c
+                    LEFT JOIN dbo.measurements m ON m.measurementId = c.measurementId
+                    WHERE c.productOptionId = o.productOptionId
+                    FOR JSON PATH
+                ) AS choices
+            FROM productOptions o
+            WHERE o.productId = p.productId
+            FOR JSON PATH
+        ) AS options
+    FROM products p
+    LEFT JOIN dbo.inventoryStock inv
+        ON inv.companyId = p.companyId AND inv.productId = p.productId
+    OUTER APPLY (
+        SELECT TOP 1 x.salePrice
+        FROM productDetails x
+        WHERE x.productId = p.productId
+        ORDER BY x.productDetailId
+    ) pd
+    WHERE p.companyId = @companyId
+      AND ISNULL(p.isSupply, 0) = 0
+      AND (p.isActive = 1 OR @includeInactive = 1)
+      -- A category also matches the products of its subcategories.
+      AND (@categoryId IS NULL
+           OR p.productCategoryId = @categoryId
+           OR p.productCategoryId IN (SELECT sc.productCategoryId FROM dbo.productCategories sc
+                                      WHERE sc.parentCategoryId = @categoryId))
+    ORDER BY p.name
+    FOR JSON PATH, ROOT('products');
+END
+GO
+
+-- dbo.sp_products_one
+CREATE OR ALTER PROC [dbo].[sp_products_one] (@pjsonfile VARCHAR(MAX))
+AS
+SET NOCOUNT ON
+BEGIN
+
+    /*
+    DECLARE @pjsonfile VARCHAR(MAX) = '{
+    "products": [
+        {
+        "productId": "1"
+        }
+     ]   
+    }'
+    */
+
+    DECLARE @productId INT;
+
+    -- Extracting ProductId safely
+    SET @productId = TRY_CAST((SELECT JSON_VALUE(value, '$.productId') FROM OPENJSON(@pjsonfile, '$.products')) AS INT);
+
+    -- Complete JSON structure generation matching the layout used by your application
+    SELECT 
+        p.[productId]
+        ,p.[name]
+        ,ISNULL(p.[barCode],'') AS barCode
+        ,ISNULL(p.[code],'') AS code
+        ,ISNULL(p.[dateOfExpire],'') AS dateOfExpire
+        ,p.[productFormId]
+        ,p.[manufactureId]
+        ,ISNULL(p.[description],'') AS description
+        ,p.[productCategoryId] AS categoryId
+        ,p.[companyId]
+        ,p.[trackInventory]
+        ,p.[isActive]
+        ,ISNULL(inv.stockQuantity, 0) AS stockQuantity
+        ,p.[createdAt]
+        ,ISNULL(p.[updatedAt],'') AS updatedAt
+        
+        -- 1. Nested Details Object (Returns as an array/object matching your save logic)
+        ,(
+            SELECT 
+                ISNULL(inv.stockQuantity, 0) AS stockQuantity
+                ,pd.unitPrice
+                ,pd.salePrice
+            FROM dbo.productDetails pd
+            WHERE pd.productId = p.productId
+            FOR JSON PATH
+        ) AS productDetails
+
+        -- 2. Nested Descriptions Array
+        ,(
+            SELECT 
+                pdesc.Dosage
+                ,pdesc.measurementId
+                ,pdesc.is_principal
+                ,pdesc.activeIngredientId
+            FROM dbo.productsDescription pdesc
+            WHERE pdesc.productId = p.productId
+            FOR JSON PATH
+        ) AS productDescriptions
+
+        -- 3. Nested Options and nested Choices Array
+        ,(
+            SELECT 
+                po.optionKey
+                ,po.name
+                ,po.type
+                ,po.isRequired
+                ,(
+                    SELECT 
+                        poc.choiceKey
+                        ,poc.name
+                        ,poc.price
+                        ,poc.description
+                        ,poc.quantity
+                        ,poc.measurementId
+                        ,m.prefix AS unit
+                    FROM dbo.productOptionChoices poc
+                    LEFT JOIN dbo.measurements m ON m.measurementId = poc.measurementId
+                    WHERE poc.productOptionId = po.productOptionId
+                    FOR JSON PATH
+                ) AS optionChoices
+            FROM dbo.productOptions po
+            WHERE po.productId = p.productId
+            FOR JSON PATH
+        ) AS productOptions
+
+    FROM 
+        [dbo].[products] p
+    LEFT JOIN dbo.inventoryStock inv
+        ON inv.companyId = p.companyId AND inv.productId = p.productId
+    WHERE
+        p.productId = @productId
+    FOR JSON PATH, ROOT('products');
+
+END
+GO
+
+-- dbo.sp_products_save
+CREATE OR ALTER PROC [dbo].[sp_products_save]
+    @pjsonfile NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE 
+        @Outputmessage NVARCHAR(MAX) = '{"result":[{ "value":"", "msg":"", "error":"" }]}',
+        @Error NVARCHAR(500) = '',
+        @action INT,
+        @companyId INT,
+        @productId INT;
+
+    BEGIN TRY
+        -- 1. Extract Root Context
+        SELECT TOP (1)
+            @action = TRY_CAST(JSON_VALUE(value, '$.action') AS INT),
+            @companyId = TRY_CAST(JSON_VALUE(value, '$.companyId') AS INT),
+            @productId = TRY_CAST(JSON_VALUE(value, '$.productId') AS INT)
+        FROM OPENJSON(@pjsonfile, '$.products');
+
+        -- Validations
+        IF @action IS NULL RAISERROR('action is required (1=insert, 2=update, 3=delete).', 16, 1);
+        IF @companyId IS NULL RAISERROR('companyId is required.', 16, 1);
+        IF @companyId <> 1 RAISERROR('Invalid companyId.', 16, 1);
+
+        BEGIN TRANSACTION;
+
+        /* ============================================================
+           STEP 1: BASE PRODUCTS
+           ============================================================ */
+        IF @action = 1
+        BEGIN
+            -- Code is an identity-like counter per company: MAX(numeric code) + 1,
+            -- never typed by the user. UPDLOCK+HOLDLOCK keeps two concurrent
+            -- inserts from reading the same MAX (we are inside the transaction).
+            DECLARE @nextCode VARCHAR(100) = CAST(
+                ISNULL((SELECT MAX(TRY_CAST(code AS BIGINT))
+                        FROM dbo.products WITH (UPDLOCK, HOLDLOCK)
+                        WHERE companyId = @companyId), 0) + 1 AS VARCHAR(100));
+
+            INSERT INTO dbo.products (name, barCode, code, dateOfExpire, productFormId, manufactureId, description, createdAt, productCategoryId, companyId, isSupply, netContent, unitOfMeasure, referencePrice, trackInventory, isActive)
+            SELECT 
+                JSON_VALUE(value, '$.name'), JSON_VALUE(value, '$.barCode'), @nextCode,
+                TRY_CONVERT(DATE, NULLIF(JSON_VALUE(value, '$.dateOfExpire'), '')), TRY_CAST(JSON_VALUE(value, '$.productFormId') AS INT),
+                TRY_CAST(JSON_VALUE(value, '$.manufactureId') AS INT), JSON_VALUE(value, '$.description'),
+                GETDATE(), TRY_CAST(COALESCE(JSON_VALUE(value, '$.productCategoryId'), JSON_VALUE(value, '$.categoryId')) AS INT), @companyId,
+                ISNULL(TRY_CAST(JSON_VALUE(value, '$.isSupply') AS BIT), 0),
+                TRY_CAST(JSON_VALUE(value, '$.netContent') AS DECIMAL(10,3)), NULLIF(JSON_VALUE(value, '$.unitOfMeasure'), ''),
+                TRY_CAST(JSON_VALUE(value, '$.referencePrice') AS DECIMAL(10,2)),
+                -- trackInventory: explicit value wins; otherwise physical goods (barcode / supply) are tracked.
+                COALESCE(TRY_CAST(JSON_VALUE(value, '$.trackInventory') AS BIT),
+                         CASE WHEN NULLIF(LTRIM(RTRIM(JSON_VALUE(value, '$.barCode'))), '') IS NOT NULL
+                                OR TRY_CAST(JSON_VALUE(value, '$.isSupply') AS BIT) = 1 THEN 1 ELSE 0 END),
+                ISNULL(TRY_CAST(JSON_VALUE(value, '$.isActive') AS BIT), 1)
+            FROM OPENJSON(@pjsonfile, '$.products');
+
+            SET @productId = SCOPE_IDENTITY();
+        END
+        ELSE IF @action = 2
+        BEGIN
+            IF @productId IS NULL RAISERROR('productId is required for update.', 16, 1);
+
+            UPDATE p
+            SET p.name = COALESCE(JSON_VALUE(j.value, '$.name'), p.name),
+                p.barCode = COALESCE(JSON_VALUE(j.value, '$.barCode'), p.barCode),
+                -- code is never changed after insert (auto-assigned identity)
+                p.dateOfExpire = CASE
+                    WHEN TRY_CAST(JSON_VALUE(j.value, '$.noExpire') AS BIT) = 1 THEN NULL
+                    ELSE COALESCE(TRY_CONVERT(DATE, NULLIF(JSON_VALUE(j.value, '$.dateOfExpire'), '')), p.dateOfExpire)
+                END,
+                -- netContent/unitOfMeasure/referencePrice: the wizard always sends all three (null = cleared)
+                p.netContent = TRY_CAST(JSON_VALUE(j.value, '$.netContent') AS DECIMAL(10,3)),
+                p.unitOfMeasure = NULLIF(JSON_VALUE(j.value, '$.unitOfMeasure'), ''),
+                p.referencePrice = TRY_CAST(JSON_VALUE(j.value, '$.referencePrice') AS DECIMAL(10,2)),
+                p.productFormId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.productFormId') AS INT), p.productFormId),
+                p.manufactureId = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.manufactureId') AS INT), p.manufactureId),
+                p.description = COALESCE(JSON_VALUE(j.value, '$.description'), p.description),
+                p.updatedAt = GETDATE(),
+                p.productCategoryId = COALESCE(TRY_CAST(COALESCE(JSON_VALUE(j.value, '$.productCategoryId'), JSON_VALUE(j.value, '$.categoryId')) AS INT), p.productCategoryId),
+                p.isSupply = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.isSupply') AS BIT), p.isSupply),
+                p.trackInventory = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.trackInventory') AS BIT), p.trackInventory),
+                p.isActive = COALESCE(TRY_CAST(JSON_VALUE(j.value, '$.isActive') AS BIT), p.isActive)
+            FROM dbo.products p
+            CROSS APPLY OPENJSON(@pjsonfile, '$.products') j
+            WHERE p.productId = @productId AND p.companyId = @companyId;
+        END
+        ELSE IF @action = 3
+        BEGIN
+            -- Clean up everything associated with this product (Cascade Delete)
+            DELETE FROM dbo.productOptionChoices WHERE productOptionId IN (SELECT productOptionId FROM dbo.productOptions WHERE productId = @productId);
+            DELETE FROM dbo.productOptions WHERE productId = @productId;
+            DELETE FROM dbo.productDetails WHERE productId = @productId;
+            DELETE FROM dbo.inventoryStock WHERE productId = @productId AND companyId = @companyId;
+            IF OBJECT_ID('dbo.productsDescription', 'U') IS NOT NULL DELETE FROM dbo.productsDescription WHERE productId = @productId;
+            DELETE FROM dbo.products WHERE productId = @productId AND companyId = @companyId;
+
+            COMMIT TRANSACTION;
+            
+            -- Early return on successful delete
+            SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@productId AS NVARCHAR(50))), '$.result[0].msg', 'Deleted Successfully');
+            SELECT JSON_VALUE(value, '$.value') AS [value], JSON_VALUE(value, '$.msg') AS [msg], JSON_VALUE(value, '$.error') AS [error] FROM OPENJSON(@Outputmessage, '$.result');
+            RETURN;
+        END
+
+        /* ============================================================
+           STEP 2: PRODUCT DETAILS (Simple IF EXISTS Check)
+           ============================================================ */
+        DECLARE @stock INT, @uPrice DECIMAL(10,2), @sPrice DECIMAL(10,2);
+        
+        SELECT 
+            @stock = TRY_CAST(JSON_VALUE(value, '$.stockQuantity') AS INT),
+            @uPrice = TRY_CAST(JSON_VALUE(value, '$.unitPrice') AS DECIMAL(10,2)),
+            @sPrice = TRY_CAST(JSON_VALUE(value, '$.salePrice') AS DECIMAL(10,2))
+        FROM OPENJSON(@pjsonfile, '$.productDetails');
+
+        -- productDetails keeps prices only. stockQuantity there is frozen since phase 1
+        -- (2026-10-15c): the only stock is dbo.inventoryStock + dbo.inventoryMovements.
+        IF EXISTS (SELECT 1 FROM dbo.productDetails WHERE productId = @productId)
+        BEGIN
+            UPDATE dbo.productDetails
+            SET unitPrice = COALESCE(@uPrice, unitPrice),
+                salePrice = COALESCE(@sPrice, salePrice),
+                updatedAt = GETDATE()
+            WHERE productId = @productId;
+        END
+        ELSE
+        BEGIN
+            INSERT INTO dbo.productDetails (productId, stockQuantity, unitPrice, salePrice, createdAt, updatedAt)
+            VALUES (@productId, 0, COALESCE(@uPrice, 0), COALESCE(@sPrice, 0), GETDATE(), GETDATE());
+        END
+
+        -- The stock typed in the wizard is a target count: post the difference as
+        -- 'opening' (first count) or 'adjustment' (recount). A non-zero stock turns
+        -- tracking on; a 0 on an untracked product (e.g. made-to-order food) is ignored.
+        IF @stock IS NOT NULL
+           AND (@stock <> 0 OR EXISTS (SELECT 1 FROM dbo.products
+                                       WHERE productId = @productId AND trackInventory = 1))
+        BEGIN
+            DECLARE @current DECIMAL(18,3), @hasStockRow BIT = 0, @stockUserId INT,
+                    @stockDelta DECIMAL(18,3), @stockReason VARCHAR(30);
+
+            SELECT @current = stockQuantity, @hasStockRow = 1
+            FROM dbo.inventoryStock WITH (UPDLOCK, HOLDLOCK)
+            WHERE companyId = @companyId AND productId = @productId;
+
+            SELECT TOP (1) @stockUserId = TRY_CAST(JSON_VALUE(value, '$.userId') AS INT)
+            FROM OPENJSON(@pjsonfile, '$.products');
+
+            UPDATE dbo.products SET trackInventory = 1
+            WHERE productId = @productId AND trackInventory = 0;
+
+            SET @stockDelta  = @stock - ISNULL(@current, 0);
+            SET @stockReason = CASE WHEN @hasStockRow = 1 THEN 'adjustment' ELSE 'opening' END;
+
+            IF @stockDelta <> 0
+                EXEC dbo.sp_inventory_post
+                    @companyId = @companyId,
+                    @productId = @productId,
+                    @quantityDelta = @stockDelta,
+                    @reason = @stockReason,
+                    @refType = 'product_save',
+                    @refId = @productId,
+                    @userId = @stockUserId,
+                    @notes = N'Stock capturado en el asistente de producto';
+        END
+
+        /* ============================================================
+           STEP 3: PRODUCT DESCRIPTIONS
+           ============================================================ */
+        IF OBJECT_ID('dbo.productsDescription', 'U') IS NOT NULL
+        BEGIN
+            DELETE FROM dbo.productsDescription WHERE productId = @productId;
+
+            INSERT INTO dbo.productsDescription (productId, Dosage, measurementId, is_principal, activeIngredientId)
+            SELECT 
+                @productId, JSON_VALUE(value, '$.Dosage'), 
+                TRY_CAST(JSON_VALUE(value, '$.measurementId') AS INT), 
+                JSON_VALUE(value, '$.is_principal'), 
+                TRY_CAST(JSON_VALUE(value, '$.activeIngredientId') AS INT)
+            FROM OPENJSON(@pjsonfile, '$.productDescriptions');
+        END
+
+        /* ============================================================
+           STEP 4: OPTIONS AND CHOICES (Simple Loop/Insert Pattern)
+           ============================================================ */
+        -- Clear old configurations to avoid messy updates
+        DELETE FROM dbo.productOptionChoices WHERE productOptionId IN (SELECT productOptionId FROM dbo.productOptions WHERE productId = @productId);
+        DELETE FROM dbo.productOptions WHERE productId = @productId;
+
+        -- We use a cursor or simple loop over the array index to keep identities synchronized
+        DECLARE @index INT = 0, @maxOptions INT;
+        SET @maxOptions = (SELECT COUNT(*) FROM OPENJSON(@pjsonfile, '$.productOptions'));
+
+        WHILE @index < @maxOptions
+        BEGIN
+            DECLARE @optPath NVARCHAR(100) = '$.productOptions[' + CAST(@index AS NVARCHAR(10)) + ']';
+            DECLARE @newOptId INT;
+
+            -- Insert the Option Node
+            INSERT INTO dbo.productOptions (productId, optionKey, name, type, isRequired, createdAt, updatedAt)
+            SELECT @productId, JSON_VALUE(@pjsonfile, @optPath + '.optionKey'), JSON_VALUE(@pjsonfile, @optPath + '.name'), JSON_VALUE(@pjsonfile, @optPath + '.type'),
+                   ISNULL(TRY_CAST(JSON_VALUE(@pjsonfile, @optPath + '.isRequired') AS BIT), 0), GETDATE(), GETDATE();
+            
+            SET @newOptId = SCOPE_IDENTITY();
+
+            -- Insert Nested Choices matching this exact option index
+            -- quantity + unit per choice (19 L, 600 ml): measurementId, or the unit code
+            -- ("ml", "L", "kg"…) resolved against dbo.measurements.prefix.
+            INSERT INTO dbo.productOptionChoices (productOptionId, choiceKey, name, price, description, quantity, measurementId, createdAt, updatedAt)
+            SELECT 
+                @newOptId,
+                JSON_VALUE(value, '$.choiceKey'),
+                JSON_VALUE(value, '$.name'),
+                COALESCE(TRY_CAST(JSON_VALUE(value, '$.price') AS DECIMAL(10,2)), 0.00),
+                COALESCE(JSON_VALUE(value, '$.description'), ''),
+                TRY_CAST(JSON_VALUE(value, '$.quantity') AS DECIMAL(10,3)),
+                COALESCE(TRY_CAST(JSON_VALUE(value, '$.measurementId') AS INT),
+                         (SELECT TOP (1) m.measurementId FROM dbo.measurements m
+                          WHERE m.prefix = NULLIF(LTRIM(RTRIM(JSON_VALUE(value, '$.unit'))), ''))),
+                GETDATE(),
+                GETDATE()
+            FROM OPENJSON(@pjsonfile, @optPath + '.optionChoices');
+
+            SET @index = @index + 1;
+        END
+
+        COMMIT TRANSACTION;
+
+        -- Success Output Compilation
+        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@productId AS NVARCHAR(50))), '$.result[0].msg', CASE WHEN @action = 1 THEN 'Inserted Successfully' ELSE 'Updated Successfully' END);
+
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        SET @Error = ERROR_MESSAGE();
+        SET @Outputmessage = JSON_MODIFY(JSON_MODIFY(@Outputmessage, '$.result[0].error', '1'), '$.result[0].msg', @Error);
+    END CATCH;
+
+    -- Return Status Response
+    SELECT JSON_VALUE(value, '$.value') AS [value], JSON_VALUE(value, '$.msg') AS [msg], JSON_VALUE(value, '$.error') AS [error] FROM OPENJSON(@Outputmessage, '$.result');
+END
+GO
+
+-- 4) Verify --------------------------------------------------------------------------------
+SELECT
+    CASE WHEN COL_LENGTH('dbo.productOptionChoices', 'quantity')      IS NOT NULL THEN 1 ELSE 0 END AS choiceQuantity,
+    CASE WHEN COL_LENGTH('dbo.productOptionChoices', 'measurementId') IS NOT NULL THEN 1 ELSE 0 END AS choiceMeasurementId,
+    (SELECT COUNT(*) FROM dbo.measurements) AS units;
+GO
+
+-- Re-enable execution (a failed pre-check above turns NOEXEC on for the rest of the file).
+SET NOEXEC OFF;
+GO
+
+-- #############################################################################
+-- [67/67] 2026-10-16_gmo_catalog.sql
+-- #############################################################################
+SET NOEXEC OFF;
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+SET XACT_ABORT OFF;
+IF OBJECT_ID('tempdb..#rec') IS NOT NULL DROP TABLE #rec;
+IF @@TRANCOUNT > 0
+BEGIN
+    ROLLBACK TRANSACTION;
+    RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
+END
+GO
+RAISERROR('>>> [67/67] 2026-10-16_gmo_catalog.sql', 0, 1) WITH NOWAIT;
+GO
+
+-- =============================================================================
+-- GMO Lavandería (companyId 1) — catalog: Categoría → Subcategoría → Producto
+-- =============================================================================
+-- NOT YET EXECUTED. Data script. Run manually against the live DB AFTER
+-- 2026-10-15d_catalog_hierarchy.sql and 2026-10-15e_option_choice_measurements.sql.
+-- Idempotent: categories are found-or-created by name, products by name; a
+-- second run changes nothing.
+--
+-- WHAT (company 1 only):
+--   1. Top-level categories: Servicios (reuses 1002 "Lavanderia" if not renamed
+--      yet), Bebidas, Frituras, Limpieza. 1004 "Productos" is left as is (it keeps
+--      the old pseudo-products; delete it from the app once empty).
+--   2. Subcategories:
+--        Servicios › Lavado, Secado, Servicio completo
+--        Bebidas   › Agua purificada, Agua embotellada
+--        Limpieza  › Bolsas, Detergentes y limpiadores, Suavizantes
+--        Frituras  › (none yet)
+--   3. Existing products moved: 1002 Servicio de lavado › Lavado, 1003 Servicio de
+--      secado › Secado, 1004 + 2004 › Servicio completo, 3018 Garrafón › Agua
+--      purificada. Their "Ciclo" / "Tamaño" options become radio + required; the
+--      garrafón sizes get quantity + unit (19 / 10 / 3 L).
+--   4. The choices of 1006 "Productos Limpieza" (Jabón, Suavisantes, Limpiadores)
+--      become real products at the same price (sold per load: not inventory-
+--      tracked), and 1006 is deactivated (kept: past sales point to it).
+--   5. 3021 "Bolsas para empaque de ropa" → Limpieza › Bolsas as "Bolsa empaque
+--      grande", sellable — ONLY when @bolsaPrecio is set below.
+--   NOT TOUCHED: 1005 "Bebidas" (its options are still unknown) — Agua 1 litro /
+--   Agua 500 ml come from it in a follow-up.
+-- =============================================================================
+
+SET ANSI_NULLS ON;
+GO
+SET QUOTED_IDENTIFIER ON;
+GO
+
+IF COL_LENGTH('dbo.productCategories', 'parentCategoryId') IS NULL
+   OR COL_LENGTH('dbo.productOptionChoices', 'measurementId') IS NULL
+    BEGIN RAISERROR('Run 2026-10-15d_catalog_hierarchy.sql and 2026-10-15e_option_choice_measurements.sql first.', 16, 1); SET NOEXEC ON; RETURN; END
+GO
+
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+
+-- ▼▼▼ Fill in, then run. NULL = step 5 is skipped (the bag stays a supply). ▼▼▼
+DECLARE @bolsaPrecio DECIMAL(10,2) = NULL;   -- e.g. 15.00
+-- ▲▲▲
+
+DECLARE @companyId INT = 1;
+
+BEGIN TRANSACTION;
+
+-- 1) + 2) Categories ------------------------------------------------------------------------
+DECLARE @cat TABLE (name VARCHAR(50) PRIMARY KEY, parentName VARCHAR(50) NULL, ord INT);
+INSERT INTO @cat (name, parentName, ord) VALUES
+    ('Servicios', NULL, 1), ('Bebidas', NULL, 2), ('Frituras', NULL, 3), ('Limpieza', NULL, 4),
+    ('Lavado', 'Servicios', 11), ('Secado', 'Servicios', 12), ('Servicio completo', 'Servicios', 13),
+    ('Agua purificada', 'Bebidas', 21), ('Agua embotellada', 'Bebidas', 22),
+    ('Bolsas', 'Limpieza', 41), ('Detergentes y limpiadores', 'Limpieza', 42), ('Suavizantes', 'Limpieza', 43);
+
+-- Servicios = the existing laundry category (1002) when it still has its old name.
+IF NOT EXISTS (SELECT 1 FROM dbo.productCategories WHERE companyId = @companyId AND name = 'Servicios' AND parentCategoryId IS NULL)
+   AND EXISTS (SELECT 1 FROM dbo.productCategories WHERE productCategoryId = 1002 AND companyId = @companyId AND name = 'Lavanderia')
+    UPDATE dbo.productCategories SET name = 'Servicios' WHERE productCategoryId = 1002;
+
+INSERT INTO dbo.productCategories (name, image, companyId, parentCategoryId)
+SELECT c.name, NULL, @companyId, NULL
+FROM @cat c
+WHERE c.parentName IS NULL
+  AND NOT EXISTS (SELECT 1 FROM dbo.productCategories pc
+                  WHERE pc.companyId = @companyId AND pc.name = c.name AND pc.parentCategoryId IS NULL);
+
+INSERT INTO dbo.productCategories (name, image, companyId, parentCategoryId)
+SELECT c.name, NULL, @companyId, p.productCategoryId
+FROM @cat c
+JOIN dbo.productCategories p
+  ON p.companyId = @companyId AND p.name = c.parentName AND p.parentCategoryId IS NULL
+WHERE c.parentName IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM dbo.productCategories pc
+                  WHERE pc.companyId = @companyId AND pc.name = c.name AND pc.parentCategoryId = p.productCategoryId);
+
+-- id of a subcategory by (parent, name)
+DECLARE @sub TABLE (name VARCHAR(50) PRIMARY KEY, id INT NOT NULL);
+INSERT INTO @sub (name, id)
+SELECT s.name, s.productCategoryId
+FROM dbo.productCategories s
+JOIN dbo.productCategories p ON p.productCategoryId = s.parentCategoryId
+JOIN @cat c ON c.name = s.name AND c.parentName = p.name
+WHERE s.companyId = @companyId;
+
+-- 3) Existing products → subcategories; options radio + required --------------------------
+UPDATE p SET p.productCategoryId = s.id, p.updatedAt = GETDATE()
+FROM dbo.products p
+JOIN (VALUES (1002, 'Lavado'), (1003, 'Secado'), (1004, 'Servicio completo'),
+             (2004, 'Servicio completo'), (3018, 'Agua purificada')) AS m(productId, subName)
+  ON m.productId = p.productId
+JOIN @sub s ON s.name = m.subName
+WHERE p.companyId = @companyId
+  AND ISNULL(p.productCategoryId, 0) <> s.id;
+
+UPDATE o SET o.type = 'radio', o.isRequired = 1, o.updatedAt = GETDATE()
+FROM dbo.productOptions o
+JOIN dbo.products p ON p.productId = o.productId
+WHERE p.companyId = @companyId
+  AND p.productId IN (1002, 1003, 1004, 2004, 3018)
+  AND o.name IN (N'Ciclo', N'Tamaño', N'Tamano')
+  AND (o.type <> 'radio' OR o.isRequired = 0);
+
+-- Garrafón sizes: "19 lts" → 19 L
+UPDATE c SET c.quantity = TRY_CAST(LEFT(c.name, CHARINDEX(' ', c.name + ' ') - 1) AS DECIMAL(10,3)),
+             c.measurementId = m.measurementId,
+             c.updatedAt = GETDATE()
+FROM dbo.productOptionChoices c
+JOIN dbo.productOptions o ON o.productOptionId = c.productOptionId
+JOIN dbo.measurements m ON m.prefix = 'L'
+WHERE o.productId = 3018
+  AND (c.name LIKE '% lts' OR c.name LIKE '% lt' OR c.name LIKE '% L')
+  AND TRY_CAST(LEFT(c.name, CHARINDEX(' ', c.name + ' ') - 1) AS DECIMAL(10,3)) > 0
+  AND (c.quantity IS NULL OR c.measurementId IS NULL);
+
+-- 4) 1006 "Productos Limpieza" choices → real products ------------------------------------
+DECLARE @new TABLE (name NVARCHAR(255) PRIMARY KEY, subName VARCHAR(50), price DECIMAL(10,2));
+INSERT INTO @new (name, subName, price)
+SELECT DISTINCT
+    CASE
+        WHEN o.name LIKE N'Jab%n' THEN N'Jabón ' + c.name
+        -- "Suavisante Generico" → "Suavizante Generico"; brands (Suavitel, Ensueño) keep their name
+        WHEN o.name LIKE N'Suavi%' AND c.name LIKE N'Suavi_ante %'
+            THEN N'Suavizante ' + LTRIM(SUBSTRING(c.name, CHARINDEX(' ', c.name) + 1, 200))
+        ELSE c.name
+    END,
+    CASE WHEN o.name LIKE N'Suavi%' THEN 'Suavizantes' ELSE 'Detergentes y limpiadores' END,
+    c.price
+FROM dbo.productOptions o
+JOIN dbo.productOptionChoices c ON c.productOptionId = o.productOptionId
+WHERE o.productId = 1006;
+
+DECLARE @nextCode BIGINT = ISNULL((SELECT MAX(TRY_CAST(code AS BIGINT)) FROM dbo.products WITH (UPDLOCK, HOLDLOCK)
+                                   WHERE companyId = @companyId), 0);
+DECLARE @created TABLE (productId INT);
+
+INSERT INTO dbo.products (name, code, description, createdAt, productCategoryId, companyId,
+                          isSupply, trackInventory, isActive)
+OUTPUT inserted.productId INTO @created (productId)
+SELECT n.name,
+       CAST(@nextCode + ROW_NUMBER() OVER (ORDER BY n.subName, n.name) AS VARCHAR(100)),
+       N'Por carga', GETDATE(), s.id, @companyId,
+       0, 0, 1          -- sold per load from bulk: not inventory-tracked
+FROM @new n
+JOIN @sub s ON s.name = n.subName
+WHERE NOT EXISTS (SELECT 1 FROM dbo.products p WHERE p.companyId = @companyId AND p.name = n.name);
+
+INSERT INTO dbo.productDetails (productId, stockQuantity, unitPrice, salePrice, createdAt, updatedAt)
+SELECT p.productId, 0, 0, n.price, GETDATE(), GETDATE()
+FROM @created c
+JOIN dbo.products p ON p.productId = c.productId
+JOIN @new n ON n.name = p.name;
+
+UPDATE dbo.products SET isActive = 0, updatedAt = GETDATE()
+WHERE productId = 1006 AND companyId = @companyId AND isActive = 1
+  AND (SELECT COUNT(*) FROM @new) > 0;
+
+-- 5) Bag → sellable product (only with a price) ---------------------------------------------
+IF @bolsaPrecio IS NOT NULL
+BEGIN
+    UPDATE p SET p.name = N'Bolsa empaque grande', p.productCategoryId = s.id,
+                 p.isSupply = 0, p.isActive = 1, p.updatedAt = GETDATE()
+    FROM dbo.products p
+    JOIN @sub s ON s.name = 'Bolsas'
+    WHERE p.productId = 3021 AND p.companyId = @companyId;
+
+    IF EXISTS (SELECT 1 FROM dbo.productDetails WHERE productId = 3021)
+        UPDATE dbo.productDetails SET salePrice = @bolsaPrecio, updatedAt = GETDATE() WHERE productId = 3021;
+    ELSE
+        INSERT INTO dbo.productDetails (productId, stockQuantity, unitPrice, salePrice, createdAt, updatedAt)
+        VALUES (3021, 0, 0, @bolsaPrecio, GETDATE(), GETDATE());
+END
+ELSE
+    RAISERROR('Bolsa empaque grande skipped: set @bolsaPrecio and run again.', 0, 1) WITH NOWAIT;
+
+COMMIT TRANSACTION;
+SET XACT_ABORT OFF;
+
+-- Verify --------------------------------------------------------------------------------------
+SELECT ISNULL(parent.name + N' › ', N'') + c.name AS category, c.productCategoryId,
+       (SELECT COUNT(*) FROM dbo.products p WHERE p.productCategoryId = c.productCategoryId AND p.isActive = 1) AS activeProducts
+FROM dbo.productCategories c
+LEFT JOIN dbo.productCategories parent ON parent.productCategoryId = c.parentCategoryId
+WHERE c.companyId = 1
+ORDER BY ISNULL(parent.name, c.name), CASE WHEN c.parentCategoryId IS NULL THEN 0 ELSE 1 END, c.name;
+
+SELECT p.productId, p.name, cat.name AS subcategory, d.salePrice, p.isActive, p.isSupply, p.trackInventory
+FROM dbo.products p
+LEFT JOIN dbo.productCategories cat ON cat.productCategoryId = p.productCategoryId
+OUTER APPLY (SELECT TOP 1 salePrice FROM dbo.productDetails WHERE productId = p.productId ORDER BY productDetailId) d
+WHERE p.companyId = 1
+ORDER BY cat.name, p.name;
+GO
+
+-- Re-enable execution (a failed pre-check above turns NOEXEC on for the rest of the file).
+SET NOEXEC OFF;
+GO
+
+SET NOEXEC OFF;
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+SET XACT_ABORT OFF;
+IF OBJECT_ID('tempdb..#rec') IS NOT NULL DROP TABLE #rec;
+IF @@TRANCOUNT > 0
+BEGIN
+    ROLLBACK TRANSACTION;
+    RAISERROR('Previous step left an open transaction — rolled back.', 16, 1);
+END
+GO
+RAISERROR('>>> DONE: 67/67 migration files executed.', 0, 1) WITH NOWAIT;
 GO
