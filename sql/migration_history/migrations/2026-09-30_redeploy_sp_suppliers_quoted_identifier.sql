@@ -13,7 +13,7 @@
 -- sp_suppliers_all/_one are unaffected (GET-style reads work).
 --
 -- WHAT: re-creates sp_suppliers with both options ON. Body is byte-for-byte
--- the one in sql/migration/02_programmability.sql — no logic change.
+-- the one in sql/migration_history/snapshot_2026-08-15/02_programmability.sql — no logic change.
 -- Check afterwards:
 --   SELECT uses_quoted_identifier, uses_ansi_nulls
 --   FROM sys.sql_modules WHERE object_id = OBJECT_ID('dbo.sp_suppliers');  -- 1, 1

@@ -2,7 +2,7 @@
 -- Reservations — customers book a time slot for a service from the
 -- company's catalog (sp_reservationServices) via kiosk or WhatsApp.
 -- Staff confirms via POS. Business hours: sp_reservationHours.
--- Requires sql/migrations/2026-09-24_reservation_catalogs.sql.
+-- Requires sql/migration_history/migrations/2026-09-24_reservation_catalogs.sql.
 -- ============================================================
 
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'reservations')

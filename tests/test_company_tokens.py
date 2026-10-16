@@ -2,7 +2,7 @@
 Company token ledger — module wrapper + route guards.
 
 The SQL itself was exercised against the live schema inside a rolled-back
-transaction (see sql/migrations/2026-10-02c_company_token_ledger.sql); these
+transaction (see sql/migration_history/migrations/2026-10-02c_company_token_ledger.sql); these
 tests cover the Python layer: JSON in/out, error mapping, and that usage can
 only be recorded / topped up with the shared worker key.
 

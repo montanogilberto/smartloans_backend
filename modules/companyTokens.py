@@ -1,6 +1,6 @@
 """Company AI-token ledger: record agent usage, top up, read the balance.
 
-Thin wrapper over sp_companyTokens_* (sql/migrations/2026-10-02c_company_token_ledger.sql).
+Thin wrapper over sp_companyTokens_* (sql/migration_history/migrations/2026-10-02c_company_token_ledger.sql).
 The balance is the SUM of an append-only ledger; this module never edits rows.
 """
 import json

@@ -5,7 +5,7 @@ Fail the build if any backend Python issues raw SQL.
 Backend rule: modules never issue raw SQL -- every read and mutation goes
 through a stored procedure (EXEC [dbo].[sp_*]). A 2026-09-23 audit found 23
 raw statements in modules/ that nothing had caught; they were all moved to
-SPs (sql/migrations/2026-09-23_add_*.sql). This check keeps it that way.
+SPs (sql/migration_history/migrations/2026-09-23_add_*.sql). This check keeps it that way.
 
     python scripts/check_raw_sql.py            # scan the repo, exit 1 on hits
     python scripts/check_raw_sql.py modules/x.py
@@ -14,7 +14,7 @@ The detector below (find_raw_sql and helpers) is a VERBATIM copy of
 Agent_POSGMO/posgmo-factory/agents/reviewer/raw_sql.py -- the Factory's
 reviewer runs the same check on generated modules. Change both together.
 
-Excluded: venv/, __pycache__/, and sql/migration/ (the migration generator
+Excluded: venv/, __pycache__/, and sql/migration_history/ (the migration generator
 reads SQL Server's own catalog views; it is tooling, not app code).
 """
 
@@ -137,7 +137,7 @@ def find_raw_sql(source: str) -> list[RawSql]:
 # ---------------------------------------------------------------------------
 
 _EXCLUDED_DIRS = {"venv", ".venv", "__pycache__", ".git", "node_modules"}
-_EXCLUDED_PATHS = (os.path.join("sql", "migration") + os.sep,)
+_EXCLUDED_PATHS = (os.path.join("sql", "migration_history") + os.sep,)
 
 
 def _python_files(root: str):

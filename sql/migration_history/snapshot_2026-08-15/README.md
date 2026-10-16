@@ -61,7 +61,7 @@ Los `.sql` son una **foto** del origen (generada 2026-08-15). Si el esquema camb
 regenera en vez de editar a mano:
 
 ```bash
-./venv/bin/python sql/migration/generate_migration.py
+./venv/bin/python sql/migration_history/snapshot_2026-08-15/generate_migration.py
 ```
 
 Lee las credenciales de `.env` (`LOCAL_DB_*`) y solo hace `SELECT` sobre `sys.*` y
@@ -71,7 +71,7 @@ Validar sintaxis de lo generado (usa `SET PARSEONLY ON` contra `tempdb`, no ejec
 nada):
 
 ```bash
-./venv/bin/python sql/migration/validate_scripts.py
+./venv/bin/python sql/migration_history/snapshot_2026-08-15/validate_scripts.py
 ```
 
 ## Notas / limites conocidos
@@ -82,7 +82,7 @@ nada):
     — son logs historicos, no hacen falta en la base nueva.
   - `sysdiagrams` — diagramas de SSMS.
 
-  Para copiarlas tambien: `python sql/migration/generate_migration.py --skip-data`
+  Para copiarlas tambien: `python sql/migration_history/snapshot_2026-08-15/generate_migration.py --skip-data`
   (sin argumentos = no omitir ninguna). Con los logs incluidos son 24,018 filas y
   el `03_data.sql` pesa ~3.9 MB en lugar de ~700 KB.
 - **Extended properties** (9, todas marcadores `microsoft_database_tools_support`

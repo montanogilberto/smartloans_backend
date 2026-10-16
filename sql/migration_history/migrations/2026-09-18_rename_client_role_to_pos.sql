@@ -17,7 +17,7 @@
 --
 -- dbo.userCompanies.roleName is a DENORMALIZED COPY of the roleCode string
 -- (set directly by @roleCode in sp_users, not a foreign key to
--- dbo.roles.code — confirmed by reading sql/migration/02_programmability.sql:
+-- dbo.roles.code — confirmed by reading sql/migration_history/snapshot_2026-08-15/02_programmability.sql:
 -- "roleName = ISNULL(@roleCode, roleName)") — so existing sessions with
 -- roleName='client' need their own UPDATE, the roles-table rename alone
 -- does not fix them retroactively.

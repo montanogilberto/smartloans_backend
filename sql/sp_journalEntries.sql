@@ -412,7 +412,7 @@ GO
 -- accounting report uses (Balanza, Balance General, Estado de Resultados):
 -- lines of this company's POSTED entries with entryDate <= @toDate (NULL =
 -- no cutoff), postable accounts with activity, balance signed by naturaleza.
--- Added 2026-10-01 (sql/migrations/2026-10-01b_journal_accountTotals_fn.sql);
+-- Added 2026-10-01 (sql/migration_history/migrations/2026-10-01b_journal_accountTotals_fn.sql);
 -- it replaced a LEFT JOIN … ON status/date filter that leaked VOID and
 -- post-cutoff lines into per-account totals.
 -- ============================================================

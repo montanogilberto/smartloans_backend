@@ -9,8 +9,8 @@ Lee el ESQUEMA REAL de la base origen (solo lecturas sobre sys.*) y escribe:
     03_data.sql            -> INSERTs de todos los datos (IDENTITY_INSERT + reseed)
 
 Uso:
-    python sql/migration/generate_migration.py                 # usa .env
-    python sql/migration/generate_migration.py --out sql/migration
+    python sql/migration_history/snapshot_2026-08-15/generate_migration.py                 # usa .env
+    python sql/migration_history/snapshot_2026-08-15/generate_migration.py --out sql/migration_history/snapshot_2026-08-15
 
 Los .sql generados se corren en ORDEN sobre la base NUEVA (ya creada y vacia).
 No requiere .bak, ni bacpac, ni permisos de sysadmin: solo SELECT sobre sys.* .
@@ -373,7 +373,7 @@ def main():
     cur = conn.cursor()
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = (f"/* Generado desde [{dbname}] el {stamp}\n"
-              f"   por sql/migration/generate_migration.py — NO editar a mano. */\n")
+              f"   por sql/migration_history/snapshot_2026-08-15/generate_migration.py — NO editar a mano. */\n")
 
     tables = fetch_tables(cur)
     columns = fetch_columns(cur)

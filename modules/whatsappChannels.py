@@ -127,7 +127,7 @@ def set_last_booked(channel_id: int, phone: str, row: dict) -> None:
 # ── Migration ───────────────────────────────────────────────────────────────
 
 _MIGRATION_FILES = (
-    "sql/migrations/2026-09-28_whatsapp_channels.sql",
+    "sql/migration_history/migrations/2026-09-28_whatsapp_channels.sql",
     "sql/sp_whatsappChannels.sql",
     "sql/sp_whatsappConversations.sql",
 )

@@ -4,7 +4,7 @@
 -- Forward-only. NOT YET EXECUTED — run manually against the live DB.
 -- Roadmap: POSVending/docs/accounting-module.md, Step 7.
 -- Test:    sql/tests/2026-10-01l_correct_entry_dates_test.sql
--- Run:     sql/migrations/2026-10-01m_run_correct_entry_dates.sql (explicit)
+-- Run:     sql/migration_history/migrations/2026-10-01m_run_correct_entry_dates.sql (explicit)
 --
 -- WHY: until 2026-10-01 the posting helper took the first 10 characters of the
 -- POS cart's UTC timestamp as the entry date, so sales after 17:00 Hermosillo

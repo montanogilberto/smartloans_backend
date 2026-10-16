@@ -13,7 +13,7 @@ and mixing the two would blur what each one guarantees.
 Per this backend's layered architecture (Python modules = business logic,
 sql/*.sql stored procedures = the only layer that touches tables), every
 lookup/comparison here goes through sp_clientLoginCodes (actions 1-4, see
-sql/migrations/2026-09-12_add_client_login_codes.sql) -- this file never
+sql/migration_history/migrations/2026-09-12_add_client_login_codes.sql) -- this file never
 runs a raw SELECT against dbo.clients/dbo.users itself.
 """
 import json

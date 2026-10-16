@@ -1,7 +1,7 @@
 -- ROLLBACK for 2026-09-30_employees_companyId.sql
 -- Restores the unscoped employees module exactly as it was before:
 --   - SP bodies: sp_employees / sp_employees_one from
---     sql/migration/02_programmability.sql, sp_employees_all from
+--     sql/migration_history/snapshot_2026-08-15/02_programmability.sql, sp_employees_all from
 --     2026-09-30_fix_statuses_table_rename.sql (dbo.status join).
 --   - Drops UQ_employees_companyId_email, FK_employees_companyId, companyId,
 --     updated_at; re-adds the global UNIQUE(email).

@@ -4,7 +4,7 @@
 -- Forward-only. NOT YET EXECUTED — run manually against the live DB.
 -- Roadmap: POSVending/docs/accounting-module.md, Step 4 (§7.1).
 -- Test:    sql/tests/2026-10-01e_backfill_income_commissions_test.sql
--- Run:     sql/migrations/2026-10-01f_run_income_commission_backfill.sql (after the test passes)
+-- Run:     sql/migration_history/migrations/2026-10-01f_run_income_commission_backfill.sql (after the test passes)
 -- Live:    new card sales are journaled by modules/income.py →
 --          post_income_commission_journal_entry (Dr 5120 / Cr 1105).
 --

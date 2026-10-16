@@ -3,4 +3,4 @@
 -- dbo.statuses, which does not exist in the live DB (every call failed with
 -- "Invalid object name"). Only roll back together with renaming the table
 -- back:  EXEC sp_rename 'dbo.status', 'statuses';
--- then re-run the four definitions from sql/migration/02_programmability.sql.
+-- then re-run the four definitions from sql/migration_history/snapshot_2026-08-15/02_programmability.sql.

@@ -1,5 +1,5 @@
 /* Generado desde [montanogilberto_smartloans] el 2026-08-15 15:50:03
-   por sql/migration/generate_migration.py — NO editar a mano. */
+   por sql/migration_history/snapshot_2026-08-15/generate_migration.py — NO editar a mano. */
 /* PASO 3 de 3 — copia de datos.
    Deshabilita FKs y triggers, inserta, y vuelve a habilitarlos.
    Tablas creadas pero SIN datos: applicationLogs, auditLogs, integrationLogs, sysdiagrams, workflowLogs */
