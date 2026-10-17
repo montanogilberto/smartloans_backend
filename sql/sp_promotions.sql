@@ -6,6 +6,8 @@
 -- apply (today: 'B2G1').
 -- Column added by sql/migrations/2026-10-16_whatsapp_assistant_catalogs.sql:
 -- description (customer-facing text for the assistant).
+-- Each listed promotion carries its targets (dbo.promotion_targets, managed
+-- by sql/sp_promotionTargets.sql); action 1 creates an 'ALL' target.
 -- ============================================================
 
 IF OBJECT_ID('dbo.sp_promotions', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_promotions;
@@ -54,6 +56,10 @@ BEGIN
             END
             INSERT INTO [dbo].[promotions] (companyId, code, name, promoType, isActive, startAtUtc, endAtUtc, createdAtUtc, description)
             VALUES (@companyId, @code, @name, @promoType, ISNULL(@isActive, 1), @startAtUtc, @endAtUtc, @nowUtc, @description);
+            -- New promotions apply to every product until narrowed with
+            -- sp_promotionTargets (a promotion with no targets discounts nothing).
+            INSERT INTO [dbo].[promotion_targets] (promotionId, targetType, productId)
+            VALUES (SCOPE_IDENTITY(), 'ALL', NULL);
         END
         ELSE IF @action = 2
         BEGIN
@@ -76,8 +82,15 @@ BEGIN
         DECLARE @listJson NVARCHAR(MAX) = (
             SELECT promotionId, companyId, code, name, promoType, description, isActive,
                    CONVERT(NVARCHAR(19), startAtUtc, 126) AS startAtUtc,
-                   CONVERT(NVARCHAR(19), endAtUtc, 126)   AS endAtUtc
-            FROM [dbo].[promotions]
+                   CONVERT(NVARCHAR(19), endAtUtc, 126)   AS endAtUtc,
+                   JSON_QUERY(ISNULL((
+                       SELECT t.promotionTargetId, t.targetType, t.productId, pr.name AS productName
+                       FROM [dbo].[promotion_targets] t
+                       LEFT JOIN [dbo].[products] pr ON pr.productId = t.productId
+                       WHERE t.promotionId = p.promotionId
+                       FOR JSON PATH, INCLUDE_NULL_VALUES
+                   ), '[]')) AS targets
+            FROM [dbo].[promotions] p
             WHERE companyId = @companyId
               AND (@activeOnly = 0 OR (
                     isActive = 1

@@ -3,7 +3,8 @@ Content the WhatsApp assistant answers from (LoanAgents_SmartLoans
 agents/whatsapp_reservations): promotions, business info, FAQs — each
 company edits its own from the POS — plus the sender's own reward points.
 
-All DB access through SPs (sql/sp_promotions.sql, sp_businessInfo.sql,
+All DB access through SPs (sql/sp_promotions.sql, sp_promotionTargets.sql,
+sp_businessInfo.sql,
 sp_businessFaqs.sql, sp_whatsappCustomerRewards.sql).
 """
 
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _PROCEDURES = {
     "promotions": "sp_promotions",
+    "promotionTargets": "sp_promotionTargets",
     "businessInfo": "sp_businessInfo",
     "businessFaqs": "sp_businessFaqs",
 }
@@ -39,7 +41,7 @@ def _sp(procedure: str, json_file: dict) -> dict:
 
 
 def assistant_catalog_sp(key: str, json_file: dict) -> JSONResponse:
-    """Passthrough for /promotions, /businessInfo, /businessFaqs."""
+    """Passthrough for /promotions, /promotionTargets, /businessInfo, /businessFaqs."""
     procedure = _PROCEDURES[key]
     try:
         return JSONResponse(_sp(procedure, json_file), status_code=200)
@@ -62,6 +64,8 @@ def customer_rewards(json_file: dict) -> JSONResponse:
 _MIGRATION_FILES = (
     "sql/migrations/2026-10-16_whatsapp_assistant_catalogs.sql",
     "sql/sp_promotions.sql",
+    "sql/sp_promotionTargets.sql",
+    "sql/migrations/2026-10-16b_promotion_targets_in_sp_income.sql",
     "sql/sp_businessInfo.sql",
     "sql/sp_businessFaqs.sql",
     "sql/sp_whatsappCustomerRewards.sql",
