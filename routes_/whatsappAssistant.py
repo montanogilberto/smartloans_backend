@@ -16,14 +16,33 @@ action 0 (or omit) — list: { "promotions": [{ "companyId": int,
   "activeOnly"?: bool (active and within startAtUtc/endAtUtc now) }] }
 action 1 — insert: { ..., "action": 1, "companyId": int, "code": str, "name": str,
   "promoType": str (one the POS applies, today "B2G1"), "description"?: str,
-  "startAtUtc"?: ISO datetime, "endAtUtc"?: ISO datetime }
+  "startAtUtc"?: ISO datetime, "endAtUtc"?: ISO datetime }  (created with an "ALL" target)
 action 2 — update (only keys sent): { ..., "action": 2, "companyId": int, "promotionId": int, ...fields }
 action 3 — deactivate: { ..., "action": 3, "companyId": int, "promotionId": int }
-→ { "result": [{ "promotions": [...] }] }
+→ { "result": [{ "promotions": [{ ..., "targets": [{ promotionTargetId, targetType, productId, productName }] }] }] }
 """,
 )
 def promotions(json: dict):
     return assistant_catalog_sp("promotions", json)
+
+
+@router.post(
+    "/promotionTargets",
+    summary="Promotion targets — which products a promotion discounts (POS)",
+    description="""
+A promotion targets either everything ("ALL") or a list of products ("PRODUCT").
+sp_income and sp_income_apply_promo only discount sale lines the targets cover;
+a promotion with no targets discounts nothing.
+action 0 (or omit) — list: { "promotionTargets": [{ "companyId": int, "promotionId": int }] }
+action 1 — add: { ..., "action": 1, "companyId": int, "promotionId": int,
+  "targetType": "ALL" | "PRODUCT", "productId"?: int (required for PRODUCT) }
+  ALL replaces the product list; PRODUCT removes ALL.
+action 3 — remove: { ..., "action": 3, "companyId": int, "promotionId": int, "promotionTargetId": int }
+→ { "result": [{ "promotionTargets": [{ promotionTargetId, promotionId, targetType, productId, productName }] }] }
+""",
+)
+def promotion_targets(json: dict):
+    return assistant_catalog_sp("promotionTargets", json)
 
 
 @router.post(
@@ -74,7 +93,7 @@ def whatsapp_customer_rewards(json: dict, _: str = Depends(require_worker_key)):
 
 @router.post(
     "/whatsapp/assistant/migrate",
-    summary="Create promotions / businessInfo / businessFaqs tables + SPs (idempotent)",
+    summary="Create promotions / promotionTargets / businessInfo / businessFaqs SPs, patch sp_income for targets (idempotent)",
 )
 def whatsapp_assistant_migrate():
     try:
