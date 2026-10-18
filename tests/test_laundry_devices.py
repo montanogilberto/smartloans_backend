@@ -1,6 +1,7 @@
 """
-GMO Laundry ESP32 controllers: device key, signed QR token, idempotent
-authorize with a LAUNDRY_USAGE debit in walletTransactions.
+GMO Laundry ESP32 controllers: device key, fixed signed client QR, cycle
+chosen on the machine's screen, idempotent authorize with a LAUNDRY_USAGE
+debit in walletTransactions.
 
 The SPs are faked in memory (FakeDb) with the same contract as
 sql/migrations/2026-10-18_laundry_devices.sql; the ledger is faked with the
@@ -11,7 +12,6 @@ Run:  venv/bin/python -m unittest tests/test_laundry_devices.py -v
 import json
 import os
 import sys
-import time
 import unittest
 from unittest import mock
 
@@ -24,12 +24,14 @@ import modules.laundryDevices as ld  # noqa: E402
 import routes_.laundryDevices as routes  # noqa: E402
 
 DEVICE_KEY = "test-device-key"
+# productOptionChoices of the live catalog: 1002 Servicio de lavado / 1003 Servicio de secado
+CHOICES = {1004: (1002, "Basico", 40.0), 1006: (1002, "Carga Alta", 70.0), 1009: (1003, "50 Min", 70.0)}
 
 
 class FakeDb:
     def __init__(self, balance=100.0):
         self.device = {"deviceId": 7, "companyId": 1, "branchId": None, "name": "Lavadora 1",
-                       "machineType": "washer", "priceMXN": 35.0, "cycleMinutes": 45,
+                       "machineType": "washer", "productId": 1002, "priceMXN": None, "cycleMinutes": 45,
                        "keyHash": ld.hash_key(DEVICE_KEY), "isActive": 1}
         self.uses, self.ledger, self.balance = {}, {}, balance
         self.ledger_error = None
@@ -46,17 +48,28 @@ class FakeDb:
                 return {**{k: v for k, v in self.device.items() if k != "keyHash"}, "serverTimeUtc": "2026-10-18T08:00:00"}
             if row["action"] == 1:
                 return {"deviceId": 8, "companyId": row["companyId"], "name": row["name"]}
+            if row["action"] == 6:
+                choice = row.get("productOptionChoiceId")
+                if self.device["productId"] is None:
+                    if choice is not None:
+                        return {"error": "choice_not_for_device"}
+                    return {"priceMXN": self.device["priceMXN"]}
+                product, name, price = CHOICES.get(choice, (None, None, None))
+                if product != self.device["productId"]:
+                    return {"error": "choice_not_for_device"}
+                return {"priceMXN": price, "productOptionChoiceId": choice, "choiceName": name}
+            if row["action"] == 7:
+                return {"cycles": [{"productOptionChoiceId": cid, "name": name, "priceMXN": price}
+                                   for cid, (product, name, price) in CHOICES.items()
+                                   if product == self.device["productId"]]}
         if proc == "sp_laundryDeviceUses":
             if row["action"] == 1:
                 key = (row["deviceId"], row["requestId"])
                 if key in self.uses:
                     use = self.uses[key]
-                    if use["tokenId"] != row["tokenId"]:
+                    if (use["clientId"], use["productOptionChoiceId"]) != (row["clientId"], row["productOptionChoiceId"]):
                         return {"error": "request_conflict"}
                     return {**use, "replayed": 1}
-                if any(u["tokenId"] == row["tokenId"] and u["status"] in ("pending", "authorized")
-                       for u in self.uses.values()):
-                    return {"error": "token_used"}
                 use = {"useId": len(self.uses) + 1, "status": "pending", "reason": None, **row}
                 self.uses[key] = use
                 return {**use, "replayed": 0}
@@ -96,105 +109,143 @@ class Base(unittest.TestCase):
         app.include_router(routes.router)
         self.client = TestClient(app)
 
-    def token(self, company_id=1, client_id=2260):
-        return ld.issue_qr_token(company_id, client_id)["qrToken"]
+    def qr(self, company_id=1, client_id=2260):
+        return ld.client_qr_text(company_id, client_id)
 
-    def authorize(self, token, request_id="req-00000001", key=DEVICE_KEY, device_id="7"):
+    def authorize(self, qr, choice=1004, request_id="req-00000001", key=DEVICE_KEY, device_id="7"):
+        body = {"requestId": request_id, "clientQr": qr}
+        if choice is not None:
+            body["productOptionChoiceId"] = choice
         return self.client.post("/laundryDevices/authorize",
-                                headers={"X-Device-Id": device_id, "X-Device-Key": key},
-                                json={"requestId": request_id, "qrToken": token})
+                                headers={"X-Device-Id": device_id, "X-Device-Key": key}, json=body)
 
 
-class QrTokenTest(Base):
+class ClientQrTest(Base):
     def test_round_trip(self):
-        out = ld.verify_qr_token(self.token())
-        self.assertEqual((out["companyId"], out["clientId"]), (1, 2260))
+        qr = self.qr()
+        self.assertTrue(qr.startswith("GMO1.1.2260."))
+        self.assertEqual(ld.verify_client_qr(qr), {"companyId": 1, "clientId": 2260})
 
-    def test_tampered_payload_is_rejected(self):
-        v, payload, sig = self.token().split(".")
-        forged = ld._b64e(json.dumps({"c": 1, "u": 1, "j": "x", "e": int(time.time()) + 300}).encode())
-        with self.assertRaisesRegex(ValueError, "token_invalid"):
-            ld.verify_qr_token(f"{v}.{forged}.{sig}")
+    def test_scanner_line_endings_are_ignored(self):
+        self.assertEqual(ld.verify_client_qr(self.qr() + "\r\n")["clientId"], 2260)
 
-    def test_expired(self):
-        old = ld.issue_qr_token(1, 2260, now=time.time() - 3600)["qrToken"]
-        with self.assertRaisesRegex(ValueError, "token_expired"):
-            ld.verify_qr_token(old)
+    def test_changing_the_client_breaks_the_signature(self):
+        prefix, company, _, sig = self.qr().split(".")
+        with self.assertRaisesRegex(ValueError, "qr_invalid"):
+            ld.verify_client_qr(f"{prefix}.{company}.2261.{sig}")
+
+    def test_plain_client_id_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "qr_malformed"):
+            ld.verify_client_qr("2260")
+
+    def test_cycle_minutes(self):
+        device = {"cycleMinutes": 45}
+        self.assertEqual(ld.cycle_minutes("50 Min", device), 50)
+        self.assertEqual(ld.cycle_minutes("Carga Alta", device), 45)
+        self.assertEqual(ld.cycle_minutes(None, device), 45)
+
+    def test_endpoint(self):
+        r = self.client.post("/laundryDevices/clientQr", json={"laundryDevices": [{"companyId": 1, "clientId": 2260}]})
+        self.assertEqual(r.json()["clientQr"], self.qr())
 
     def test_endpoint_needs_secret(self):
         with mock.patch.dict(os.environ, {"LAUNDRY_QR_SECRET": ""}):
-            r = self.client.post("/laundryDevices/qrToken", json={"laundryDevices": [{"companyId": 1, "clientId": 2}]})
+            r = self.client.post("/laundryDevices/clientQr", json={"laundryDevices": [{"companyId": 1, "clientId": 2}]})
         self.assertEqual(r.status_code, 503)
 
 
 class AuthorizeTest(Base):
-    def test_charges_machine_price_once(self):
-        r = self.authorize(self.token())
+    def test_charges_the_chosen_cycle_once(self):
+        r = self.authorize(self.qr(), choice=1006)
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertTrue(body["authorized"])
-        self.assertEqual((body["amountMXN"], body["balanceAfter"], body["cycleMinutes"]), (35.0, 65.0, 45))
+        self.assertEqual((body["amountMXN"], body["choiceName"], body["balanceAfter"], body["cycleMinutes"]),
+                         (70.0, "Carga Alta", 30.0, 45))
         entry = next(iter(self.db.ledger.values()))
         self.assertEqual((entry["entry_type"], entry["direction"], entry["client_id"]), ("LAUNDRY_USAGE", "D", 2260))
         self.assertEqual(entry["idempotency_key"], "laundry:7:req-00000001")
 
     def test_retry_with_same_request_id_does_not_double_charge(self):
-        token = self.token()
-        self.authorize(token)
-        r = self.authorize(token)
+        self.authorize(self.qr())
+        r = self.authorize(self.qr())
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.json()["replayed"])
-        self.assertEqual(self.db.balance, 65.0)
+        self.assertEqual(self.db.balance, 60.0)
         self.assertEqual(len(self.db.ledger), 1)
 
-    def test_same_qr_on_new_request_is_token_used(self):
-        token = self.token()
-        self.authorize(token)
-        r = self.authorize(token, request_id="req-00000002")
-        self.assertEqual((r.status_code, r.json()["reason"]), (409, "token_used"))
-        self.assertEqual(self.db.balance, 65.0)
+    def test_same_client_can_pay_again_with_a_new_request(self):
+        self.authorize(self.qr())
+        self.assertEqual(self.authorize(self.qr(), request_id="req-00000002").status_code, 200)
+        self.assertEqual(self.db.balance, 20.0)
 
-    def test_insufficient_funds_is_402_and_qr_stays_usable(self):
+    def test_same_request_id_with_other_cycle_is_conflict(self):
+        self.authorize(self.qr(), choice=1004)
+        r = self.authorize(self.qr(), choice=1006)
+        self.assertEqual((r.status_code, r.json()["reason"]), (409, "request_conflict"))
+
+    def test_insufficient_funds_is_402(self):
         self.db.balance = 10.0
-        token = self.token()
-        r = self.authorize(token)
+        r = self.authorize(self.qr())
         self.assertEqual((r.status_code, r.json()["reason"]), (402, "insufficient_funds"))
         self.db.balance = 50.0  # client tops up, ESP32 starts a new request
-        self.assertEqual(self.authorize(token, request_id="req-00000002").status_code, 200)
+        self.assertEqual(self.authorize(self.qr(), request_id="req-00000002").status_code, 200)
 
     def test_ledger_failure_leaves_use_pending_and_retry_settles(self):
-        token = self.token()
         self.db.ledger_error = "timeout"
-        self.assertEqual(self.authorize(token).status_code, 502)
+        self.assertEqual(self.authorize(self.qr()).status_code, 502)
         self.db.ledger_error = None
-        r = self.authorize(token)
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.authorize(self.qr()).status_code, 200)
         self.assertEqual(len(self.db.ledger), 1)
 
+    def test_dryer_cycle_on_the_washer_is_rejected(self):
+        r = self.authorize(self.qr(), choice=1009)
+        self.assertEqual((r.status_code, r.json()["reason"]), (400, "choice_not_for_device"))
+        self.assertEqual(self.db.ledger, {})
+
+    def test_missing_cycle_on_catalog_device_is_rejected(self):
+        self.assertEqual(self.authorize(self.qr(), choice=None).status_code, 400)
+
+    def test_dryer_takes_minutes_from_the_cycle(self):
+        self.db.device.update(machineType="dryer", productId=1003)
+        body = self.authorize(self.qr(), choice=1009).json()
+        self.assertEqual((body["amountMXN"], body["cycleMinutes"]), (70.0, 50))
+
+    def test_fixed_price_device_without_cycle(self):
+        self.db.device.update(productId=None, priceMXN=35.0)
+        body = self.authorize(self.qr(), choice=None).json()
+        self.assertEqual((body["amountMXN"], body["cycleMinutes"]), (35.0, 45))
+
+    def test_plain_client_id_qr(self):
+        r = self.authorize("2260")
+        self.assertEqual((r.status_code, r.json()["reason"]), (401, "qr_malformed"))
+        self.assertEqual(self.db.ledger, {})
+
     def test_wrong_key(self):
-        r = self.authorize(self.token(), key="nope")
-        self.assertEqual(r.status_code, 401)
+        self.assertEqual(self.authorize(self.qr(), key="nope").status_code, 401)
         self.assertEqual(self.db.ledger, {})
 
     def test_inactive_device(self):
         self.db.device["isActive"] = 0
-        self.assertEqual(self.authorize(self.token()).status_code, 403)
+        self.assertEqual(self.authorize(self.qr()).status_code, 403)
 
-    def test_token_from_other_company(self):
-        r = self.authorize(self.token(company_id=2))
-        self.assertEqual((r.status_code, r.json()["reason"]), (401, "token_wrong_company"))
+    def test_qr_from_other_company(self):
+        r = self.authorize(self.qr(company_id=2))
+        self.assertEqual((r.status_code, r.json()["reason"]), (401, "qr_wrong_company"))
 
     def test_bad_request_id(self):
-        self.assertEqual(self.authorize(self.token(), request_id="x").status_code, 400)
+        self.assertEqual(self.authorize(self.qr(), request_id="x").status_code, 400)
 
 
 class DeviceAdminTest(Base):
-    def test_heartbeat(self):
+    def test_heartbeat_lists_the_screen_cycles(self):
         r = self.client.post("/laundryDevices/heartbeat", headers={"X-Device-Id": "7", "X-Device-Key": DEVICE_KEY},
                              json={"status": "idle", "firmwareVersion": "0.1.0", "rssi": -61})
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["priceMXN"], 35.0)
-        sent = self.db.calls[-1][1]["laundryDevices"][0]
+        cycles = r.json()["cycles"]
+        self.assertEqual([(c["productOptionChoiceId"], c["priceMXN"], c["cycleMinutes"]) for c in cycles],
+                         [(1004, 40.0, 45), (1006, 70.0, 45)])
+        sent = self.db.calls[-2][1]["laundryDevices"][0]
         self.assertEqual((sent["status"], sent["rssi"]), ("idle", -61))
 
     def test_heartbeat_without_body(self):
@@ -203,7 +254,7 @@ class DeviceAdminTest(Base):
 
     def test_create_returns_key_once_and_stores_only_hash(self):
         r = self.client.post("/laundryDevices", json={"laundryDevices": [{
-            "action": 1, "companyId": 1, "name": "Secadora 1", "machineType": "dryer", "priceMXN": 30,
+            "action": 1, "companyId": 1, "name": "Secadora 1", "machineType": "dryer", "productId": 1003,
             "keyHash": "attacker-chosen"}]})
         key = r.json()["deviceKey"]
         sent = self.db.calls[-1][1]["laundryDevices"][0]

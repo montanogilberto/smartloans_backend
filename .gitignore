@@ -6,3 +6,6 @@
 **/__pycache__/
 *.py[cod]
 *.pyc
+
+# ESP32 firmware: real Wi-Fi password and device key
+esp32/config.py
