@@ -7,7 +7,7 @@ any arcade chip ledger: no FK, no shared endpoint, no conversion function.
 Spec: posgmo-factory/tests/prd_posRewardProductRate.json,
       prd_posRewardCatalogItem.json, prd_posRewardBalance.json,
       prd_posRewardTransaction.json, prd_posRewardRedemption.json
-SQL: sql/sp_posRewards.sql
+SQL: sql/sp_posRewards.sql, sql/sp_income_applyDiscounts.sql (coupons + rewards on a sale)
 
 Points are always calculated server-side (sp_posRewardTransactions_earnFromTicket
 reads incomeDetails + posRewardProductRates) -- this module never sums points
@@ -17,6 +17,17 @@ from a frontend-supplied value.
 import json
 from fastapi.responses import JSONResponse
 from databases import connection
+
+# dbo.posRewardCatalogItems is the single table for coupons, points rewards
+# and stamp cards (docs/promotions_rewards_analysis.md). Run in this order.
+POS_REWARDS_MIGRATION_FILES = (
+    "sql/migrations/2026-10-16c_unify_promotions_into_reward_catalog.sql",
+    "sql/sp_posRewards.sql",
+    "sql/sp_posRewardFreeProductStatus.sql",
+    "sql/sp_whatsappCustomerRewards.sql",
+    "sql/sp_promotions.sql",
+    "sql/sp_income_applyDiscounts.sql",
+)
 
 
 def _conn():
@@ -214,24 +225,60 @@ def earn_and_summarize(json_file: dict) -> dict | None:
         items = []
         if isinstance(catalog, dict):
             items = ((catalog.get("result") or [{}])[0] or {}).get("posRewardCatalogItems") or []
+        catalog = [i for i in items if i.get("isActive") in (True, 1, "1")]
+        if any(_is_free_product(i) for i in catalog):
+            catalog = _with_free_product_units(catalog, int(company_id), int(client_id))
         return {
             "pointsEarned": float(earned.get("pointsEarned") or 0),
             "balance": float(earned.get("newBalance") or 0),
-            "catalog": [i for i in items if i.get("isActive") in (True, 1, "1")],
+            "catalog": catalog,
         }
     except Exception as e:
         print(f"[posRewards] earn/summary failed for {row}: {type(e).__name__}: {e}")
         return None
 
 
+def _is_free_product(item: dict) -> bool:
+    return item.get("rewardType") == "free_product"
+
+
+def _with_free_product_units(catalog: list, company_id: int, client_id: int) -> list:
+    """free_product rewards are earned by buying that product, not with the
+    points balance (sp_posRewardRedemptions_redeem checks units). Adds
+    unitsRequired/unitsAvailable from sp_posRewardFreeProductStatus, which runs
+    the redeem SP's own unit check. If it fails, free products are dropped
+    from the line rather than promised on the points balance."""
+    status = {}
+    try:
+        res = _sp("sp_posRewardFreeProductStatus", {"posRewardFreeProductStatus": [
+            {"companyId": company_id, "clientId": client_id}]})
+        rows = []
+        if isinstance(res, dict) and not res.get("error"):
+            rows = ((res.get("result") or [{}])[0] or {}).get("posRewardFreeProductStatus") or []
+        status = {r.get("catalogItemId"): r for r in rows}
+    except Exception as e:
+        print(f"[posRewards] free product status failed for client {client_id}: {type(e).__name__}: {e}")
+    out = []
+    for item in catalog:
+        if not _is_free_product(item):
+            out.append(item)
+        elif item.get("catalogItemId") in status:
+            st = status[item["catalogItemId"]]
+            out.append({**item, "unitsRequired": float(st.get("requiredUnits") or 0),
+                        "unitsAvailable": float(st.get("unitsAvailable") or 0)})
+    return out
+
+
 def rewards_label(summary: dict | None) -> str:
     """One Spanish line for the sale message, e.g.
-    'Puntos: +2 · Saldo: 2 pts · Le falta 1 pt para: Servicio de lavado gratis (3x1)'.
-    '' when there is nothing to say (walk-in, rewards error, no points at all)."""
+    'Puntos: +2 · Saldo: 2 pts · Le faltan 2 compras para: Servicio de lavado gratis (3x1)'.
+    Points rewards are judged on the balance; free_product rewards on units
+    bought of that product (unitsRequired/unitsAvailable, the redeem SP's
+    check). '' when there is nothing to say (walk-in, rewards error, no points)."""
     if not summary:
         return ""
     earned, balance = summary.get("pointsEarned", 0), summary.get("balance", 0)
-    catalog = sorted(summary.get("catalog") or [], key=lambda i: float(i.get("requiredPoints") or 0))
+    catalog = summary.get("catalog") or []
     if earned <= 0 and balance <= 0:
         return ""
 
@@ -240,15 +287,28 @@ def rewards_label(summary: dict | None) -> str:
         parts.append(f"Puntos: +{_fmt_points(earned)}")
     parts.append(f"Saldo: {_fmt_points(balance)} pts")
 
-    ready = [i for i in catalog if float(i.get("requiredPoints") or 0) <= balance]
-    pending = [i for i in catalog if float(i.get("requiredPoints") or 0) > balance]
+    by_points = sorted((i for i in catalog if not _is_free_product(i)),
+                       key=lambda i: float(i.get("requiredPoints") or 0))
+    free = [i for i in catalog if _is_free_product(i) and "unitsRequired" in i]
+    # Free products ready first (in catalog order), then the points rewards the
+    # balance covers, most valuable first.
+    ready = [i for i in free if i["unitsAvailable"] >= i["unitsRequired"]]
+    ready += [i for i in reversed(by_points) if float(i.get("requiredPoints") or 0) <= balance]
     if ready:
-        # The most valuable reward the balance already covers, plus how many more.
-        best = ready[-1]
         more = len(ready) - 1
-        parts.append(f"¡Ya puede canjear: {best.get('name')}" + (f" y {more} más" if more else "") + "!")
-    elif pending:
-        nxt = pending[0]
+        parts.append(f"¡Ya puede canjear: {ready[0].get('name')}" + (f" y {more} más" if more else "") + "!")
+        return " · ".join(parts)
+
+    # Nothing ready: the free product the client has started buying that is
+    # closest, else the cheapest points reward.
+    started = [i for i in free if i["unitsAvailable"] > 0]
+    if started:
+        nxt = min(started, key=lambda i: i["unitsRequired"] - i["unitsAvailable"])
+        missing = nxt["unitsRequired"] - nxt["unitsAvailable"]
+        word = "compra" if missing == 1 else "compras"
+        parts.append(f"Le {'falta' if missing == 1 else 'faltan'} {_fmt_points(missing)} {word} para: {nxt.get('name')}")
+    elif by_points:
+        nxt = by_points[0]
         missing = float(nxt.get("requiredPoints") or 0) - balance
         unit = "pt" if missing == 1 else "pts"
         parts.append(f"Le {'falta' if missing == 1 else 'faltan'} {_fmt_points(missing)} {unit} para: {nxt.get('name')}")

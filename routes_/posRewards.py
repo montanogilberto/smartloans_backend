@@ -6,7 +6,10 @@ from modules.posRewards import (
     pos_reward_transactions_sp, earn_from_ticket_sp, adjust_points_sp,
     pos_reward_redemptions_sp, redeem_sp,
     pos_reward_product_counts_sp,
+    POS_REWARDS_MIGRATION_FILES,
 )
+from fastapi.responses import JSONResponse
+from modules.whatsappAssistant import run_sql_files
 
 router = APIRouter()
 
@@ -28,12 +31,19 @@ def pos_reward_product_rates(json: dict):
 @router.post(
     "/posRewardCatalogItems",
     summary="POS reward catalog CRUD (admin-managed redeemable rewards)",
-    description="""action 0 — read: { "posRewardCatalogItems": [{ "companyId": int, "activeOnly"?: bool }] }
+    description="""The single table for every discount: coupons (coupon_b2g1), points
+rewards (discount_fixed / discount_pct) and stamp cards (free_product).
+action 0 — read: { "posRewardCatalogItems": [{ "companyId": int, "activeOnly"?: bool,
+  "includeCoupons"?: bool (default false: coupons are typed at checkout, not redeemed) }] }
 action 1 — insert / 2 — update / 3 — delete:
   { "posRewardCatalogItems": [{ "action": int, "companyId": int, "catalogItemId"?: int,
-    "name": str, "rewardType": "discount_fixed|discount_pct|free_product",
-    "requiredPoints": number, "discountValue"?: number, "freeProductId"?: int,
-    "isActive"?: bool, "description"?: str }] }""",
+    "name": str, "rewardType": "discount_fixed|discount_pct|free_product|coupon_b2g1",
+    "requiredPoints": number (points; coupons 0), "discountValue"?: number,
+    "freeProductId"?: int (free_product: the free product; coupon: only product discounted, null = all),
+    "requiredUnits"?: number (free_product: purchases per free unit),
+    "code"?: str (coupon), "startAtUtc"?: ISO, "endAtUtc"?: ISO, "firstPurchaseOnly"?: bool,
+    "isActive"?: bool, "description"?: str }] }
+On update, code/startAtUtc/endAtUtc/firstPurchaseOnly/requiredUnits change only when sent.""",
 )
 def pos_reward_catalog_items(json: dict):
     return pos_reward_catalog_items_sp(json)
@@ -130,3 +140,19 @@ to show accurate progress per catalog item.""",
 )
 def pos_reward_product_counts(json: dict):
     return pos_reward_product_counts_sp(json)
+
+
+@router.post(
+    "/posRewards/migrate",
+    summary="Make posRewardCatalogItems the single discount table + deploy its SPs (idempotent)",
+    description="""Runs, in order: 2026-10-16c migration (catalog columns, copy dbo.promotions
+into coupons), sp_posRewards.sql, sp_posRewardFreeProductStatus.sql,
+sp_whatsappCustomerRewards.sql, sp_promotions.sql, sp_income_applyDiscounts.sql.
+Dropping dbo.promotions / promotion_targets is a separate manual step
+(sql/migrations/2026-10-16d_drop_promotions_tables.sql).""",
+)
+def pos_rewards_migrate():
+    try:
+        return JSONResponse(run_sql_files(POS_REWARDS_MIGRATION_FILES), status_code=200)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
