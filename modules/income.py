@@ -37,8 +37,8 @@ def _get_client_phone(conn, client_id) -> str | None:
 
 
 def _get_final_total(conn, income_id, company_id) -> float | None:
-    """sp_income can recompute total server-side (B2G1 promo) after the
-    initial insert -- read back the authoritative value so notifications
+    """sp_income_applyDiscounts can recompute total server-side (coupon /
+    reward) after the initial insert -- read back the authoritative value so notifications
     quote the amount actually charged, not the pre-promo client-submitted one."""
     total, _discount, _promo_code = _get_final_total_and_discount(conn, income_id, company_id)
     return total
@@ -120,11 +120,42 @@ def sale_message(json_file: dict) -> str:
     return "\n".join(lines)
 
 
+def _take_discounts(json_file: dict) -> tuple[str | None, list]:
+    """Removes a new sale's coupon code and loyalty rewards from the payload
+    before sp_income sees it: they're applied afterwards by
+    sp_income_applyDiscounts from dbo.posRewardCatalogItems (the single
+    discount table). sp_income's own B2G1 block reads the retired
+    dbo.promotions, so it must never get a promotionCode."""
+    row = (json_file.get("income") or [{}])[0] or {}
+    if str(row.get("action")) != "1":
+        return None, []
+    code = (row.pop("promotionCode", None) or "").strip().upper() or None
+    reward_ids = [int(i) for i in (row.pop("rewardCatalogItemIds", None) or []) if str(i).strip().isdigit()]
+    return code, reward_ids
+
+
+def _apply_discounts(conn, company_id, income_id, user_id, coupon_code, reward_ids) -> dict | None:
+    """Coupon + reward on the saved sale; returns {total, discountAmount,
+    promotionCode, applied, rejected} (sql/sp_income_applyDiscounts.sql)."""
+    cur = conn.cursor()
+    cur.execute("EXEC sp_income_applyDiscounts @pjsonfile = %s", (json.dumps({"incomeDiscounts": [{
+        "companyId": company_id, "incomeId": income_id, "userId": user_id,
+        "couponCode": coupon_code, "rewardCatalogItemIds": reward_ids}]}),))
+    rows = cur.fetchall()
+    raw = "".join((r[0] or "") for r in rows).strip() if rows else ""
+    parsed = json.loads(raw) if raw else {}
+    if parsed.get("error"):
+        print(f"[income] applyDiscounts failed for income {income_id}: {parsed['error']}")
+        return None
+    return (parsed.get("result") or [None])[0]
+
+
 def income_sp(json_file: dict):
     conn = None
     try:
         conn = connection()
         cursor = conn.cursor()
+        coupon_code, reward_ids = _take_discounts(json_file)
         cursor.execute("EXEC sp_income @pjsonfile = %s", (json.dumps(json_file),))
 
         # Obtener resultado en formato JSON
@@ -151,6 +182,21 @@ def income_sp(json_file: dict):
             first_row = (json_file.get("income") or [{}])[0]
             failed = result and str(result[0].get("error") or "") == "1"
             is_new_income = str(first_row.get("action")) == "1" and result and not failed
+
+            # Coupon + loyalty reward, priced server-side. Runs before every
+            # hook below so they all use the authoritative total. The sale is
+            # already saved: a failure here leaves the total the POS sent.
+            if is_new_income and (coupon_code or reward_ids):
+                try:
+                    discounts = _apply_discounts(conn, first_row.get("companyId"), int(result[0]["value"]),
+                                                 first_row.get("userId"), coupon_code, reward_ids)
+                    if discounts:
+                        result[0]["discounts"] = discounts
+                        if discounts.get("total") is not None:
+                            first_row["total"] = discounts["total"]
+                except Exception as e:
+                    print(f"[income] discounts hook failed: {e}")
+
             try:
                 if is_new_income:
                     company_id = first_row.get("companyId")

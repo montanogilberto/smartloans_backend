@@ -39,25 +39,35 @@ CREATE TABLE [dbo].[posRewardCatalogItems] (
     catalogItemId   INT IDENTITY PRIMARY KEY,
     companyId       INT            NOT NULL,
     name            NVARCHAR(120)  NOT NULL,
-    rewardType      NVARCHAR(20)   NOT NULL,  -- discount_fixed | discount_pct | free_product
-    requiredPoints  DECIMAL(12,2)  NOT NULL,
+    rewardType      NVARCHAR(20)   NOT NULL,  -- discount_fixed | discount_pct | free_product | coupon_b2g1
+    requiredPoints  DECIMAL(12,2)  NOT NULL,  -- points (discount_*); 0 for coupons
     discountValue   DECIMAL(12,2)  NULL,      -- MXN (discount_fixed) or 0-100 (discount_pct)
-    freeProductId   INT            NULL,      -- required when rewardType='free_product'
+    freeProductId   INT            NULL,      -- free_product: the free product; coupon_b2g1: only product discounted (NULL = all)
     isActive        BIT            NOT NULL DEFAULT 1,
     description     NVARCHAR(255)  NULL,
     created_At      DATETIME2      NOT NULL DEFAULT GETUTCDATE(),
     updated_at      DATETIME2      NULL,
+    code            VARCHAR(30)    NULL,      -- coupon_b2g1: code typed at checkout (unique per company)
+    startAtUtc      DATETIME2(0)   NULL,
+    endAtUtc        DATETIME2(0)   NULL,
+    firstPurchaseOnly BIT          NOT NULL CONSTRAINT DF_posRewardCatalogItems_firstPurchaseOnly DEFAULT (0),
+    requiredUnits   DECIMAL(12,2)  NULL,      -- free_product: purchases of freeProductId per free unit
     CONSTRAINT CK_posRewardCatalogItems_rewardType
-        CHECK (rewardType IN ('discount_fixed','discount_pct','free_product')),
+        CHECK (rewardType IN ('discount_fixed','discount_pct','free_product','coupon_b2g1')),
     CONSTRAINT CK_posRewardCatalogItems_valueByType CHECK (
         (rewardType IN ('discount_fixed','discount_pct') AND discountValue IS NOT NULL)
         OR (rewardType = 'free_product' AND freeProductId IS NOT NULL)
+        OR (rewardType = 'coupon_b2g1' AND code IS NOT NULL)
     )
 )
 GO
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_posRewardCatalogItems_company')
     CREATE INDEX IX_posRewardCatalogItems_company
         ON [dbo].[posRewardCatalogItems] (companyId, isActive);
+GO
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UQ_posRewardCatalogItems_company_code')
+    CREATE UNIQUE INDEX UQ_posRewardCatalogItems_company_code
+        ON [dbo].[posRewardCatalogItems] (companyId, code) WHERE code IS NOT NULL;
 GO
 
 -- ── Table: posRewardBalances (materialized projection) ──────
@@ -235,6 +245,9 @@ GO
 -- ============================================================
 -- sp_posRewardCatalogItems — action 0=read, 1=insert, 2=update, 3=delete.
 -- Simple CRUD — no immutability constraint (unlike posRewardTransactions).
+-- The single table for every discount (2026-10-16): coupons (coupon_b2g1 +
+-- code/dates/firstPurchaseOnly), points rewards (discount_*) and stamp cards
+-- (free_product + requiredUnits). Read hides coupons unless includeCoupons=1.
 -- ============================================================
 IF OBJECT_ID('dbo.sp_posRewardCatalogItems', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_posRewardCatalogItems;
 GO
@@ -256,14 +269,27 @@ BEGIN
             DECLARE @freeProductId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].freeProductId'));
             DECLARE @isActive BIT = TRY_CONVERT(BIT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].isActive'));
             DECLARE @description NVARCHAR(255) = JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].description');
+            DECLARE @code VARCHAR(30) = NULLIF(UPPER(LTRIM(RTRIM(JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].code')))), '');
+            DECLARE @startAtUtc DATETIME2(0) = TRY_CONVERT(DATETIME2(0), JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].startAtUtc'));
+            DECLARE @endAtUtc DATETIME2(0) = TRY_CONVERT(DATETIME2(0), JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].endAtUtc'));
+            DECLARE @firstPurchaseOnly BIT = ISNULL(TRY_CONVERT(BIT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].firstPurchaseOnly')), 0);
+            DECLARE @requiredUnits DECIMAL(12,2) = TRY_CONVERT(DECIMAL(12,2), JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].requiredUnits'));
+
+            -- Coupons cost no points; stamp cards sent with only requiredUnits
+            -- keep requiredPoints in step for fronts that still read it.
+            IF @rewardType = 'coupon_b2g1' SET @requiredPoints = ISNULL(@requiredPoints, 0);
+            IF @rewardType = 'free_product' SET @requiredPoints = ISNULL(@requiredPoints, @requiredUnits);
+            IF @rewardType = 'free_product' SET @requiredUnits = ISNULL(@requiredUnits, @requiredPoints);
 
             IF @companyId IS NULL OR @name IS NULL OR @rewardType IS NULL OR @requiredPoints IS NULL
                 RAISERROR('companyId, name, rewardType y requiredPoints son requeridos.', 16, 1);
 
             INSERT INTO [dbo].[posRewardCatalogItems]
-                (companyId, name, rewardType, requiredPoints, discountValue, freeProductId, isActive, description)
+                (companyId, name, rewardType, requiredPoints, discountValue, freeProductId, isActive, description,
+                 code, startAtUtc, endAtUtc, firstPurchaseOnly, requiredUnits)
             VALUES
-                (@companyId, @name, @rewardType, @requiredPoints, @discountValue, @freeProductId, ISNULL(@isActive,1), @description);
+                (@companyId, @name, @rewardType, @requiredPoints, @discountValue, @freeProductId, ISNULL(@isActive,1), @description,
+                 @code, @startAtUtc, @endAtUtc, @firstPurchaseOnly, @requiredUnits);
 
             DECLARE @newId INT = SCOPE_IDENTITY();
             SELECT ('{"result":[{"value":' + CAST(@newId AS NVARCHAR(20)) + ',"msg":"Inserted Successfully","error":"0"}]}') AS [jsonResult]
@@ -273,6 +299,11 @@ BEGIN
             DECLARE @catalogItemId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].catalogItemId'));
             IF @catalogItemId IS NULL RAISERROR('catalogItemId es requerido.', 16, 1);
 
+            -- Columns added 2026-10-16 change only when their key is sent, so a
+            -- POS build that doesn't know them can't wipe a coupon's code.
+            DECLARE @keys TABLE ([key] NVARCHAR(100));
+            INSERT INTO @keys SELECT [key] FROM OPENJSON(@pjsonfile, '$.posRewardCatalogItems[0]');
+
             UPDATE [dbo].[posRewardCatalogItems] SET
                 name           = ISNULL(JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].name'), name),
                 rewardType     = ISNULL(JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].rewardType'), rewardType),
@@ -281,6 +312,16 @@ BEGIN
                 freeProductId  = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].freeProductId')),
                 isActive       = ISNULL(TRY_CONVERT(BIT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].isActive')), isActive),
                 description    = JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].description'),
+                code           = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'code')
+                                      THEN NULLIF(UPPER(LTRIM(RTRIM(JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].code')))), '') ELSE code END,
+                startAtUtc     = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'startAtUtc')
+                                      THEN TRY_CONVERT(DATETIME2(0), JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].startAtUtc')) ELSE startAtUtc END,
+                endAtUtc       = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'endAtUtc')
+                                      THEN TRY_CONVERT(DATETIME2(0), JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].endAtUtc')) ELSE endAtUtc END,
+                firstPurchaseOnly = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'firstPurchaseOnly')
+                                      THEN ISNULL(TRY_CONVERT(BIT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].firstPurchaseOnly')), 0) ELSE firstPurchaseOnly END,
+                requiredUnits  = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'requiredUnits')
+                                      THEN TRY_CONVERT(DECIMAL(12,2), JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].requiredUnits')) ELSE requiredUnits END,
                 updated_at     = GETUTCDATE()
             WHERE catalogItemId = @catalogItemId AND companyId = @companyId;
 
@@ -298,12 +339,19 @@ BEGIN
         BEGIN
             -- action 0 / read
             DECLARE @activeOnly BIT = TRY_CONVERT(BIT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].activeOnly'));
+            -- Coupons (coupon_b2g1) are listed only on request: the rewards
+            -- screens, menuLaundy and the sale message list what a client can
+            -- redeem, and a coupon is typed at checkout instead.
+            DECLARE @includeCoupons BIT = ISNULL(TRY_CONVERT(BIT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].includeCoupons')), 0);
             DECLARE @itemsJson NVARCHAR(MAX) = (
                 SELECT catalogItemId, companyId, name, rewardType, requiredPoints,
-                       discountValue, freeProductId, isActive, description
+                       discountValue, freeProductId, isActive, description,
+                       code, CONVERT(NVARCHAR(19), startAtUtc, 126) AS startAtUtc,
+                       CONVERT(NVARCHAR(19), endAtUtc, 126) AS endAtUtc, firstPurchaseOnly, requiredUnits
                 FROM [dbo].[posRewardCatalogItems]
                 WHERE companyId = @companyId
                   AND (@activeOnly IS NULL OR @activeOnly = 0 OR isActive = 1)
+                  AND (@includeCoupons = 1 OR rewardType <> 'coupon_b2g1')
                 ORDER BY requiredPoints
                 FOR JSON PATH
             );
@@ -682,13 +730,16 @@ BEGIN
         IF @companyId IS NULL OR @clientId IS NULL OR @catalogItemId IS NULL OR @redeemedByUserId IS NULL
             RAISERROR('companyId, clientId, catalogItemId y redeemedByUserId son requeridos.', 16, 1);
 
-        DECLARE @requiredPoints DECIMAL(12,2), @rewardType NVARCHAR(30), @freeProductId INT;
-        SELECT @requiredPoints = requiredPoints, @rewardType = rewardType, @freeProductId = freeProductId
+        DECLARE @requiredPoints DECIMAL(12,2), @rewardType NVARCHAR(30), @freeProductId INT, @catalogUnits DECIMAL(12,2);
+        SELECT @requiredPoints = requiredPoints, @rewardType = rewardType, @freeProductId = freeProductId,
+               @catalogUnits = requiredUnits
         FROM [dbo].[posRewardCatalogItems]
         WHERE catalogItemId = @catalogItemId AND companyId = @companyId AND isActive = 1;
 
         IF @requiredPoints IS NULL
             RAISERROR('La recompensa no existe, no pertenece a esta empresa, o no está activa.', 16, 1);
+        IF @rewardType = 'coupon_b2g1'
+            RAISERROR('Los cupones se aplican con la venta (promotionCode), no se canjean.', 16, 1);
 
         -- free_product rewards must be earned from THAT specific product, not
         -- from the client's mixed, fungible points balance -- otherwise 3
@@ -704,10 +755,10 @@ BEGIN
                 SELECT pointsPerUnit FROM [dbo].[posRewardProductRates]
                 WHERE companyId = @companyId AND productId = @freeProductId AND isActive = 1
             );
-            DECLARE @requiredUnits DECIMAL(12,2) = CASE
+            DECLARE @requiredUnits DECIMAL(12,2) = COALESCE(@catalogUnits, CASE
                 WHEN ISNULL(@pointsPerUnit, 0) > 0 THEN @requiredPoints / @pointsPerUnit
                 ELSE @requiredPoints
-            END;
+            END);
 
             DECLARE @unitsPurchased DECIMAL(12,2) = ISNULL((
                 SELECT SUM(d.quantity)
@@ -832,14 +883,14 @@ BEGIN
         -- Units consumed by applied redemptions per catalog item
         consumed AS (
             SELECT c.freeProductId AS productId,
-                   COUNT(*) * (c.requiredPoints / ISNULL(r.pointsPerUnit, 1)) AS unitsConsumed
+                   COUNT(*) * ISNULL(c.requiredUnits, c.requiredPoints / ISNULL(r.pointsPerUnit, 1)) AS unitsConsumed
             FROM [dbo].[posRewardRedemptions] rd
             JOIN [dbo].[posRewardCatalogItems] c ON c.catalogItemId = rd.catalogItemId
             LEFT JOIN [dbo].[posRewardProductRates] r
                 ON r.companyId = @companyId AND r.productId = c.freeProductId AND r.isActive = 1
             WHERE rd.companyId = @companyId AND rd.clientId = @clientId AND rd.status = 'applied'
               AND c.rewardType = 'free_product' AND c.freeProductId IS NOT NULL
-            GROUP BY c.freeProductId, c.requiredPoints, r.pointsPerUnit
+            GROUP BY c.freeProductId, c.requiredUnits, c.requiredPoints, r.pointsPerUnit
         )
         SELECT (
             SELECT

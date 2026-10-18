@@ -11,12 +11,14 @@ router = APIRouter()
     "/promotions",
     summary="Promotions — the POS's existing promo codes (WhatsApp assistant + POS)",
     description="""
-Same dbo.promotions the POS applies at checkout (sp_income / sp_income_apply_promo).
+The coupons in dbo.posRewardCatalogItems (rewardType coupon_b2g1) — what the POS
+applies at checkout (sp_income_applyDiscounts). promotionId = catalogItemId.
 action 0 (or omit) — list: { "promotions": [{ "companyId": int,
   "activeOnly"?: bool (active and within startAtUtc/endAtUtc now) }] }
 action 1 — insert: { ..., "action": 1, "companyId": int, "code": str, "name": str,
   "promoType": str (one the POS applies, today "B2G1"), "description"?: str,
-  "startAtUtc"?: ISO datetime, "endAtUtc"?: ISO datetime }
+  "startAtUtc"?: ISO datetime, "endAtUtc"?: ISO datetime,
+  "productId"?: int (only product discounted; omit = all), "firstPurchaseOnly"?: bool }
 action 2 — update (only keys sent): { ..., "action": 2, "companyId": int, "promotionId": int, ...fields }
 action 3 — deactivate: { ..., "action": 3, "companyId": int, "promotionId": int }
 → { "result": [{ "promotions": [...] }] }
@@ -74,7 +76,7 @@ def whatsapp_customer_rewards(json: dict, _: str = Depends(require_worker_key)):
 
 @router.post(
     "/whatsapp/assistant/migrate",
-    summary="Create promotions / businessInfo / businessFaqs tables + SPs (idempotent)",
+    summary="Create businessInfo / businessFaqs tables + SPs (idempotent; promotions: /posRewards/migrate)",
 )
 def whatsapp_assistant_migrate():
     try:

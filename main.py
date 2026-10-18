@@ -68,6 +68,7 @@ from routes_ import (
     factoryRunUsage,
     whatsappCloud,
     whatsappAssistant,
+    laundryDevices,
 )
 
 app = FastAPI(
@@ -242,6 +243,7 @@ app.include_router(commissionTerminals.router)
 app.include_router(factoryRunUsage.router)
 app.include_router(whatsappCloud.router)
 app.include_router(whatsappAssistant.router)
+app.include_router(laundryDevices.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job
