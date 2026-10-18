@@ -2,13 +2,18 @@
 -- 2026-10-18: GMO Laundry — ESP32 machine controllers.
 --
 --   laundryDevices     one row per controller (ESP32) wired to one machine.
---                      priceMXN is what one use costs; the device never sends
+--                      productId links it to the POS catalog (1002 Servicio de
+--                      lavado, 1003 Servicio de secado): the client picks a cycle
+--                      (productOptionChoices) on the machine's screen, the ESP32
+--                      sends it and the use costs that choice's price. Without productId
+--                      the use costs the fixed priceMXN. The device never sends
 --                      an amount. keyHash = sha256(deviceKey) hex — the plain
 --                      key is shown once when the device is created/rotated.
 --   laundryDeviceUses  one row per authorize request. (deviceId, requestId) is
 --                      the idempotency key: the ESP32 retries with the same
---                      requestId and gets the original answer. A QR token
---                      (tokenId) can only back one pending/authorized use.
+--                      requestId and gets the original answer. The client is
+--                      identified by their fixed signed QR (modules/laundryDevices.py);
+--                      tokenId is a leftover of the first version and stays NULL.
 --
 -- The charge itself is a LAUNDRY_USAGE debit in dbo.walletTransactions with
 -- idempotencyKey = 'laundry:<deviceId>:<requestId>' (see modules/laundryDevices.py).
@@ -33,7 +38,8 @@ CREATE TABLE [dbo].[laundryDevices] (
     branchId         INT            NULL,
     name             NVARCHAR(60)   NOT NULL,
     machineType      NVARCHAR(20)   NOT NULL,
-    priceMXN         DECIMAL(12,2)  NOT NULL,
+    productId        INT            NULL,
+    priceMXN         DECIMAL(12,2)  NULL,
     cycleMinutes     INT            NOT NULL CONSTRAINT DF_laundryDevices_cycleMinutes DEFAULT (45),
     keyHash          CHAR(64)       NOT NULL,
     isActive         BIT            NOT NULL CONSTRAINT DF_laundryDevices_isActive DEFAULT (1),
@@ -45,9 +51,22 @@ CREATE TABLE [dbo].[laundryDevices] (
     created_At       DATETIME2(0)   NOT NULL CONSTRAINT DF_laundryDevices_created DEFAULT (SYSUTCDATETIME()),
     updated_At       DATETIME2(0)   NOT NULL CONSTRAINT DF_laundryDevices_updated DEFAULT (SYSUTCDATETIME()),
     CONSTRAINT CK_laundryDevices_machineType CHECK (machineType IN ('washer','dryer')),
-    CONSTRAINT CK_laundryDevices_price CHECK (priceMXN > 0),
+    CONSTRAINT CK_laundryDevices_price CHECK (priceMXN IS NULL OR priceMXN > 0),
     CONSTRAINT CK_laundryDevices_cycle CHECK (cycleMinutes BETWEEN 1 AND 240)
 );
+GO
+
+-- Upgrade from the first version (fixed price only).
+IF COL_LENGTH('dbo.laundryDevices', 'productId') IS NULL
+    ALTER TABLE [dbo].[laundryDevices] ADD productId INT NULL;
+GO
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.laundryDevices')
+           AND name = 'priceMXN' AND is_nullable = 0)
+BEGIN
+    ALTER TABLE [dbo].[laundryDevices] DROP CONSTRAINT CK_laundryDevices_price;
+    ALTER TABLE [dbo].[laundryDevices] ALTER COLUMN priceMXN DECIMAL(12,2) NULL;
+    ALTER TABLE [dbo].[laundryDevices] ADD CONSTRAINT CK_laundryDevices_price CHECK (priceMXN IS NULL OR priceMXN > 0);
+END
 GO
 
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_laundryDevices_company')
@@ -62,7 +81,9 @@ CREATE TABLE [dbo].[laundryDeviceUses] (
     companyId      INT            NOT NULL,
     clientId       INT            NOT NULL,
     requestId      NVARCHAR(40)   NOT NULL,
-    tokenId        NVARCHAR(40)   NOT NULL,
+    tokenId        NVARCHAR(40)   NULL,
+    productOptionChoiceId INT     NULL,
+    choiceName     NVARCHAR(100)  NULL,
     amountMXN      DECIMAL(12,2)  NOT NULL,
     status         NVARCHAR(12)   NOT NULL CONSTRAINT DF_laundryDeviceUses_status DEFAULT ('pending'),
     reason         NVARCHAR(40)   NULL,
@@ -76,8 +97,17 @@ CREATE TABLE [dbo].[laundryDeviceUses] (
 );
 GO
 
-IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_laundryDeviceUses_token')
-    CREATE INDEX IX_laundryDeviceUses_token ON [dbo].[laundryDeviceUses] (tokenId, status);
+IF COL_LENGTH('dbo.laundryDeviceUses', 'productOptionChoiceId') IS NULL
+    ALTER TABLE [dbo].[laundryDeviceUses] ADD productOptionChoiceId INT NULL, choiceName NVARCHAR(100) NULL;
+GO
+
+-- Upgrade from the single-use QR token version.
+IF EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_laundryDeviceUses_token')
+    DROP INDEX IX_laundryDeviceUses_token ON [dbo].[laundryDeviceUses];
+GO
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.laundryDeviceUses')
+           AND name = 'tokenId' AND is_nullable = 0)
+    ALTER TABLE [dbo].[laundryDeviceUses] ALTER COLUMN tokenId NVARCHAR(40) NULL;
 GO
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_laundryDeviceUses_company')
     CREATE INDEX IX_laundryDeviceUses_company ON [dbo].[laundryDeviceUses] (companyId, created_At DESC);
@@ -85,12 +115,17 @@ GO
 
 -- ============================================================
 -- sp_laundryDevices
---   action 1  create      { companyId, branchId?, name, machineType, priceMXN, cycleMinutes?, keyHash }
---   action 2  update      { deviceId, companyId, name?, branchId?, priceMXN?, cycleMinutes?, isActive? }
+--   action 1  create      { companyId, branchId?, name, machineType, productId? | priceMXN, cycleMinutes?, keyHash }
+--   action 2  update      { deviceId, companyId, name?, branchId?, productId?, priceMXN?, cycleMinutes?, isActive? }
 --   action 3  rotate key  { deviceId, companyId, keyHash }
 --   action 4  auth        { deviceId }  -> device WITH keyHash (internal: modules/laundryDevices.py)
 --   action 5  heartbeat   { deviceId, status?, firmwareVersion?, ip?, rssi? }
--- Every action except 4 returns the device without keyHash.
+--   action 6  price       { deviceId, productOptionChoiceId? } -> { priceMXN, productOptionChoiceId, choiceName }
+--   action 7  cycles      { deviceId } -> { cycles: [{ productOptionChoiceId, name, priceMXN }] }
+--             What the machine's screen offers: the priced choices of its product.
+--             The choice must be an option of the device's product (same company).
+--             A device without productId only accepts no choice (fixed priceMXN).
+-- Actions 1, 2, 3 and 5 return the device without keyHash.
 -- ============================================================
 IF OBJECT_ID('dbo.sp_laundryDevices', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_laundryDevices;
 GO
@@ -106,6 +141,8 @@ BEGIN
         DECLARE @branchId        INT           = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDevices[0].branchId'))
         DECLARE @name            NVARCHAR(60)  = JSON_VALUE(@pjsonfile, '$.laundryDevices[0].name')
         DECLARE @machineType     NVARCHAR(20)  = JSON_VALUE(@pjsonfile, '$.laundryDevices[0].machineType')
+        DECLARE @productId       INT           = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDevices[0].productId'))
+        DECLARE @choiceId        INT           = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDevices[0].productOptionChoiceId'))
         DECLARE @priceMXN        DECIMAL(12,2) = TRY_CONVERT(DECIMAL(12,2), JSON_VALUE(@pjsonfile, '$.laundryDevices[0].priceMXN'))
         DECLARE @cycleMinutes    INT           = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDevices[0].cycleMinutes'))
         DECLARE @isActive        BIT           = TRY_CONVERT(BIT, JSON_VALUE(@pjsonfile, '$.laundryDevices[0].isActive'))
@@ -117,13 +154,20 @@ BEGIN
 
         IF @action = 1
         BEGIN
-            IF @companyId IS NULL OR @name IS NULL OR @machineType IS NULL OR @priceMXN IS NULL OR @keyHash IS NULL
+            IF @companyId IS NULL OR @name IS NULL OR @machineType IS NULL OR @keyHash IS NULL
+               OR (@productId IS NULL AND @priceMXN IS NULL)
             BEGIN
-                SELECT '{"error":"companyId, name, machineType, priceMXN y keyHash son requeridos"}' AS [jsonResult]
+                SELECT '{"error":"companyId, name, machineType y productId o priceMXN son requeridos"}' AS [jsonResult]
                 RETURN
             END
-            INSERT INTO [dbo].[laundryDevices] (companyId, branchId, name, machineType, priceMXN, cycleMinutes, keyHash)
-            VALUES (@companyId, @branchId, @name, @machineType, @priceMXN, ISNULL(@cycleMinutes, 45), @keyHash)
+            IF @productId IS NOT NULL AND NOT EXISTS
+                (SELECT 1 FROM [dbo].[products] WHERE productId = @productId AND companyId = @companyId)
+            BEGIN
+                SELECT '{"error":"product_not_found"}' AS [jsonResult]
+                RETURN
+            END
+            INSERT INTO [dbo].[laundryDevices] (companyId, branchId, name, machineType, productId, priceMXN, cycleMinutes, keyHash)
+            VALUES (@companyId, @branchId, @name, @machineType, @productId, @priceMXN, ISNULL(@cycleMinutes, 45), @keyHash)
             SET @deviceId = SCOPE_IDENTITY()
         END
         ELSE IF @action = 2
@@ -131,6 +175,7 @@ BEGIN
             UPDATE [dbo].[laundryDevices]
             SET name         = ISNULL(@name, name),
                 branchId     = ISNULL(@branchId, branchId),
+                productId    = ISNULL(@productId, productId),
                 priceMXN     = ISNULL(@priceMXN, priceMXN),
                 cycleMinutes = ISNULL(@cycleMinutes, cycleMinutes),
                 isActive     = ISNULL(@isActive, isActive),
@@ -156,7 +201,7 @@ BEGIN
         ELSE IF @action = 4
         BEGIN
             SELECT ISNULL(
-                (SELECT deviceId, companyId, branchId, name, machineType, priceMXN, cycleMinutes,
+                (SELECT deviceId, companyId, branchId, name, machineType, productId, priceMXN, cycleMinutes,
                         keyHash, CAST(isActive AS INT) AS isActive
                  FROM [dbo].[laundryDevices] WHERE deviceId = @deviceId
                  FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
@@ -173,6 +218,48 @@ BEGIN
                 lastRssi        = ISNULL(@rssi, lastRssi)
             WHERE deviceId = @deviceId
         END
+        ELSE IF @action = 6
+        BEGIN
+            DECLARE @devProductId INT, @devPrice DECIMAL(12,2), @devCompanyId INT
+            SELECT @devProductId = productId, @devPrice = priceMXN, @devCompanyId = companyId
+            FROM [dbo].[laundryDevices] WHERE deviceId = @deviceId
+
+            IF @devProductId IS NULL
+            BEGIN
+                IF @choiceId IS NOT NULL OR @devPrice IS NULL
+                    SELECT '{"error":"choice_not_for_device"}' AS [jsonResult]
+                ELSE
+                    SELECT (SELECT @devPrice AS priceMXN FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
+                RETURN
+            END
+
+            SELECT ISNULL(
+                (SELECT c.price AS priceMXN, c.productOptionChoiceId, c.name AS choiceName
+                 FROM [dbo].[productOptionChoices] c
+                 JOIN [dbo].[productOptions] o ON o.productOptionId = c.productOptionId
+                 JOIN [dbo].[products] p ON p.productId = o.productId
+                 WHERE c.productOptionChoiceId = @choiceId
+                   AND o.productId = @devProductId
+                   AND p.companyId = @devCompanyId
+                   AND c.price > 0
+                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+                '{"error":"choice_not_for_device"}') AS [jsonResult]
+            RETURN
+        END
+        ELSE IF @action = 7
+        BEGIN
+            SELECT ISNULL(
+                (SELECT c.productOptionChoiceId, c.name, c.price AS priceMXN
+                 FROM [dbo].[laundryDevices] d
+                 JOIN [dbo].[products] p ON p.productId = d.productId AND p.companyId = d.companyId
+                 JOIN [dbo].[productOptions] o ON o.productId = p.productId
+                 JOIN [dbo].[productOptionChoices] c ON c.productOptionId = o.productOptionId
+                 WHERE d.deviceId = @deviceId AND c.price > 0
+                 ORDER BY c.price, c.productOptionChoiceId
+                 FOR JSON PATH, ROOT('cycles')),
+                '{"cycles":[]}') AS [jsonResult]
+            RETURN
+        END
         ELSE
         BEGIN
             SELECT '{"error":"action no soportada"}' AS [jsonResult]
@@ -180,7 +267,7 @@ BEGIN
         END
 
         SELECT ISNULL(
-            (SELECT deviceId, companyId, branchId, name, machineType, priceMXN, cycleMinutes,
+            (SELECT deviceId, companyId, branchId, name, machineType, productId, priceMXN, cycleMinutes,
                     CAST(isActive AS INT) AS isActive, lastStatus, firmwareVersion, lastIp, lastRssi,
                     CONVERT(NVARCHAR, lastSeenAtUtc, 127) AS lastSeenAtUtc,
                     CONVERT(NVARCHAR, SYSUTCDATETIME(), 127) AS serverTimeUtc
@@ -205,7 +292,7 @@ BEGIN
     DECLARE @companyId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDevices[0].companyId'))
 
     SELECT ISNULL(
-        (SELECT deviceId, companyId, branchId, name, machineType, priceMXN, cycleMinutes,
+        (SELECT deviceId, companyId, branchId, name, machineType, productId, priceMXN, cycleMinutes,
                 CAST(isActive AS INT) AS isActive, lastStatus, firmwareVersion, lastIp, lastRssi,
                 CONVERT(NVARCHAR, lastSeenAtUtc, 127) AS lastSeenAtUtc,
                 CASE WHEN lastSeenAtUtc >= DATEADD(MINUTE, -3, SYSUTCDATETIME()) THEN 1 ELSE 0 END AS isOnline
@@ -219,10 +306,10 @@ GO
 
 -- ============================================================
 -- sp_laundryDeviceUses
---   action 1  open    { deviceId, companyId, clientId, requestId, tokenId, amountMXN }
+--   action 1  open    { deviceId, companyId, clientId, requestId, amountMXN,
+--                       productOptionChoiceId?, choiceName? }
 --             Same (deviceId, requestId) again -> the stored use with replayed = 1
---             (a different tokenId under it -> request_conflict). A tokenId that
---             already backs another pending/authorized use -> token_used.
+--             (a different client or cycle under it -> request_conflict).
 --   action 2  settle  { useId, status: authorized|rejected, reason?, ledgerEntryId?, balanceAfter? }
 --             Only moves a pending use; a settled one is returned unchanged.
 -- ============================================================
@@ -240,8 +327,9 @@ BEGIN
         DECLARE @companyId     INT           = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDeviceUses[0].companyId'))
         DECLARE @clientId      INT           = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDeviceUses[0].clientId'))
         DECLARE @requestId     NVARCHAR(40)  = JSON_VALUE(@pjsonfile, '$.laundryDeviceUses[0].requestId')
-        DECLARE @tokenId       NVARCHAR(40)  = JSON_VALUE(@pjsonfile, '$.laundryDeviceUses[0].tokenId')
         DECLARE @amountMXN     DECIMAL(12,2) = TRY_CONVERT(DECIMAL(12,2), JSON_VALUE(@pjsonfile, '$.laundryDeviceUses[0].amountMXN'))
+        DECLARE @choiceId      INT           = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDeviceUses[0].productOptionChoiceId'))
+        DECLARE @choiceName    NVARCHAR(100) = JSON_VALUE(@pjsonfile, '$.laundryDeviceUses[0].choiceName')
         DECLARE @status        NVARCHAR(12)  = JSON_VALUE(@pjsonfile, '$.laundryDeviceUses[0].status')
         DECLARE @reason        NVARCHAR(40)  = JSON_VALUE(@pjsonfile, '$.laundryDeviceUses[0].reason')
         DECLARE @ledgerEntryId INT           = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDeviceUses[0].ledgerEntryId'))
@@ -252,15 +340,15 @@ BEGIN
         BEGIN
             BEGIN TRANSACTION;
 
-            -- Lock the request key and the token so two retries / two machines
-            -- can't both open a use for the same thing.
+            -- Lock the request key so two retries can't both open a use.
             SELECT @useId = useId FROM [dbo].[laundryDeviceUses] WITH (UPDLOCK, HOLDLOCK)
             WHERE deviceId = @deviceId AND requestId = @requestId
 
             IF @useId IS NOT NULL
             BEGIN
                 COMMIT TRANSACTION;
-                IF EXISTS (SELECT 1 FROM [dbo].[laundryDeviceUses] WHERE useId = @useId AND tokenId <> @tokenId)
+                IF EXISTS (SELECT 1 FROM [dbo].[laundryDeviceUses] WHERE useId = @useId
+                           AND (clientId <> @clientId OR ISNULL(productOptionChoiceId, 0) <> ISNULL(@choiceId, 0)))
                 BEGIN
                     SELECT '{"error":"request_conflict"}' AS [jsonResult]
                     RETURN
@@ -269,16 +357,9 @@ BEGIN
             END
             ELSE
             BEGIN
-                IF EXISTS (SELECT 1 FROM [dbo].[laundryDeviceUses] WITH (UPDLOCK, HOLDLOCK)
-                           WHERE tokenId = @tokenId AND status IN ('pending','authorized'))
-                BEGIN
-                    ROLLBACK TRANSACTION;
-                    SELECT '{"error":"token_used"}' AS [jsonResult]
-                    RETURN
-                END
-
-                INSERT INTO [dbo].[laundryDeviceUses] (deviceId, companyId, clientId, requestId, tokenId, amountMXN)
-                VALUES (@deviceId, @companyId, @clientId, @requestId, @tokenId, @amountMXN)
+                INSERT INTO [dbo].[laundryDeviceUses]
+                    (deviceId, companyId, clientId, requestId, productOptionChoiceId, choiceName, amountMXN)
+                VALUES (@deviceId, @companyId, @clientId, @requestId, @choiceId, @choiceName, @amountMXN)
                 SET @useId = SCOPE_IDENTITY()
                 COMMIT TRANSACTION;
             END
@@ -297,7 +378,8 @@ BEGIN
         END
 
         SELECT ISNULL(
-            (SELECT useId, deviceId, companyId, clientId, requestId, amountMXN, status, reason,
+            (SELECT useId, deviceId, companyId, clientId, requestId, productOptionChoiceId, choiceName,
+                    amountMXN, status, reason,
                     ledgerEntryId, balanceAfter, @replayed AS replayed,
                     CONVERT(NVARCHAR, created_At, 127) AS created_At,
                     CONVERT(NVARCHAR, settled_At, 127) AS settled_At
@@ -328,7 +410,7 @@ BEGIN
 
     SELECT ISNULL(
         (SELECT TOP (@top) u.useId, u.deviceId, d.name AS deviceName, d.machineType, u.clientId,
-                u.amountMXN, u.status, u.reason, u.ledgerEntryId, u.balanceAfter,
+                u.productOptionChoiceId, u.choiceName, u.amountMXN, u.status, u.reason, u.ledgerEntryId, u.balanceAfter,
                 CONVERT(NVARCHAR, u.created_At, 127) AS created_At,
                 CONVERT(NVARCHAR, u.settled_At, 127) AS settled_At
          FROM [dbo].[laundryDeviceUses] u

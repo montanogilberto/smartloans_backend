@@ -4,15 +4,23 @@ GMO Laundry — ESP32 machine controllers.
 SQL: sql/migrations/2026-10-18_laundry_devices.sql.
 
 Flow of one machine use:
-  1. The client app asks POST /laundryDevices/qrToken and shows the token as a QR.
-  2. The ESP32 reads it and calls POST /laundryDevices/authorize with its own
-     X-Device-Id / X-Device-Key headers and a requestId it keeps across retries.
-  3. Here: check the device key, check the token signature/expiry/company, open
-     the use (idempotent on deviceId + requestId), debit the machine's price as
-     LAUNDRY_USAGE in walletTransactions (idempotent on the same key), settle.
-  4. The ESP32 only switches the machine on when authorized = true.
+  1. Each client has a fixed QR: 'GMO1.<companyId>.<clientId>.<signature>'
+     (POST /laundryDevices/clientQr gives the text; the app draws it). A plain
+     clientId is NOT accepted — anyone could print someone else's number.
+  2. The machine's screen lists the cycles the heartbeat returned (the priced
+     productOptionChoices of its product: 1002 lavado / 1003 secado); the client
+     picks one and scans their QR.
+  3. The ESP32 calls POST /laundryDevices/authorize with its own X-Device-Id /
+     X-Device-Key headers, a requestId it keeps across retries, the QR text and
+     the chosen productOptionChoiceId.
+  4. Here: check the device key and the QR signature/company, price the cycle
+     from the catalog (it must belong to this machine's product), open the use
+     (idempotent on deviceId + requestId), debit that price as LAUNDRY_USAGE in
+     walletTransactions (idempotent on the same key), settle.
+  5. The ESP32 only switches the machine on when authorized = true.
 
-The device never sends an amount — the price is laundryDevices.priceMXN.
+The device never sends an amount. A device without productId charges its
+fixed laundryDevices.priceMXN and takes no cycle.
 """
 
 import base64
@@ -22,15 +30,15 @@ import json
 import os
 import re
 import secrets
-import time
 
 from fastapi.responses import JSONResponse
 
 from databases import connection
 from modules.walletTransactions import post_entry
 
-QR_TOKEN_TTL_SECONDS = 300
+CLIENT_QR_PREFIX = "GMO1"
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,40}$")
+_MINUTES_RE = re.compile(r"(\d+)\s*min", re.IGNORECASE)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -61,10 +69,6 @@ def _b64e(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
-def _b64d(text: str) -> bytes:
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
-
-
 def _qr_secret() -> bytes:
     secret = os.getenv("LAUNDRY_QR_SECRET", "")
     if not secret:
@@ -72,31 +76,34 @@ def _qr_secret() -> bytes:
     return secret.encode()
 
 
-def issue_qr_token(company_id: int, client_id: int, now: float = None) -> dict:
-    """'v1.<payload>.<signature>' — payload {c: companyId, u: clientId, j: tokenId, e: exp}."""
-    exp = int(now if now is not None else time.time()) + QR_TOKEN_TTL_SECONDS
-    payload = _b64e(json.dumps({"c": company_id, "u": client_id, "j": secrets.token_hex(8), "e": exp},
-                               separators=(",", ":")).encode())
-    sig = _b64e(hmac.new(_qr_secret(), f"v1.{payload}".encode(), hashlib.sha256).digest())
-    return {"qrToken": f"v1.{payload}.{sig}", "expiresAt": exp}
+def _client_qr_signature(company_id: int, client_id: int) -> str:
+    msg = f"{CLIENT_QR_PREFIX}.{company_id}.{client_id}".encode()
+    return _b64e(hmac.new(_qr_secret(), msg, hashlib.sha256).digest())[:22]   # 132 bits
 
 
-def verify_qr_token(token: str, now: float = None) -> dict:
-    """Returns {companyId, clientId, tokenId} or raises ValueError(reason)."""
-    parts = (token or "").split(".")
-    if len(parts) != 3 or parts[0] != "v1":
-        raise ValueError("token_malformed")
-    expected = _b64e(hmac.new(_qr_secret(), f"v1.{parts[1]}".encode(), hashlib.sha256).digest())
-    if not hmac.compare_digest(expected, parts[2]):
-        raise ValueError("token_invalid")
+def client_qr_text(company_id: int, client_id: int) -> str:
+    """The fixed QR of one client: 'GMO1.<companyId>.<clientId>.<signature>'."""
+    return f"{CLIENT_QR_PREFIX}.{company_id}.{client_id}.{_client_qr_signature(company_id, client_id)}"
+
+
+def verify_client_qr(text: str) -> dict:
+    """Returns {companyId, clientId} or raises ValueError(reason)."""
+    parts = (text or "").strip().split(".")
+    if len(parts) != 4 or parts[0] != CLIENT_QR_PREFIX:
+        raise ValueError("qr_malformed")
     try:
-        data = json.loads(_b64d(parts[1]))
-        company_id, client_id, token_id, exp = int(data["c"]), int(data["u"]), str(data["j"]), int(data["e"])
-    except (ValueError, KeyError, TypeError):
-        raise ValueError("token_malformed")
-    if exp < (now if now is not None else time.time()):
-        raise ValueError("token_expired")
-    return {"companyId": company_id, "clientId": client_id, "tokenId": token_id}
+        company_id, client_id = int(parts[1]), int(parts[2])
+    except ValueError:
+        raise ValueError("qr_malformed")
+    if not hmac.compare_digest(_client_qr_signature(company_id, client_id), parts[3]):
+        raise ValueError("qr_invalid")
+    return {"companyId": company_id, "clientId": client_id}
+
+
+def cycle_minutes(choice_name, device: dict) -> int:
+    """'50 Min' -> 50 (secado); cycles without minutes in the name use the device's cycleMinutes."""
+    match = _MINUTES_RE.search(choice_name or "")
+    return int(match.group(1)) if match else device.get("cycleMinutes")
 
 
 def _authenticate(device_id, device_key):
@@ -120,10 +127,11 @@ def _use_response(use: dict, device: dict) -> JSONResponse:
         "authorized": authorized,
         "useId": use.get("useId"),
         "amountMXN": use.get("amountMXN"),
+        "choiceName": use.get("choiceName"),
         "replayed": bool(use.get("replayed")),
     }
     if authorized:
-        body.update(balanceAfter=use.get("balanceAfter"), cycleMinutes=device.get("cycleMinutes"))
+        body.update(balanceAfter=use.get("balanceAfter"), cycleMinutes=cycle_minutes(use.get("choiceName"), device))
     else:
         body["reason"] = use.get("reason")
     return JSONResponse(body, status_code=200 if authorized else 402)
@@ -145,9 +153,12 @@ def heartbeat(device_id, device_key, payload: dict, client_ip: str = None):
         }]})
         if result.get("error"):
             return JSONResponse(result, status_code=500)
+        cycles = _sp("sp_laundryDevices", {"laundryDevices": [{"action": 7, "deviceId": device["deviceId"]}]})
         return JSONResponse({
-            "ok": True, "serverTimeUtc": result.get("serverTimeUtc"),
+            "ok": True, "serverTimeUtc": result.get("serverTimeUtc"), "productId": result.get("productId"),
             "priceMXN": result.get("priceMXN"), "cycleMinutes": result.get("cycleMinutes"),
+            "cycles": [{**c, "cycleMinutes": cycle_minutes(c.get("name"), device)}
+                       for c in cycles.get("cycles") or []],
         }, status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -164,18 +175,30 @@ def authorize(device_id, device_key, payload: dict):
             return JSONResponse({"error": "requestId inválido (8-40 caracteres: letras, números, - o _)"},
                                 status_code=400)
         try:
-            token = verify_qr_token(payload.get("qrToken"))
+            client = verify_client_qr(payload.get("clientQr"))
         except ValueError as e:
             return JSONResponse({"authorized": False, "reason": str(e)}, status_code=401)
-        if token["companyId"] != device["companyId"]:
-            return JSONResponse({"authorized": False, "reason": "token_wrong_company"}, status_code=401)
+        if client["companyId"] != device["companyId"]:
+            return JSONResponse({"authorized": False, "reason": "qr_wrong_company"}, status_code=401)
+        choice = payload.get("productOptionChoiceId")
+        if choice is not None and not isinstance(choice, int):
+            return JSONResponse({"error": "productOptionChoiceId debe ser entero"}, status_code=400)
+
+        price = _sp("sp_laundryDevices", {"laundryDevices": [{
+            "action": 6, "deviceId": device["deviceId"], "productOptionChoiceId": choice,
+        }]})
+        if price.get("error") == "choice_not_for_device":
+            return JSONResponse({"authorized": False, "reason": "choice_not_for_device"}, status_code=400)
+        if price.get("error"):
+            return JSONResponse(price, status_code=500)
 
         use = _sp("sp_laundryDeviceUses", {"laundryDeviceUses": [{
             "action": 1, "deviceId": device["deviceId"], "companyId": device["companyId"],
-            "clientId": token["clientId"], "requestId": request_id, "tokenId": token["tokenId"],
-            "amountMXN": device["priceMXN"],
+            "clientId": client["clientId"], "requestId": request_id,
+            "amountMXN": price["priceMXN"], "productOptionChoiceId": price.get("productOptionChoiceId"),
+            "choiceName": price.get("choiceName"),
         }]})
-        if use.get("error") in ("token_used", "request_conflict"):
+        if use.get("error") == "request_conflict":
             return JSONResponse({"authorized": False, "reason": use["error"]}, status_code=409)
         if use.get("error"):
             return JSONResponse(use, status_code=500)
@@ -189,7 +212,7 @@ def authorize(device_id, device_key, payload: dict):
             direction="D", amount_mxn=float(use["amountMXN"]),
             idempotency_key=f"laundry:{device['deviceId']}:{request_id}",
             reference_type="laundryDeviceUse", reference_id=use["useId"],
-            note=f"Lavandería: {device.get('name')}",
+            note=f"Lavandería: {device.get('name')}" + (f" · {use['choiceName']}" if use.get("choiceName") else ""),
         )
         if entry.get("error") == "Saldo insuficiente":
             settle = {"status": "rejected", "reason": "insufficient_funds"}
@@ -211,14 +234,15 @@ def authorize(device_id, device_key, payload: dict):
 
 # ── App / admin endpoints ───────────────────────────────────────────────────
 
-def qr_token(payload: dict):
+def client_qr(payload: dict):
+    """The text the app turns into the client's fixed QR."""
     row = (payload.get("laundryDevices") or [{}])[0]
     try:
         company_id, client_id = int(row["companyId"]), int(row["clientId"])
     except (KeyError, TypeError, ValueError):
         return JSONResponse({"error": "companyId y clientId son requeridos"}, status_code=400)
     try:
-        return JSONResponse(issue_qr_token(company_id, client_id), status_code=200)
+        return JSONResponse({"clientQr": client_qr_text(company_id, client_id)}, status_code=200)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
 
