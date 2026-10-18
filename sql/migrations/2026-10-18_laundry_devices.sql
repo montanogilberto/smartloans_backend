@@ -423,3 +423,35 @@ BEGIN
         '{"laundryDeviceUses":[]}') AS [jsonResult]
 END
 GO
+
+-- ============================================================
+-- sp_laundryClientQrs_list — clients whose fixed QR the batch regenerates
+-- (POST /laundryDevices/regenerateClientQrs).
+--   { companyId, clientIds?: [int], afterClientId?, top? }  -> { clients: [{ clientId }] }
+-- Active clients of the company, by clientId, paged with afterClientId.
+-- ============================================================
+IF OBJECT_ID('dbo.sp_laundryClientQrs_list', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_laundryClientQrs_list;
+GO
+CREATE PROCEDURE [dbo].[sp_laundryClientQrs_list]
+    @pjsonfile NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @companyId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.clients[0].companyId'))
+    DECLARE @after     INT = ISNULL(TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.clients[0].afterClientId')), 0)
+    DECLARE @top       INT = ISNULL(TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.clients[0].top')), 200)
+    DECLARE @ids       NVARCHAR(MAX) = JSON_QUERY(@pjsonfile, '$.clients[0].clientIds')
+    IF @top > 500 SET @top = 500
+
+    SELECT ISNULL(
+        (SELECT TOP (@top) c.clientId
+         FROM [dbo].[clients] c
+         WHERE c.companyId = @companyId
+           AND c.isActive = 1
+           AND c.clientId > @after
+           AND (@ids IS NULL OR c.clientId IN (SELECT TRY_CONVERT(INT, value) FROM OPENJSON(@ids)))
+         ORDER BY c.clientId
+         FOR JSON PATH, ROOT('clients')),
+        '{"clients":[]}') AS [jsonResult]
+END
+GO

@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Depends, Header, Request
 
 from modules.laundryDevices import (
     heartbeat, authorize, client_qr, laundry_devices_sp,
-    all_laundry_devices_sp, all_laundry_device_uses_sp,
+    all_laundry_devices_sp, all_laundry_device_uses_sp, regenerate_client_qrs,
 )
+from security.worker_key import require_worker_key
 
 router = APIRouter(tags=["Laundry Devices"])
 
@@ -120,3 +121,26 @@ def all_laundry_devices(json: dict):
 )
 def all_laundry_device_uses(json: dict):
     return all_laundry_device_uses_sp(json)
+
+
+@router.post(
+    "/laundryDevices/regenerateClientQrs",
+    summary="Lote: regenerar el QR fijo firmado de los clientes",
+    dependencies=[Depends(require_worker_key)],
+    description="""
+Para cada cliente activo de la compañía genera el QR 'GMO1.<companyId>.<clientId>.<firma>',
+sube el PNG a Blob Storage (misma ruta que /clients/upload-qr) y actualiza
+clients.qrBlobUrl. La app muestra el nuevo QR sin cambios.
+
+Header: X-Worker-Key (WORKER_KEY del App Service).
+Body: { "clients": [{ "companyId": int, "clientIds"?: [int], "afterClientId"?: int,
+        "top"?: int (máx 500), "dryRun"?: bool }] }
+Returns: { listed, updated, failed: [{ clientId, error }], nextAfterClientId }
+
+Por páginas: repite con afterClientId = nextAfterClientId hasta que sea null.
+dryRun = true sólo cuenta, no sube ni actualiza nada. Se puede repetir sin
+riesgo: el texto del QR de un cliente siempre es el mismo.
+""",
+)
+def laundry_regenerate_client_qrs(json: dict):
+    return regenerate_client_qrs(json)

@@ -282,3 +282,78 @@ def all_laundry_device_uses_sp(payload: dict):
         return JSONResponse(_sp("sp_laundryDeviceUses_all", payload), status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Batch: regenerate every client's fixed QR ───────────────────────────────
+
+REGENERATE_MAX_PER_CALL = 500
+
+
+def client_qr_png(text: str) -> bytes:
+    import io
+    import segno
+    buf = io.BytesIO()
+    segno.make(text, error="m").save(buf, kind="png", scale=10, border=4)
+    return buf.getvalue()
+
+
+def _save_client_qr(company_id: int, client_id: int, stamp: str) -> str:
+    """PNG of the signed QR -> Blob Storage (same layout as /clients/upload-qr) -> clients.qrBlobUrl."""
+    from modules.clients import _upload_bytes_to_blob
+    from modules.clientFaceRecognitions import client_blob_path
+
+    png = client_qr_png(client_qr_text(company_id, client_id))
+    blob_path = client_blob_path(client_id, "qr", f"qr_gmo1_{stamp}_{secrets.token_hex(4)}.png")
+    url = _upload_bytes_to_blob(png, blob_path, "image/png", {
+        "clientId": str(client_id), "companyId": str(company_id), "type": "qr", "format": CLIENT_QR_PREFIX,
+    })
+    result = _sp("sp_clients_qr", {"clients": [{"clientId": client_id, "companyId": company_id, "qrBlobUrl": url}]})
+    if result.get("error"):
+        raise RuntimeError(result["error"])
+    return url
+
+
+def regenerate_client_qrs(payload: dict):
+    """One page of clients per call: repeat with afterClientId = nextAfterClientId until it is null."""
+    from datetime import datetime
+
+    row = (payload.get("clients") or [{}])[0]
+    try:
+        company_id = int(row["companyId"])
+        limit = min(int(row.get("top") or 200), REGENERATE_MAX_PER_CALL)
+        after = int(row.get("afterClientId") or 0)
+        client_ids = [int(c) for c in row["clientIds"]] if row.get("clientIds") else None
+    except (KeyError, TypeError, ValueError):
+        return JSONResponse({"error": "companyId es requerido; clientIds debe ser lista de enteros"}, status_code=400)
+    dry_run = bool(row.get("dryRun"))
+    try:
+        _qr_secret()
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+    try:
+        listed = _sp("sp_laundryClientQrs_list", {"clients": [{
+            "companyId": company_id, "afterClientId": after, "top": limit, "clientIds": client_ids,
+        }]})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    ids = [c["clientId"] for c in listed.get("clients") or []]
+
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    updated, failed = [], []
+    for client_id in ids:
+        if dry_run:
+            continue
+        try:
+            _save_client_qr(company_id, client_id, stamp)
+            updated.append(client_id)
+        except Exception as e:
+            failed.append({"clientId": client_id, "error": str(e)})
+    print(f"[laundryDevices] regenerateClientQrs company={company_id} listed={len(ids)} "
+          f"updated={len(updated)} failed={len(failed)} dryRun={dry_run}")
+
+    return JSONResponse({
+        "companyId": company_id, "dryRun": dry_run, "listed": len(ids),
+        "updated": len(updated), "failed": failed,
+        "nextAfterClientId": ids[-1] if len(ids) == limit and not client_ids else None,
+    }, status_code=200)
