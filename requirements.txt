@@ -21,3 +21,4 @@ opencv-python-headless~=5.0.0
 numpy~=2.4.6
 apscheduler~=3.10.4
 python-multipart>=0.0.18
+segno==1.6.1

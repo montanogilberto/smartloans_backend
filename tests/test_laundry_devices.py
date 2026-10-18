@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import modules.laundryDevices as ld  # noqa: E402
 import routes_.laundryDevices as routes  # noqa: E402
+import security.worker_key as worker_key  # noqa: E402
 
 DEVICE_KEY = "test-device-key"
 # productOptionChoices of the live catalog: 1002 Servicio de lavado / 1003 Servicio de secado
@@ -260,6 +261,82 @@ class DeviceAdminTest(Base):
         sent = self.db.calls[-1][1]["laundryDevices"][0]
         self.assertEqual(sent["keyHash"], ld.hash_key(key))
         self.assertNotIn(key, json.dumps(self.db.calls))
+
+
+
+class RegenerateClientQrsTest(Base):
+    URL = "/laundryDevices/regenerateClientQrs"
+
+    def setUp(self):
+        super().setUp()
+        self.uploads, self.saved = [], []
+        self.client_ids = list(range(1, 6))
+        real_sp = self.db.sp
+
+        def sp(proc, payload):
+            row = next(iter(payload.values()))[0]
+            if proc == "sp_laundryClientQrs_list":
+                ids = [c for c in self.client_ids if c > row["afterClientId"]
+                       and (row["clientIds"] is None or c in row["clientIds"])]
+                return {"clients": [{"clientId": c} for c in ids[:row["top"]]]}
+            if proc == "sp_clients_qr":
+                self.saved.append((row["clientId"], row["qrBlobUrl"]))
+                return {"message": "qrBlobUrl updated"}
+            return real_sp(proc, payload)
+
+        ld._sp.side_effect = sp
+        upload = mock.patch("modules.clients._upload_bytes_to_blob",
+                            side_effect=lambda raw, path, ctype, meta: self.uploads.append((path, raw, meta))
+                            or f"https://blob/clients/{path}")
+        upload.start()
+        self.addCleanup(upload.stop)
+        key = mock.patch.object(worker_key, "WORKER_KEY", "wk")
+        key.start()
+        self.addCleanup(key.stop)
+
+    def post(self, headers={"X-Worker-Key": "wk"}, **row):
+        return self.client.post(self.URL, headers=headers, json={"clients": [{"companyId": 1, **row}]})
+
+    def test_needs_worker_key(self):
+        self.assertEqual(self.post(headers={}).status_code, 403)
+        self.assertEqual(self.uploads, [])
+
+    def test_uploads_a_signed_png_per_client_and_pages(self):
+        body = self.post(top=3).json()
+        self.assertEqual((body["listed"], body["updated"], body["nextAfterClientId"]), (3, 3, 3))
+        path, png, meta = self.uploads[0]
+        self.assertTrue(path.startswith("1/qr/qr_gmo1_"))
+        self.assertTrue(png.startswith(b"\x89PNG"))
+        self.assertEqual(meta["format"], "GMO1")
+        self.assertEqual([c for c, _ in self.saved], [1, 2, 3])
+
+        body = self.post(top=3, afterClientId=3).json()
+        self.assertEqual((body["updated"], body["nextAfterClientId"]), (2, None))
+
+    def test_dry_run_changes_nothing(self):
+        body = self.post(dryRun=True).json()
+        self.assertEqual((body["listed"], body["updated"]), (5, 0))
+        self.assertEqual((self.uploads, self.saved), ([], []))
+
+    def test_only_listed_clients(self):
+        body = self.post(clientIds=[2, 4]).json()
+        self.assertEqual([c for c, _ in self.saved], [2, 4])
+        self.assertIsNone(body["nextAfterClientId"])
+
+    def test_one_failure_does_not_stop_the_batch(self):
+        ld._sp.side_effect, real = None, ld._sp.side_effect
+
+        def flaky(proc, payload):
+            if proc == "sp_clients_qr" and payload["clients"][0]["clientId"] == 2:
+                return {"error": "boom"}
+            return real(proc, payload)
+        ld._sp.side_effect = flaky
+        body = self.post().json()
+        self.assertEqual((body["updated"], body["failed"]), (4, [{"clientId": 2, "error": "boom"}]))
+
+    def test_png_encodes_the_signed_text(self):
+        png = ld.client_qr_png(ld.client_qr_text(1, 1))
+        self.assertTrue(png.startswith(b"\x89PNG"))
 
 
 if __name__ == "__main__":
