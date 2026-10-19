@@ -7,6 +7,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 load_dotenv()
 
+from app_env import CORS_EXTRA_ORIGINS, describe as describe_app_env
+
 # No logging.basicConfig() existed anywhere in this backend, so the root
 # logger stayed at Python's default WARNING level -- every logger.info() call
 # across the whole app (ticket_notifications, azure_notifications, the
@@ -27,6 +29,8 @@ logging.basicConfig(
 print(f"[featureFlags][startup] NON_CUSTODIAL_FUNDING_PILOT_COMPANY_IDS = {os.getenv('NON_CUSTODIAL_FUNDING_PILOT_COMPANY_IDS')!r}")
 print(f"[featureFlags][startup] NON_CUSTODIAL_FUNDING_PILOT_CLIENT_IDS = {os.getenv('NON_CUSTODIAL_FUNDING_PILOT_CLIENT_IDS')!r}")
 print(f"[featureFlags][startup] ENABLE_NON_CUSTODIAL_FUNDING_FLOW = {os.getenv('ENABLE_NON_CUSTODIAL_FUNDING_FLOW')!r}")
+
+print(f"[appEnv][startup] {describe_app_env()}")
 
 from observability import ObservabilityMiddleware, writer
 
@@ -119,6 +123,9 @@ origins = [
     # Azure Functions / Backend API
     "https://smartloansbackend.azurewebsites.net",
 ]
+
+# Per-environment origins (DEV / QA Static Web Apps) from the CORS_EXTRA_ORIGINS env var.
+origins += [o for o in CORS_EXTRA_ORIGINS if o not in origins]
 
 app.add_middleware(
     CORSMiddleware,
