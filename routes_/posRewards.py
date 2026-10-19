@@ -2,14 +2,11 @@ from fastapi import APIRouter
 from modules.posRewards import (
     pos_reward_product_rates_sp,
     pos_reward_catalog_items_sp,
-    pos_reward_balances_sp, pos_reward_dashboard_summary_sp,
+    pos_reward_balances_sp, pos_reward_dashboard_summary_sp, pos_rewards_dashboard_sp,
     pos_reward_transactions_sp, earn_from_ticket_sp, adjust_points_sp,
     pos_reward_redemptions_sp, redeem_sp,
     pos_reward_product_counts_sp,
-    POS_REWARDS_MIGRATION_FILES,
 )
-from fastapi.responses import JSONResponse
-from modules.whatsappAssistant import run_sql_files
 
 router = APIRouter()
 
@@ -70,6 +67,26 @@ topCustomers: [{clientId, balance, lifetimeEarned}], activity: [{date, earned, r
 )
 def pos_reward_dashboard_summary(json: dict):
     return pos_reward_dashboard_summary_sp(json)
+
+
+@router.post(
+    "/posRewards/dashboard",
+    summary="Rewards dashboard: points, liability, coupons, rewards, stamp cards, SmartLoans points (read-only)",
+    description="""{ "posRewardsDashboard": [{ "companyId": int, "startDate"?: "YYYY-MM-DD", "endDate"?: "YYYY-MM-DD" }] }
+(Hermosillo days; default the last 30 days)
+→ { "result": [{ "period": {startDate, endDate},
+  "kpis": { pointsEarned, pointsRedeemed, pointsAdjusted, outstandingPoints, outstandingValueMxn, earnPct,
+            clientsWithBalance, activeClients, redemptions, couponUses, discountGiven, sales },
+  "daily": [{date, earned, redeemed}],
+  "topCustomers": [{clientId, name, balance, lifetimeEarned, lifetimeRedeemed, lastActivity}],
+  "coupons": [{catalogItemId, code, name, isActive, firstPurchaseOnly, uses, discountTotal}],
+  "rewards": [{catalogItemId, name, rewardType, requiredPoints, isActive, redemptions, cancelled, pointsSpent}],
+  "stampCards": [{catalogItemId, name, freeProductId, requiredUnits, ready, oneAway, inProgress,
+                  closest: [{clientId, name, unitsAvailable, requiredUnits}]}],
+  "smartLoans": {purchaseRuleActive, pointsEarned, transactions, clients} | null }] }""",
+)
+def pos_rewards_dashboard(json: dict):
+    return pos_rewards_dashboard_sp(json)
 
 
 @router.post(
@@ -141,19 +158,3 @@ to show accurate progress per catalog item.""",
 )
 def pos_reward_product_counts(json: dict):
     return pos_reward_product_counts_sp(json)
-
-
-@router.post(
-    "/posRewards/migrate",
-    summary="Make posRewardCatalogItems the single discount table + deploy its SPs (idempotent)",
-    description="""Runs, in order: 2026-10-16c migration (catalog columns, copy dbo.promotions
-into coupons), sp_posRewards.sql, sp_posRewardFreeProductStatus.sql,
-sp_whatsappCustomerRewards.sql, sp_promotions.sql, sp_income_applyDiscounts.sql.
-Dropping dbo.promotions / promotion_targets is a separate manual step
-(sql/migrations/2026-10-16d_drop_promotions_tables.sql).""",
-)
-def pos_rewards_migrate():
-    try:
-        return JSONResponse(run_sql_files(POS_REWARDS_MIGRATION_FILES), status_code=200)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)

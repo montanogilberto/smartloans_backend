@@ -26,7 +26,7 @@
 --
 -- Run order: this file → sql/sp_posRewards.sql → sql/sp_posRewardFreeProductStatus.sql
 -- → sql/sp_whatsappCustomerRewards.sql → sql/sp_promotions.sql
--- → sql/sp_income_applyDiscounts.sql  (POST /posRewards/migrate runs all of them)
+-- → sql/sp_income_applyDiscounts.sql  (full order: sql/migrations/README_pos_rewards.md)
 -- Safe to re-run.
 -- ============================================================
 

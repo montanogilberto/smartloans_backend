@@ -9,16 +9,17 @@
 --   businessFaqs   question/answer pairs the agent may quote
 --
 -- businessInfo / businessFaqs: branchId NULL = every branch of the company.
--- Run order: this file → sql/sp_promotions.sql → sql/sp_businessInfo.sql →
--- sql/sp_businessFaqs.sql → sql/sp_whatsappCustomerRewards.sql
--- (POST /whatsapp/assistant/migrate runs all of them)
+-- Run order: this file → sql/sp_businessInfo.sql → sql/sp_businessFaqs.sql,
+-- directly in the database (sql/migrations/README_whatsapp_assistant.md).
+-- sp_promotions / sp_whatsappCustomerRewards go with the POS rewards scripts.
 
 -- Promotions: dbo.promotions ALREADY EXISTS — it is the table the POS applies
 -- at checkout (sp_income / sp_income_apply_promo, e.g. code 2X1). The
 -- assistant reads that same table so it never advertises a promotion the POS
 -- can't apply. Only a customer-facing description is added (nullable; both
 -- SPs list their columns explicitly, so they are unaffected).
-IF COL_LENGTH('dbo.promotions', 'description') IS NULL
+-- Skipped once 2026-10-16d has dropped dbo.promotions (coupons live in the catalog).
+IF OBJECT_ID('dbo.promotions', 'U') IS NOT NULL AND COL_LENGTH('dbo.promotions', 'description') IS NULL
     ALTER TABLE [dbo].[promotions] ADD description NVARCHAR(500) NULL;
 GO
 

@@ -23,7 +23,7 @@
 --   * discount_fixed rewards still at the old 10-points-per-peso price
 --     (requiredPoints = discountValue * 10) move to requiredPoints = discountValue.
 --     Rows already changed by hand are left alone.
--- Runs in POST /posRewards/migrate after 2026-10-18. Safe to re-run.
+-- Runs after 2026-10-18 (sql/migrations/README_pos_rewards.md). Safe to re-run.
 -- ============================================================
 
 IF OBJECT_ID('dbo.posRewardSettings', 'U') IS NULL
