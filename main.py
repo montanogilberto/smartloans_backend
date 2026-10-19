@@ -7,7 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 load_dotenv()
 
-from app_env import CORS_EXTRA_ORIGINS, describe as describe_app_env
+from app_env import CORS_EXTRA_ORIGINS, SCHEDULER_ENABLED, describe as describe_app_env
 
 # No logging.basicConfig() existed anywhere in this backend, so the root
 # logger stayed at Python's default WARNING level -- every logger.info() call
@@ -351,6 +351,10 @@ async def _run_funding_transactions_escalate_due():
 async def start_scheduler():
     # Start the observability background log writer (async best-effort path).
     writer.start()
+    # Jobs only in prod (or ENABLE_SCHEDULER=true) — see app_env.SCHEDULER_ENABLED.
+    if not SCHEDULER_ENABLED:
+        print("[scheduler] disabled (APP_ENV != prod or ENABLE_SCHEDULER=false) — no jobs scheduled")
+        return
     # 07:00 UTC ≈ early morning in Mexico (UTC-6/-5) — off-peak for billing.
     scheduler.add_job(_run_daily_charge_due, "cron", hour=7, minute=0, id="daily_charge_due")
     # 15:00 UTC ≈ mid-morning in Mexico — a time a client is likely to see
