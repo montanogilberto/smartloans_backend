@@ -26,3 +26,45 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UQ_income_company_clientR
     CREATE UNIQUE INDEX UQ_income_company_clientRequestId
         ON [dbo].[income] (companyId, clientRequestId) WHERE clientRequestId IS NOT NULL;
 GO
+
+-- ── sp_income_clientRequest: the key's lookups for modules/income.py ──
+-- (backend rule: Python only EXECs stored procedures — scripts/check_raw_sql.py)
+--   lock   / unlock  session-owned app lock on (companyId, key): serializes
+--                    concurrent retries of one checkout; SELECTs sp_getapplock's code
+--   find             SELECTs the incomeId already holding the key (no row = none)
+--   store            stamps the key on @incomeId; a duplicate raises error 2601
+IF OBJECT_ID('dbo.sp_income_clientRequest', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_income_clientRequest;
+GO
+CREATE PROCEDURE [dbo].[sp_income_clientRequest]
+    @action          VARCHAR(10),
+    @companyId       INT,
+    @clientRequestId NVARCHAR(64),
+    @incomeId        INT = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @resource NVARCHAR(255) = CONCAT(N'income:', @companyId, N':', @clientRequestId), @r INT;
+
+    IF @action = 'lock'
+    BEGIN
+        EXEC @r = sp_getapplock @Resource = @resource, @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 15000;
+        SELECT @r AS result;
+    END
+    ELSE IF @action = 'unlock'
+    BEGIN
+        IF APPLOCK_MODE('public', @resource, 'Session') <> 'NoLock'
+            EXEC @r = sp_releaseapplock @Resource = @resource, @LockOwner = 'Session';
+        SELECT ISNULL(@r, 0) AS result;
+    END
+    ELSE IF @action = 'find'
+        SELECT incomeId FROM [dbo].[income] WHERE companyId = @companyId AND clientRequestId = @clientRequestId;
+    ELSE IF @action = 'store'
+    BEGIN
+        UPDATE [dbo].[income] SET clientRequestId = @clientRequestId
+        WHERE incomeId = @incomeId AND clientRequestId IS NULL;
+        SELECT @@ROWCOUNT AS result;
+    END
+    ELSE
+        RAISERROR('action must be lock, unlock, find or store', 16, 1);
+END
+GO

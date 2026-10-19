@@ -179,9 +179,8 @@ def _lock_request_key(conn, company_id, key) -> None:
     until the first has stored its key, then finds that sale. Owned by the
     session, so it's released by _unlock_request_key or when conn closes."""
     cur = conn.cursor()
-    cur.execute("DECLARE @r INT; EXEC @r = sp_getapplock @Resource = %s, @LockMode = 'Exclusive', "
-                "@LockOwner = 'Session', @LockTimeout = 15000; SELECT @r",
-                (f"income:{int(company_id)}:{key}",))
+    cur.execute("EXEC [dbo].[sp_income_clientRequest] @action = 'lock', @companyId = %s, @clientRequestId = %s",
+                (int(company_id), key))
     row = cur.fetchone()
     if not row or row[0] is None or int(row[0]) < 0:
         # The unique index still catches the duplicate in _store_request_key.
@@ -190,23 +189,27 @@ def _lock_request_key(conn, company_id, key) -> None:
 
 def _unlock_request_key(conn, company_id, key) -> None:
     try:
-        conn.cursor().execute("EXEC sp_releaseapplock @Resource = %s, @LockOwner = 'Session'",
-                              (f"income:{int(company_id)}:{key}",))
+        cur = conn.cursor()
+        cur.execute("EXEC [dbo].[sp_income_clientRequest] @action = 'unlock', @companyId = %s, @clientRequestId = %s",
+                    (int(company_id), key))
+        cur.fetchall()
     except Exception as e:
         print(f"[income] request lock release failed: {e}")
 
 
 def _find_request(conn, company_id, key) -> int | None:
     cur = conn.cursor()
-    cur.execute("SELECT incomeId FROM dbo.income WHERE companyId = %s AND clientRequestId = %s",
+    cur.execute("EXEC [dbo].[sp_income_clientRequest] @action = 'find', @companyId = %s, @clientRequestId = %s",
                 (int(company_id), key))
     row = cur.fetchone()
     return int(row[0]) if row else None
 
 
-def _store_request_key(conn, income_id, key) -> None:
-    conn.cursor().execute("UPDATE dbo.income SET clientRequestId = %s WHERE incomeId = %s AND clientRequestId IS NULL",
-                          (key, int(income_id)))
+def _store_request_key(conn, company_id, income_id, key) -> None:
+    cur = conn.cursor()
+    cur.execute("EXEC [dbo].[sp_income_clientRequest] @action = 'store', @companyId = %s, "
+                "@clientRequestId = %s, @incomeId = %s", (int(company_id), key, int(income_id)))
+    cur.fetchall()
 
 
 def _is_duplicate_key(e: Exception) -> bool:
@@ -284,7 +287,7 @@ def income_sp(json_file: dict):
             if request_key:
                 try:
                     if is_new_income:
-                        _store_request_key(conn, int(result[0]["value"]), request_key)
+                        _store_request_key(conn, request_company_id, int(result[0]["value"]), request_key)
                 except Exception as e:
                     existing_id = _find_request(conn, request_company_id, request_key) if _is_duplicate_key(e) else None
                     if not existing_id:
