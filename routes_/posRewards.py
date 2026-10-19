@@ -34,7 +34,8 @@ def pos_reward_product_rates(json: dict):
     description="""The single table for every discount: coupons (coupon_b2g1), points
 rewards (discount_fixed / discount_pct) and stamp cards (free_product).
 action 0 — read: { "posRewardCatalogItems": [{ "companyId": int, "activeOnly"?: bool,
-  "includeCoupons"?: bool (default false: coupons are typed at checkout, not redeemed) }] }
+  "includeCoupons"?: bool (default false: coupons are typed at checkout, not redeemed),
+  "clientId"?: int (leaves out first-purchase coupons once that client has a sale) }] }
 action 1 — insert / 2 — update / 3 — delete:
   { "posRewardCatalogItems": [{ "action": int, "companyId": int, "catalogItemId"?: int,
     "name": str, "rewardType": "discount_fixed|discount_pct|free_product|coupon_b2g1",

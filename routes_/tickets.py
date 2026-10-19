@@ -13,6 +13,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from databases import connection
 from modules import receiptLinks
 from modules.income import _get_final_total_and_discount
+from modules.posRewards import ticket_rewards
 
 router = APIRouter()
 
@@ -148,4 +149,6 @@ def open_receipt(token: str):
             conn.close()
     if total is None:
         raise HTTPException(status_code=404, detail="Recibo no encontrado")
-    return HTMLResponse(receiptLinks.summary_page(income_id, total, discount), headers=no_store)
+    rewards = ticket_rewards(company_id, income_id)
+    return HTMLResponse(receiptLinks.summary_page(income_id, total, discount, (rewards or {}).get("lines")),
+                        headers=no_store)
