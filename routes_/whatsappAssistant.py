@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
 
-from modules.whatsappAssistant import assistant_catalog_sp, customer_rewards, run_migration
+from modules.whatsappAssistant import assistant_catalog_sp, customer_rewards
 from security.worker_key import require_worker_key
 
 router = APIRouter()
@@ -72,14 +71,3 @@ def business_faqs(json: dict):
 )
 def whatsapp_customer_rewards(json: dict, _: str = Depends(require_worker_key)):
     return customer_rewards(json)
-
-
-@router.post(
-    "/whatsapp/assistant/migrate",
-    summary="Create businessInfo / businessFaqs tables + SPs (idempotent; promotions: /posRewards/migrate)",
-)
-def whatsapp_assistant_migrate():
-    try:
-        return JSONResponse(run_migration(), status_code=200)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)

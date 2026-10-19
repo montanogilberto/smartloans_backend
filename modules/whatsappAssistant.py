@@ -4,16 +4,16 @@ agents/whatsapp_reservations): promotions, business info, FAQs — each
 company edits its own from the POS — plus the sender's own reward points.
 
 Promotions are the coupons in dbo.posRewardCatalogItems (sql/sp_promotions.sql);
-that SP and sp_whatsappCustomerRewards are deployed by POST /posRewards/migrate
-because they read the catalog's 2026-10-16 columns.
+that SP and sp_whatsappCustomerRewards are deployed directly in the database with
+the POS rewards objects (sql/migrations/README_pos_rewards.md).
 
 All DB access through SPs (sql/sp_promotions.sql, sp_businessInfo.sql,
-sp_businessFaqs.sql, sp_whatsappCustomerRewards.sql).
+sp_businessFaqs.sql, sp_whatsappCustomerRewards.sql), deployed directly in the
+database: run order in sql/migrations/README_whatsapp_assistant.md.
 """
 
 import json
 import logging
-import os
 
 from fastapi.responses import JSONResponse
 
@@ -61,37 +61,3 @@ def customer_rewards(json_file: dict) -> JSONResponse:
     except Exception as e:
         logger.exception("[whatsappAssistant] customer rewards failed")
         return JSONResponse({"error": str(e)}, status_code=500)
-
-
-_MIGRATION_FILES = (
-    "sql/migrations/2026-10-16_whatsapp_assistant_catalogs.sql",
-    "sql/sp_businessInfo.sql",
-    "sql/sp_businessFaqs.sql",
-)
-
-
-def run_migration() -> dict:
-    """Create the assistant tables and SPs (idempotent)."""
-    return run_sql_files(_MIGRATION_FILES)
-
-
-def run_sql_files(rel_paths) -> dict:
-    """Run repo SQL files batch by batch (split on GO), in order."""
-    root = os.path.join(os.path.dirname(__file__), "..")
-    batches_run = 0
-    conn = None
-    try:
-        conn = connection()
-        cursor = conn.cursor()
-        for rel_path in rel_paths:
-            with open(os.path.abspath(os.path.join(root, rel_path)), encoding="utf-8") as f:
-                script = f.read()
-            for batch in (b.strip() for b in script.split("\nGO")):
-                if batch:
-                    cursor.execute(batch)
-                    batches_run += 1
-        conn.commit()
-    finally:
-        if conn:
-            conn.close()
-    return {"ok": True, "batches_run": batches_run}

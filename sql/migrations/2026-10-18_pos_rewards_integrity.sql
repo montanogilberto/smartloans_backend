@@ -15,7 +15,7 @@
 -- added WITH NOCHECK (enforced for new writes, old rows untouched) and the
 -- migration PRINTs which one, so they can be fixed and the constraint
 -- re-checked (ALTER TABLE ... WITH CHECK CHECK CONSTRAINT ...).
--- Runs after 2026-10-16c (POST /posRewards/migrate). Safe to re-run.
+-- Runs after 2026-10-16c (sql/migrations/README_pos_rewards.md). Safe to re-run.
 -- ============================================================
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UQ_posRewardRedemptions_income_applied')

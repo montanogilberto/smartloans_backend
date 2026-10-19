@@ -19,18 +19,8 @@ import re
 from fastapi.responses import JSONResponse
 from databases import connection
 
-# dbo.posRewardCatalogItems is the single table for coupons, points rewards
-# and stamp cards (docs/promotions_rewards_analysis.md). Run in this order.
-POS_REWARDS_MIGRATION_FILES = (
-    "sql/migrations/2026-10-16c_unify_promotions_into_reward_catalog.sql",
-    "sql/migrations/2026-10-18_pos_rewards_integrity.sql",
-    "sql/migrations/2026-10-18b_pos_rewards_earn_pct.sql",
-    "sql/sp_posRewards.sql",
-    "sql/sp_posRewardFreeProductStatus.sql",
-    "sql/sp_whatsappCustomerRewards.sql",
-    "sql/sp_promotions.sql",
-    "sql/sp_income_applyDiscounts.sql",
-)
+# Database objects (tables + SPs) are deployed directly in SQL Server, never
+# from this module: run order in sql/migrations/README_pos_rewards.md.
 
 
 def _conn():
@@ -91,6 +81,17 @@ def pos_reward_balances_sp(json_file: dict):
     try:
         result = _sp("sp_posRewardBalances", json_file)
         return JSONResponse(result, status_code=_crud_status(result))
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def pos_rewards_dashboard_sp(json_file: dict):
+    """POST /posRewards/dashboard — everything about rewards for a company in
+    one read-only call (sql/sp_posRewardsDashboard.sql)."""
+    try:
+        result = _sp("sp_posRewardsDashboard", json_file)
+        status = 400 if isinstance(result, dict) and result.get("error") else 200
+        return JSONResponse(result, status_code=status)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -382,18 +383,3 @@ def rewards_label(summary: dict | None) -> str:
         else:
             lines.append(f"{_falta(missing)} {_fmt_points(missing)} {'compra' if missing == 1 else 'compras'} para: {nxt.get('name')}")
     return "\n".join(lines)
-
-    # Nothing ready: the free product the client has started buying that is
-    # closest, else the cheapest points reward.
-    started = [i for i in free if i["unitsAvailable"] > 0]
-    if started:
-        nxt = min(started, key=lambda i: i["unitsRequired"] - i["unitsAvailable"])
-        missing = nxt["unitsRequired"] - nxt["unitsAvailable"]
-        word = "compra" if missing == 1 else "compras"
-        parts.append(f"Le {'falta' if missing == 1 else 'faltan'} {_fmt_points(missing)} {word} para: {nxt.get('name')}")
-    elif by_points:
-        nxt = by_points[0]
-        missing = float(nxt.get("requiredPoints") or 0) - balance
-        unit = "pt" if missing == 1 else "pts"
-        parts.append(f"Le {'falta' if missing == 1 else 'faltan'} {_fmt_points(missing)} {unit} para: {nxt.get('name')}")
-    return " · ".join(parts)

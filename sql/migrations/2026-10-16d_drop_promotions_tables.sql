@@ -2,7 +2,7 @@
 -- 2026-10-16d: drop dbo.promotions and dbo.promotionTargets.
 -- Run MANUALLY after 2026-10-16c and once the POS has charged sales with the
 -- catalog coupons (income.promotionId pointing at posRewardCatalogItems).
--- Not part of POST /posRewards/migrate.
+-- Last step of sql/migrations/README_pos_rewards.md.
 --
 -- Fails, changing nothing, if a coupon was not copied or if any object other
 -- than the legacy ones below still references the tables.
