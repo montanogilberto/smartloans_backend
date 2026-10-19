@@ -1,25 +1,29 @@
 """
-Provider-side WhatsApp / SMS usage for the Notifications screen.
+Provider-side usage for the Notifications screen ("Uso este mes" card).
 
-Read-only. The numbers come from Twilio's Usage Records API (what the provider
-actually carried and billed this month), NOT from dbo.notificationDispatches:
-our table records that a send was *accepted* ('sent'), and the provider can
-still fail it afterwards (e.g. income #4863, 2026-10-02: ours says sent, Twilio
-usage says 0 outbound WhatsApp). The screen shows both so the gap is visible.
+Read-only. What each provider can actually tell us:
 
-Not covered: WhatsApp messages sent straight through Meta's Cloud API
-(modules/whatsappCloud.py) never touch Twilio and do not appear here — Meta's
-own analytics (needs the WABA id) is the source for those.
+- Twilio (SMS, and WhatsApp before 2026-10-17): counted from the Messages API,
+  grouped by the provider's own final status. NOT from Usage Records: those only
+  count messages Twilio has priced, and October 2026 SMS stayed price=None while
+  delivered (16 delivered, usage `sms-outbound` = 0), so the card read "0 enviados".
+- Meta WhatsApp Cloud API: nothing to ask here. The per-message truth is our own
+  dbo.notificationDispatches rows, which Meta's status webhooks
+  (modules/whatsappCloud.py) move to confirmed/failed; the screen counts those.
+  Meta's conversation analytics needs the WABA id and lags a day — not used.
+- Push (Azure Notification Hub): only "accepted by the hub" exists; also counted
+  by the screen from our rows.
 
 Env:
-  WHATSAPP_FREE_MONTHLY_LIMIT   optional int — the free allowance to measure
-                                against (outbound WhatsApp messages / month).
-                                Unset => no `limit`/`remaining` are reported;
-                                the real number is in the Meta/Twilio account.
+  WHATSAPP_FREE_MONTHLY_LIMIT   optional int — free WhatsApp allowance / month the
+                                screen measures against. Unset => limit is null.
+  WA_SENDER_PHONE_NUMBER_ID     set => app WhatsApp goes out through Meta.
 """
 import logging
 import os
 import time
+from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 from fastapi.responses import JSONResponse
@@ -27,15 +31,14 @@ from fastapi.responses import JSONResponse
 logger = logging.getLogger(__name__)
 
 CACHE_SECONDS = 60
+MAX_MESSAGES = 5000
 _cache: Dict[str, Any] = {"at": 0.0, "payload": None}
 
-_CATEGORY_KEYS = {
-    "channels-whatsapp-outbound": "outboundMessages",
-    "channels-whatsapp-inbound": "inboundMessages",
-    "channels-whatsapp": "conversations",
-    "channels-whatsapp-conversation-free": "freeConversations",
-    "sms-outbound": "smsOutboundMessages",
-}
+# Same calendar the screen uses (America/Hermosillo, UTC-7, no DST).
+HERMOSILLO = timezone(timedelta(hours=-7))
+
+_DELIVERED = {"delivered", "read"}
+_FAILED = {"failed", "undelivered", "canceled"}
 
 
 def _twilio_client():
@@ -51,39 +54,40 @@ def _limit() -> int | None:
     return int(raw) if raw.isdigit() and int(raw) > 0 else None
 
 
-def build_usage(records) -> dict:
-    """Pure: Twilio usage records (anything with category/count/price/price_unit) -> the API payload."""
-    values = {key: 0 for key in _CATEGORY_KEYS.values()}
-    price, price_unit = 0.0, "usd"
-    for record in records:
-        key = _CATEGORY_KEYS.get(record.category)
-        if key:
-            values[key] = int(float(record.count or 0))
-        if record.category == "channels-whatsapp":
-            price = float(record.price or 0)
-            price_unit = record.price_unit or price_unit
+def month_start(now: datetime | None = None) -> datetime:
+    """First instant of the current Hermosillo month, in UTC."""
+    local = (now or datetime.now(timezone.utc)).astimezone(HERMOSILLO)
+    return local.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
-    whatsapp = {
-        "outboundMessages": values["outboundMessages"],
-        "inboundMessages": values["inboundMessages"],
-        "conversations": values["conversations"],
-        "freeConversations": values["freeConversations"],
-        "billableConversations": max(values["conversations"] - values["freeConversations"], 0),
-        "price": price,
-        "priceUnit": price_unit,
-        "limit": None,
-        "remaining": None,
-    }
-    limit = _limit()
-    if limit is not None:
-        whatsapp["limit"] = limit
-        whatsapp["remaining"] = max(limit - whatsapp["outboundMessages"], 0)
+
+def _empty() -> dict:
+    return {"delivered": 0, "failed": 0, "inFlight": 0, "total": 0}
+
+
+def count_messages(messages: Iterable) -> dict:
+    """Pure: Twilio messages (anything with to/direction/status) -> outbound counts per channel.
+    inFlight = accepted/queued/sent with no final receipt yet."""
+    out = {"whatsapp": _empty(), "sms": _empty()}
+    for m in messages:
+        if not (m.direction or "").startswith("outbound"):
+            continue
+        bucket = out["whatsapp" if (m.to or "").startswith("whatsapp:") else "sms"]
+        status = (m.status or "").lower()
+        key = "delivered" if status in _DELIVERED else "failed" if status in _FAILED else "inFlight"
+        bucket[key] += 1
+        bucket["total"] += 1
+    return out
+
+
+def build_usage(twilio: dict, since: datetime) -> dict:
+    """Pure: the API payload. `twilio` is count_messages(...) or {"ok": False, "error": ...}."""
     return {
         "ok": True,
-        "source": "twilio",
         "period": "this_month",
-        "whatsapp": whatsapp,
-        "sms": {"outboundMessages": values["smsOutboundMessages"]},
+        "since": since.isoformat().replace("+00:00", "Z"),
+        "whatsappProvider": "meta" if os.getenv("WA_SENDER_PHONE_NUMBER_ID") else "none",
+        "whatsappLimit": _limit(),
+        "twilio": twilio if "ok" in twilio else {"ok": True, **twilio},
     }
 
 
@@ -91,10 +95,14 @@ def notification_usage() -> JSONResponse:
     now = time.monotonic()
     if _cache["payload"] is not None and now - _cache["at"] < CACHE_SECONDS:
         return JSONResponse(content=_cache["payload"], status_code=200)
+    since = month_start()
     try:
-        payload = build_usage(_twilio_client().usage.records.this_month.list())
-    except Exception as e:  # provider down / bad credentials: the screen degrades to our own counts
-        logger.warning("[notificationUsage] provider usage unavailable: %s", e)
-        return JSONResponse(content={"ok": False, "error": "No se pudo consultar el uso del proveedor."}, status_code=200)
-    _cache.update(at=now, payload=payload)
+        messages = _twilio_client().messages.list(date_sent_after=since, limit=MAX_MESSAGES, page_size=1000)
+        twilio = count_messages(messages)
+    except Exception as e:  # provider down / bad credentials: the rest of the card still works
+        logger.warning("[notificationUsage] twilio messages unavailable: %s", e)
+        twilio = {"ok": False, "error": "No se pudo consultar a Twilio."}
+    payload = build_usage(twilio, since)
+    if twilio.get("ok", True):
+        _cache.update(at=now, payload=payload)
     return JSONResponse(content=payload, status_code=200)

@@ -7,20 +7,22 @@ router = APIRouter()
 
 @router.get(
     "/notifications/usage",
-    summary="WhatsApp / SMS usage this month, as reported by the provider",
+    summary="Notification usage this month that only the providers know (Twilio counts + WhatsApp settings)",
     description="""
-Returns: { ok, source: "twilio", period: "this_month",
-           whatsapp: { outboundMessages, inboundMessages, conversations,
-                       freeConversations, billableConversations, price, priceUnit,
-                       limit|null, remaining|null },
-           sms: { outboundMessages } }
-or { ok: false, error } when the provider can't be reached.
+Returns: { ok: true, period: "this_month", since: ISO-UTC (Hermosillo month start),
+           whatsappProvider: "meta" | "none",
+           whatsappLimit: int | null,
+           twilio: { ok: true,
+                     whatsapp: { delivered, failed, inFlight, total },
+                     sms:      { delivered, failed, inFlight, total } }
+                 | { ok: false, error } }
 
-Read-only; cached 60 s. limit/remaining are only present when
-WHATSAPP_FREE_MONTHLY_LIMIT is configured. Counts come from Twilio's usage
-records, so messages the provider rejected are NOT counted (unlike
-dbo.notificationDispatches, which records acceptance). Messages sent directly
-through Meta's Cloud API are not included.
+Read-only; cached 60 s (a Twilio failure is not cached). Twilio numbers are the
+whole Twilio account (every company and direct ticket sends), counted from the
+Messages API by final status — not Usage Records, which skip unpriced messages.
+Meta WhatsApp and Push are not here: the screen counts them from
+dbo.notificationDispatches (Meta status webhooks set confirmed/failed; Notification
+Hub has no per-device receipt). whatsappLimit is WHATSAPP_FREE_MONTHLY_LIMIT.
 """,
 )
 def notifications_usage():
