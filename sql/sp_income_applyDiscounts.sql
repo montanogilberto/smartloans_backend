@@ -12,18 +12,26 @@
 --
 -- Line prices = SUM(choice price * option qty) per incomeDetails line, the
 -- same pricing sp_income's B2G1 engine used. Per line:
---   coupon_b2g1   pay qty - qty/2 (2x1) on lines of freeProductId, or all
---                 lines when NULL. firstPurchaseOnly = the client never earned
---                 POS points (the POS front's "first purchase" rule) and never
---                 used this coupon. Runs before this sale's points are earned.
---   free_product  one unit of freeProductId free, if units bought BEFORE this
---                 sale minus earlier redemptions of the item >= requiredUnits.
---   discount_*    $/% off the discounted total; debits the points balance.
--- The reward is redeemed here, linked to the sale (posRewardRedemptions.incomeId),
--- so a sale that never happened can't consume it. Anything not applicable
--- is returned in "rejected" and does not change the total.
--- Idempotent per sale: a sale with a redemption or a coupon already stamped
--- is returned as is.
+--   coupon_b2g1   2x1 = buy 2, pay 1: pay qty - FLOOR(qty/2) on lines of
+--                 freeProductId, or all lines when NULL. Pairs form within a
+--                 line (same product + options). firstPurchaseOnly = the
+--                 client has no other sale at this company (deleted sales
+--                 are gone from dbo.income, so they don't count).
+--   free_product  one unit of freeProductId free, if fn_posRewardStampStatus
+--                 (purchases before this sale, free units excluded) covers
+--                 requiredUnits.
+--   discount_*    $ (capped at the total) or % off the discounted total;
+--                 debits requiredPoints from the balance.
+-- Everything runs in one transaction under the client's rewards lock (the
+-- one sp_posRewardRedemptions_redeem takes), so concurrent sales can't spend
+-- the same points or stamps. The reward is redeemed here, linked to the sale
+-- (posRewardRedemptions.incomeId; a filtered unique index allows one applied
+-- reward per sale). Anything not applicable is returned in "rejected" and
+-- does not change the total. Idempotent per sale: a sale with a redemption
+-- or a coupon already stamped is returned as is.
+--
+-- Also writes incomeDetails.netAmount (net paid per line) for the points
+-- earned on the sale (2026-10-18b, earn as a % of what was paid).
 --
 -- Output:
 --   { "result": [{ "incomeId", "subtotal", "total", "discountAmount",
@@ -50,31 +58,39 @@ BEGIN
             RETURN;
         END
 
-        DECLARE @clientId INT, @oldTotal DECIMAL(10,2), @paymentMethod VARCHAR(50), @cashPaid DECIMAL(10,2),
-                @stampedCode VARCHAR(30);
-        SELECT @clientId = clientId, @oldTotal = total, @paymentMethod = paymentMethod, @cashPaid = cashPaid,
-               @stampedCode = promotionCode
-        FROM [dbo].[income] WHERE incomeId = @incomeId AND companyId = @companyId;
-
-        IF @oldTotal IS NULL
+        DECLARE @clientId INT = (SELECT clientId FROM [dbo].[income] WHERE incomeId = @incomeId AND companyId = @companyId);
+        IF @clientId IS NULL
         BEGIN
             SELECT '{"error":"incomeId not found for company"}' AS jsonResult;
             RETURN;
         END
+        DECLARE @isClient BIT = CASE WHEN @clientId <> 1 THEN 1 ELSE 0 END; -- 1 = walk-in
 
         DECLARE @rejected TABLE (catalogItemId INT NULL, code VARCHAR(30) NULL, reason VARCHAR(40));
         DECLARE @applied  TABLE (catalogItemId INT, rewardType NVARCHAR(20), discount DECIMAL(12,2));
+        DECLARE @lines    TABLE (incomeDetailId INT PRIMARY KEY, productId INT, qty INT, lineTotal DECIMAL(12,2), payQty INT);
+
+        BEGIN TRAN;
+        IF @isClient = 1
+        BEGIN
+            DECLARE @lockName NVARCHAR(255) = CONCAT(N'posRewards:', @companyId, N':', @clientId);
+            EXEC sp_getapplock @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000;
+        END
+
+        DECLARE @oldTotal DECIMAL(10,2), @paymentMethod VARCHAR(50), @cashPaid DECIMAL(10,2), @stampedCode VARCHAR(30);
+        SELECT @oldTotal = total, @paymentMethod = paymentMethod, @cashPaid = cashPaid, @stampedCode = promotionCode
+        FROM [dbo].[income] WITH (UPDLOCK) WHERE incomeId = @incomeId;
 
         IF @stampedCode IS NOT NULL OR EXISTS (SELECT 1 FROM [dbo].[posRewardRedemptions] WHERE incomeId = @incomeId)
         BEGIN
-            SELECT (SELECT @incomeId AS incomeId, @oldTotal AS total, i.discountAmount, i.promotionCode,
+            COMMIT;
+            SELECT (SELECT @incomeId AS incomeId, i.total, i.discountAmount, i.promotionCode,
                            CAST(1 AS BIT) AS alreadyApplied
                     FROM [dbo].[income] i WHERE i.incomeId = @incomeId
                     FOR JSON PATH, ROOT('result')) AS jsonResult;
             RETURN;
         END
 
-        DECLARE @lines TABLE (incomeDetailId INT PRIMARY KEY, productId INT, qty INT, lineTotal DECIMAL(12,2), payQty INT);
         INSERT INTO @lines (incomeDetailId, productId, qty, lineTotal, payQty)
         SELECT d.incomeDetailId, d.productId, CAST(ISNULL(d.quantity, 1) AS INT),
                CAST(ISNULL((SELECT SUM(CAST(c.price AS DECIMAL(10,2)) * ISNULL(ido.quantity, 1))
@@ -86,7 +102,6 @@ BEGIN
         WHERE d.incomeId = @incomeId;
 
         DECLARE @subtotal DECIMAL(12,2) = (SELECT ISNULL(SUM(lineTotal), 0) FROM @lines);
-        DECLARE @isClient BIT = CASE WHEN @clientId IS NOT NULL AND @clientId <> 1 THEN 1 ELSE 0 END; -- 1 = walk-in
 
         -- ── Coupon ──
         DECLARE @couponId INT = NULL, @couponProductId INT, @firstOnly BIT;
@@ -104,11 +119,9 @@ BEGIN
                 INSERT INTO @rejected (catalogItemId, code, reason) VALUES (@couponId, @couponCode, 'no_line_prices');
             ELSE IF @firstOnly = 1 AND @isClient = 0
                 INSERT INTO @rejected (catalogItemId, code, reason) VALUES (@couponId, @couponCode, 'needs_client');
-            ELSE IF @firstOnly = 1 AND (
-                    EXISTS (SELECT 1 FROM [dbo].[posRewardBalances]
-                            WHERE companyId = @companyId AND clientId = @clientId AND lifetimeEarned > 0)
-                    OR EXISTS (SELECT 1 FROM [dbo].[income]
-                               WHERE companyId = @companyId AND clientId = @clientId AND promotionId = @couponId AND incomeId <> @incomeId))
+            ELSE IF @firstOnly = 1 AND EXISTS (
+                    SELECT 1 FROM [dbo].[income]
+                    WHERE companyId = @companyId AND clientId = @clientId AND incomeId <> @incomeId)
                 INSERT INTO @rejected (catalogItemId, code, reason) VALUES (@couponId, @couponCode, 'not_first_purchase');
             ELSE IF NOT EXISTS (SELECT 1 FROM @lines WHERE qty > 1 AND (@couponProductId IS NULL OR productId = @couponProductId))
                 INSERT INTO @rejected (catalogItemId, code, reason) VALUES (@couponId, @couponCode, 'no_eligible_lines');
@@ -116,7 +129,9 @@ BEGIN
             BEGIN
                 UPDATE @lines SET payQty = qty - qty / 2
                 WHERE qty > 0 AND (@couponProductId IS NULL OR productId = @couponProductId);
-                INSERT INTO @applied (catalogItemId, rewardType, discount) VALUES (@couponId, 'coupon_b2g1', 0);
+                INSERT INTO @applied (catalogItemId, rewardType, discount)
+                SELECT @couponId, 'coupon_b2g1', ISNULL(SUM(lineTotal - ROUND(lineTotal * (qty - qty / 2) / qty, 2)), 0)
+                FROM @lines WHERE qty > 0 AND (@couponProductId IS NULL OR productId = @couponProductId);
             END
             IF NOT EXISTS (SELECT 1 FROM @applied WHERE catalogItemId = @couponId) SET @couponId = NULL;
         END
@@ -129,20 +144,16 @@ BEGIN
         INSERT INTO @rejected (catalogItemId, reason) SELECT catalogItemId, 'one_reward_per_sale' FROM @rewardIds WHERE seq > 1;
 
         DECLARE @rewardId INT = (SELECT catalogItemId FROM @rewardIds WHERE seq = 1);
-        DECLARE @rewardType NVARCHAR(20), @requiredPoints DECIMAL(12,2), @requiredUnits DECIMAL(12,2),
-                @discountValue DECIMAL(12,2), @freeProductId INT, @pointsDiscount DECIMAL(12,2) = 0, @redeemReward BIT = 0;
+        DECLARE @rewardType NVARCHAR(20), @requiredPoints DECIMAL(12,2), @discountValue DECIMAL(12,2),
+                @freeProductId INT, @freeLine INT, @redeemReward BIT = 0;
         IF @rewardId IS NOT NULL
         BEGIN
-            SELECT @rewardType = c.rewardType, @requiredPoints = c.requiredPoints, @discountValue = c.discountValue,
-                   @freeProductId = c.freeProductId,
-                   @requiredUnits = COALESCE(c.requiredUnits,
-                       CASE WHEN ISNULL(r.pointsPerUnit, 0) > 0 THEN c.requiredPoints / r.pointsPerUnit ELSE c.requiredPoints END)
-            FROM [dbo].[posRewardCatalogItems] c
-            OUTER APPLY (SELECT TOP 1 pr.pointsPerUnit FROM [dbo].[posRewardProductRates] pr
-                         WHERE pr.companyId = c.companyId AND pr.productId = c.freeProductId AND pr.isActive = 1) r
-            WHERE c.catalogItemId = @rewardId AND c.companyId = @companyId AND c.isActive = 1
-              AND (c.startAtUtc IS NULL OR c.startAtUtc <= @nowUtc)
-              AND (c.endAtUtc   IS NULL OR c.endAtUtc   >= @nowUtc);
+            SELECT @rewardType = rewardType, @requiredPoints = requiredPoints, @discountValue = discountValue,
+                   @freeProductId = freeProductId
+            FROM [dbo].[posRewardCatalogItems]
+            WHERE catalogItemId = @rewardId AND companyId = @companyId AND isActive = 1
+              AND (startAtUtc IS NULL OR startAtUtc <= @nowUtc)
+              AND (endAtUtc   IS NULL OR endAtUtc   >= @nowUtc);
 
             IF @rewardType IS NULL OR @rewardType = 'coupon_b2g1'
                 INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'invalid_or_inactive');
@@ -150,24 +161,14 @@ BEGIN
                 INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'needs_client');
             ELSE IF @rewardType = 'free_product'
             BEGIN
-                -- Same unit check as sp_posRewardRedemptions_redeem, counting
-                -- only purchases before this sale (the free unit is in it).
-                DECLARE @unitsBought DECIMAL(12,2) = ISNULL((
-                    SELECT SUM(d.quantity) FROM [dbo].[incomeDetails] d
-                    JOIN [dbo].[income] i ON i.incomeId = d.incomeId
-                    WHERE d.productId = @freeProductId AND i.clientId = @clientId AND i.companyId = @companyId
-                      AND i.incomeId <> @incomeId), 0);
-                DECLARE @priorRedemptions INT = (
-                    SELECT COUNT(*) FROM [dbo].[posRewardRedemptions]
-                    WHERE companyId = @companyId AND clientId = @clientId AND catalogItemId = @rewardId AND status = 'applied');
-                DECLARE @freeLine INT = (SELECT TOP 1 incomeDetailId FROM @lines
-                                         WHERE productId = @freeProductId AND payQty >= 1 ORDER BY incomeDetailId);
-
+                SET @freeLine = (SELECT TOP 1 incomeDetailId FROM @lines
+                                 WHERE productId = @freeProductId AND payQty >= 1 ORDER BY incomeDetailId);
                 IF @freeLine IS NULL
                     INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'product_not_in_sale');
                 ELSE IF @subtotal <= 0
                     INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'no_line_prices');
-                ELSE IF @unitsBought - @priorRedemptions * @requiredUnits < @requiredUnits
+                ELSE IF NOT EXISTS (SELECT 1 FROM [dbo].[fn_posRewardStampStatus](@companyId, @clientId, @incomeId)
+                                    WHERE catalogItemId = @rewardId AND unitsAvailable >= requiredUnits)
                     INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'insufficient_product_units');
                 ELSE
                 BEGIN
@@ -175,32 +176,30 @@ BEGIN
                     SET @redeemReward = 1;
                 END
             END
-            ELSE -- discount_fixed / discount_pct
-            BEGIN
-                DECLARE @balance DECIMAL(12,2) = ISNULL((SELECT balance FROM [dbo].[posRewardBalances]
-                                                         WHERE companyId = @companyId AND clientId = @clientId), 0);
-                IF @balance < @requiredPoints
-                    INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'insufficient_points');
-                ELSE
-                    SET @redeemReward = 1;
-            END
+            ELSE -- discount_fixed / discount_pct: debited below, only if the balance still covers it
+                SET @redeemReward = 1;
         END
 
-        -- ── New total ──
-        DECLARE @lineTotal DECIMAL(12,2) = (
-            SELECT ISNULL(SUM(CASE WHEN qty > 0 AND payQty < qty THEN ROUND(lineTotal * payQty / qty, 2) ELSE lineTotal END), 0)
-            FROM @lines);
+        -- ── Points debit: atomic, never below zero ──
+        DECLARE @pointsSpent DECIMAL(12,2) = 0, @newBalance DECIMAL(12,2);
         IF @redeemReward = 1 AND @rewardType IN ('discount_fixed', 'discount_pct')
         BEGIN
-            -- No line prices: the points discount comes off the total as charged.
-            DECLARE @base DECIMAL(12,2) = CASE WHEN @subtotal > 0 THEN @lineTotal ELSE @oldTotal END;
-            SET @pointsDiscount = CASE WHEN @rewardType = 'discount_fixed'
-                                       THEN CASE WHEN @discountValue < @base THEN @discountValue ELSE @base END
-                                       ELSE ROUND(@base * @discountValue / 100, 2) END;
+            UPDATE [dbo].[posRewardBalances]
+            SET balance = balance - @requiredPoints, lifetimeRedeemed = lifetimeRedeemed + @requiredPoints,
+                lastActivity = GETUTCDATE(), @newBalance = balance - @requiredPoints
+            WHERE companyId = @companyId AND clientId = @clientId AND balance >= @requiredPoints;
+            IF @@ROWCOUNT = 0
+            BEGIN
+                INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'insufficient_points');
+                SET @redeemReward = 0;
+            END
+            ELSE
+                SET @pointsSpent = @requiredPoints;
         END
 
         IF @couponId IS NULL AND @redeemReward = 0
         BEGIN
+            COMMIT;
             SELECT (SELECT @incomeId AS incomeId, @subtotal AS subtotal, @oldTotal AS total, CAST(0 AS DECIMAL(12,2)) AS discountAmount,
                            CAST(NULL AS VARCHAR(30)) AS promotionCode,
                            JSON_QUERY('[]') AS applied,
@@ -209,41 +208,36 @@ BEGIN
             RETURN;
         END
 
+        -- ── New total ──
+        DECLARE @lineTotal DECIMAL(12,2) = (
+            SELECT ISNULL(SUM(CASE WHEN qty > 0 AND payQty < qty THEN ROUND(lineTotal * payQty / qty, 2) ELSE lineTotal END), 0)
+            FROM @lines);
+        -- No line prices: discounts come off the total as charged.
+        DECLARE @base DECIMAL(12,2) = CASE WHEN @subtotal > 0 THEN @lineTotal ELSE @oldTotal END;
         DECLARE @gross DECIMAL(12,2) = CASE WHEN @subtotal > 0 THEN @subtotal ELSE @oldTotal END;
-        DECLARE @newTotal DECIMAL(12,2) = (CASE WHEN @subtotal > 0 THEN @lineTotal ELSE @oldTotal END) - @pointsDiscount;
+        DECLARE @pointsDiscount DECIMAL(12,2) = 0;
+        IF @pointsSpent > 0
+            SET @pointsDiscount = CASE WHEN @rewardType = 'discount_fixed'
+                                       THEN CASE WHEN @discountValue < @base THEN @discountValue ELSE @base END
+                                       ELSE ROUND(@base * @discountValue / 100, 2) END;
+        DECLARE @newTotal DECIMAL(12,2) = @base - @pointsDiscount;
         IF @newTotal < 0 SET @newTotal = 0;
         DECLARE @discountAmount DECIMAL(12,2) = CASE WHEN @gross > @newTotal THEN @gross - @newTotal ELSE 0 END;
         DECLARE @cashReturn DECIMAL(10,2) = CASE WHEN ISNULL(@cashPaid, 0) > @newTotal THEN ISNULL(@cashPaid, 0) - @newTotal ELSE 0 END;
         DECLARE @isCash BIT = CASE WHEN LOWER(@paymentMethod) IN ('cash', 'efectivo') THEN 1 ELSE 0 END;
 
-        IF @couponId IS NOT NULL
-            UPDATE @applied SET discount = (
-                SELECT ISNULL(SUM(lineTotal - ROUND(lineTotal * (qty - qty / 2) / qty, 2)), 0)
-                FROM @lines WHERE qty > 0 AND (@couponProductId IS NULL OR productId = @couponProductId))
-            WHERE catalogItemId = @couponId;
-
-        BEGIN TRAN;
-
         IF @redeemReward = 1
         BEGIN
-            DECLARE @pointsSpent DECIMAL(12,2) = CASE WHEN @rewardType = 'free_product' THEN 0 ELSE @requiredPoints END;
             INSERT INTO [dbo].[posRewardRedemptions]
                 (companyId, clientId, catalogItemId, pointsSpent, status, incomeId, redeemedByUserId)
             VALUES (@companyId, @clientId, @rewardId, @pointsSpent, 'applied', @incomeId, ISNULL(@userId, 0));
             DECLARE @redemptionId INT = SCOPE_IDENTITY();
 
             IF @pointsSpent > 0
-            BEGIN
-                DECLARE @negPoints DECIMAL(12,2) = -@pointsSpent, @newBalance DECIMAL(12,2);
-                EXEC [dbo].[sp_posRewardBalances_applyDelta]
-                    @companyId = @companyId, @clientId = @clientId,
-                    @pointsDelta = @negPoints, @earnedDelta = 0, @redeemedDelta = @pointsSpent,
-                    @newBalance = @newBalance OUTPUT;
                 INSERT INTO [dbo].[posRewardTransactions]
                     (companyId, clientId, txType, direction, points, referenceType, referenceId, balanceAfter, description)
                 VALUES (@companyId, @clientId, 'REDEEM', 'D', @pointsSpent, 'redemption', @redemptionId, @newBalance,
                         CONCAT('Canje #', @redemptionId, ' en venta #', @incomeId));
-            END
 
             INSERT INTO @applied (catalogItemId, rewardType, discount)
             VALUES (@rewardId, @rewardType,
@@ -259,6 +253,18 @@ BEGIN
             promotionCode  = CASE WHEN @couponId IS NOT NULL THEN @couponCode ELSE promotionCode END,
             cashReturn     = CASE WHEN @isCash = 1 THEN @cashReturn ELSE cashReturn END
         WHERE incomeId = @incomeId;
+
+        -- Net paid per line (after the coupon, the free unit and a share of the
+        -- points discount): what sp_posRewardTransactions_earnFromTicket earns
+        -- on for companies with posRewardSettings.earnPct.
+        IF @subtotal > 0
+            UPDATE d SET netAmount = CASE WHEN @lineTotal > 0
+                                          THEN lv.paid - ROUND(@pointsDiscount * lv.paid / @lineTotal, 2)
+                                          ELSE 0 END
+            FROM [dbo].[incomeDetails] d
+            JOIN (SELECT incomeDetailId,
+                         CASE WHEN qty > 0 AND payQty < qty THEN ROUND(lineTotal * payQty / qty, 2) ELSE lineTotal END AS paid
+                  FROM @lines) lv ON lv.incomeDetailId = d.incomeDetailId;
 
         UPDATE [dbo].[cashRegisterMovements] SET
             amount     = @newTotal,

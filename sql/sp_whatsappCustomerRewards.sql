@@ -61,8 +61,8 @@ BEGIN
         WHERE companyId = @companyId AND clientId = @clientId;
 
         -- Points rewards are judged on the balance; stamp cards (free_product)
-        -- on units bought of that product — the check
-        -- sp_posRewardRedemptions_redeem runs. Coupons are typed at checkout,
+        -- on units bought of that product (fn_posRewardStampStatus, the rule
+        -- the POS redeems with). Coupons are typed at checkout,
         -- not redeemed, so they're not listed here (see get_promotions).
         DECLARE @redeemable NVARCHAR(MAX) = (
             SELECT s.name, s.rewardType, s.requiredPoints, s.discountValue, s.description,
@@ -71,22 +71,10 @@ BEGIN
                              WHEN s.requiredPoints <= ISNULL(@balance, 0) THEN 1 ELSE 0 END AS BIT) AS canRedeemNow
             FROM (
                 SELECT c.name, c.rewardType, c.requiredPoints, c.discountValue, c.description,
-                       u.requiredUnits,
-                       CASE WHEN c.rewardType = 'free_product' THEN
-                           CAST(ISNULL((SELECT SUM(d.quantity) FROM [dbo].[incomeDetails] d
-                                        JOIN [dbo].[income] i ON i.incomeId = d.incomeId
-                                        WHERE d.productId = c.freeProductId AND i.clientId = @clientId
-                                          AND i.companyId = @companyId), 0) AS DECIMAL(12,2))
-                           - (SELECT COUNT(*) FROM [dbo].[posRewardRedemptions] rd
-                              WHERE rd.companyId = @companyId AND rd.clientId = @clientId
-                                AND rd.catalogItemId = c.catalogItemId AND rd.status = 'applied') * u.requiredUnits
-                       END AS unitsAvailable
+                       st.requiredUnits, st.unitsAvailable
                 FROM [dbo].[posRewardCatalogItems] c
-                OUTER APPLY (SELECT TOP 1 pr.pointsPerUnit FROM [dbo].[posRewardProductRates] pr
-                             WHERE pr.companyId = c.companyId AND pr.productId = c.freeProductId AND pr.isActive = 1) r
-                CROSS APPLY (SELECT CASE WHEN c.rewardType = 'free_product' THEN CAST(COALESCE(c.requiredUnits,
-                                    CASE WHEN ISNULL(r.pointsPerUnit, 0) > 0 THEN c.requiredPoints / r.pointsPerUnit
-                                         ELSE c.requiredPoints END) AS DECIMAL(12,2)) END AS requiredUnits) u
+                LEFT JOIN [dbo].[fn_posRewardStampStatus](@companyId, @clientId, NULL) st
+                       ON st.catalogItemId = c.catalogItemId
                 WHERE c.companyId = @companyId AND c.isActive = 1 AND c.rewardType <> 'coupon_b2g1'
             ) s
             ORDER BY CASE WHEN s.rewardType = 'free_product' THEN 0 ELSE 1 END, s.requiredPoints, s.name

@@ -63,6 +63,14 @@ class DeleteReversalTest(unittest.TestCase):
         # a delete never posts a sale, a commission or earns points
         post_income.assert_not_called(); post_commission.assert_not_called(); earn.assert_not_called()
 
+    def test_delete_gives_back_the_reward_before_taking_back_points(self):
+        conn, *_ = self._run(
+            {"income": [{"action": 2, "incomeId": 4320}]}, [("4320", "Deleted Successfully", "0")])
+        procs = [sql for (sql, _) in conn.log if "reverse" in sql.lower()]
+        self.assertEqual(len(procs), 2)
+        self.assertIn("sp_posRewardRedemptions_reverseForIncome", procs[0])
+        self.assertIn("sp_income_reverseOnDelete", procs[1])
+
     def test_failed_delete_does_not_reverse(self):
         conn, *_ = self._run({"income": [{"action": 2, "incomeId": 4320}]}, [("", "incomeId required", "1")])
         self.assertEqual(self._reverse_calls(conn), [])

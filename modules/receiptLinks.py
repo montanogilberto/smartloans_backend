@@ -86,7 +86,8 @@ def sas_url(receipt_url: str) -> str:
     return f"{service.url.rstrip('/')}/{container}/{blob_path}?{token}"
 
 
-def summary_page(income_id: int, total: float | None, discount: float | None) -> str:
+def summary_page(income_id: int, total: float | None, discount: float | None,
+                 rewards_lines: list[str] | None = None) -> str:
     """Shown while the detailed receipt isn't uploaded yet (it is generated
     when the cashier prints the ticket)."""
     rows = [f"<p>Folio: <strong>{income_id}</strong></p>"]
@@ -94,6 +95,8 @@ def summary_page(income_id: int, total: float | None, discount: float | None) ->
         rows.append(f"<p>Total: <strong>${total:,.2f} MXN</strong></p>")
     if isinstance(discount, (int, float)) and discount > 0:
         rows.append(f"<p>Descuento aplicado: -${discount:,.2f} MXN</p>")
+    if rewards_lines:
+        rows.append('<div class="rewards">' + "".join(f"<p>{html.escape(line)}</p>" for line in rewards_lines) + "</div>")
     body = "\n".join(rows)
     return f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
@@ -101,7 +104,8 @@ def summary_page(income_id: int, total: float | None, discount: float | None) ->
 <meta name="robots" content="noindex">
 <title>Tu compra</title>
 <style>body{{font-family:system-ui,sans-serif;max-width:420px;margin:40px auto;padding:0 16px;color:#222}}
-h1{{font-size:20px}}p{{font-size:16px;margin:8px 0}}.note{{color:#666;font-size:14px;margin-top:24px}}</style>
+h1{{font-size:20px}}p{{font-size:16px;margin:8px 0}}.note{{color:#666;font-size:14px;margin-top:24px}}
+.rewards{{margin-top:16px;padding:12px;border-radius:8px;background:#eef7ee}}.rewards p{{font-size:15px;margin:4px 0}}</style>
 </head><body>
 <h1>Gracias por tu compra</h1>
 {body}

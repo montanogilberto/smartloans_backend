@@ -146,6 +146,56 @@ IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_posRewardRedemptions_c
 GO
 
 -- ============================================================
+-- fn_posRewardStampStatus — THE stamp-card rule, used by every SP that
+-- decides or shows whether a free_product reward can be redeemed
+-- (redeem, sp_income_applyDiscounts, FreeProductStatus, ProductCounts,
+-- sp_whatsappCustomerRewards). Per free_product catalog item of a client:
+--   requiredUnits  = catalog requiredUnits; legacy rows: requiredPoints /
+--                    pointsPerUnit (active rate), else requiredPoints
+--   unitsPurchased = units of freeProductId bought at this company, minus the
+--                    free units given in sales (one per applied redemption
+--                    linked to a sale) — a free unit is not a purchase
+--   unitsAvailable = unitsPurchased - applied redemptions of the item * requiredUnits
+-- Cancelled redemptions consume nothing. @excludeIncomeId leaves one sale out
+-- (the sale being priced: its units can't earn its own free unit).
+-- Redemptions with no sale (old Rewards Dashboard) gave no unit through a
+-- ticket, so they only consume requiredUnits.
+-- ============================================================
+IF OBJECT_ID('dbo.fn_posRewardStampStatus', 'IF') IS NOT NULL DROP FUNCTION dbo.fn_posRewardStampStatus;
+GO
+CREATE FUNCTION [dbo].[fn_posRewardStampStatus] (@companyId INT, @clientId INT, @excludeIncomeId INT)
+RETURNS TABLE
+AS
+RETURN
+    SELECT c.catalogItemId, c.freeProductId, c.isActive, u.requiredUnits,
+           b.unitsBought - f.freeUnits AS unitsPurchased,
+           b.unitsBought - f.freeUnits - r.redemptions * u.requiredUnits AS unitsAvailable
+    FROM [dbo].[posRewardCatalogItems] c
+    OUTER APPLY (SELECT TOP 1 pr.pointsPerUnit FROM [dbo].[posRewardProductRates] pr
+                 WHERE pr.companyId = c.companyId AND pr.productId = c.freeProductId AND pr.isActive = 1) rt
+    CROSS APPLY (SELECT CAST(COALESCE(c.requiredUnits,
+                     CASE WHEN ISNULL(rt.pointsPerUnit, 0) > 0 THEN c.requiredPoints / rt.pointsPerUnit
+                          ELSE c.requiredPoints END) AS DECIMAL(12,2)) AS requiredUnits) u
+    CROSS APPLY (SELECT CAST(ISNULL(SUM(d.quantity), 0) AS DECIMAL(12,2)) AS unitsBought
+                 FROM [dbo].[incomeDetails] d
+                 JOIN [dbo].[income] i ON i.incomeId = d.incomeId
+                 WHERE d.productId = c.freeProductId AND i.clientId = @clientId AND i.companyId = @companyId
+                   AND (@excludeIncomeId IS NULL OR i.incomeId <> @excludeIncomeId)) b
+    CROSS APPLY (SELECT COUNT(*) AS freeUnits
+                 FROM [dbo].[posRewardRedemptions] rd
+                 JOIN [dbo].[posRewardCatalogItems] fc ON fc.catalogItemId = rd.catalogItemId
+                 JOIN [dbo].[income] fi ON fi.incomeId = rd.incomeId AND fi.companyId = @companyId
+                 WHERE rd.companyId = @companyId AND rd.clientId = @clientId AND rd.status = 'applied'
+                   AND fc.rewardType = 'free_product' AND fc.freeProductId = c.freeProductId
+                   AND (@excludeIncomeId IS NULL OR rd.incomeId <> @excludeIncomeId)) f
+    CROSS APPLY (SELECT COUNT(*) AS redemptions
+                 FROM [dbo].[posRewardRedemptions] rd
+                 WHERE rd.companyId = @companyId AND rd.clientId = @clientId
+                   AND rd.catalogItemId = c.catalogItemId AND rd.status = 'applied') r
+    WHERE c.companyId = @companyId AND c.rewardType = 'free_product' AND c.freeProductId IS NOT NULL;
+GO
+
+-- ============================================================
 -- sp_posRewardBalances_applyDelta — internal helper, not routed.
 -- Upserts a client's balance inside the CALLER's transaction (no
 -- BEGIN/COMMIT here) so earn/adjust/redeem stay atomic with their
@@ -343,6 +393,11 @@ BEGIN
             -- screens, menuLaundy and the sale message list what a client can
             -- redeem, and a coupon is typed at checkout instead.
             DECLARE @includeCoupons BIT = ISNULL(TRY_CONVERT(BIT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].includeCoupons')), 0);
+            -- With clientId, first-purchase coupons are left out once that client
+            -- has a sale at this company (the rule sp_income_applyDiscounts applies).
+            DECLARE @forClientId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.posRewardCatalogItems[0].clientId'));
+            DECLARE @clientHasSale BIT = CASE WHEN @forClientId IS NOT NULL AND EXISTS (
+                SELECT 1 FROM [dbo].[income] WHERE companyId = @companyId AND clientId = @forClientId) THEN 1 ELSE 0 END;
             DECLARE @itemsJson NVARCHAR(MAX) = (
                 SELECT catalogItemId, companyId, name, rewardType, requiredPoints,
                        discountValue, freeProductId, isActive, description,
@@ -352,6 +407,7 @@ BEGIN
                 WHERE companyId = @companyId
                   AND (@activeOnly IS NULL OR @activeOnly = 0 OR isActive = 1)
                   AND (@includeCoupons = 1 OR rewardType <> 'coupon_b2g1')
+                  AND NOT (rewardType = 'coupon_b2g1' AND firstPurchaseOnly = 1 AND @clientHasSale = 1)
                 ORDER BY requiredPoints
                 FOR JSON PATH
             );
@@ -515,6 +571,10 @@ GO
 -- call for an already-posted ticket returns the existing result
 -- instead of erroring or double-posting (UQ_posRewardTransactions_ticket
 -- would otherwise raise a duplicate-key error under a race).
+-- Points: companies with posRewardSettings.earnPct earn that % of the net
+-- paid on eligible lines (incomeDetails.netAmount); the rest earn
+-- pointsPerUnit * units. Either way only products with an active rate earn,
+-- and free units earn nothing. Needs migration 2026-10-18b.
 -- ============================================================
 IF OBJECT_ID('dbo.sp_posRewardTransactions_earnFromTicket', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_posRewardTransactions_earnFromTicket;
 GO
@@ -563,13 +623,56 @@ BEGIN
         END
 
         -- Server-side calculation ONLY: never trust points from the frontend.
-        DECLARE @points DECIMAL(12,2) = (
-            SELECT SUM(r.pointsPerUnit * d.quantity)
+        -- A product earns only if it has an active posRewardProductRates row.
+        DECLARE @earnPct DECIMAL(5,2) = (SELECT earnPct FROM [dbo].[posRewardSettings] WHERE companyId = @companyId);
+        DECLARE @points DECIMAL(12,2);
+        IF @earnPct IS NOT NULL
+        BEGIN
+            -- % of the net paid on eligible lines (GMO Lavandería: 2.5%, 1 pt = $1).
+            -- netAmount is written by sp_income_applyDiscounts when the sale had
+            -- a discount; otherwise income.total is split by line price (option
+            -- prices), or by quantity when the lines have no option prices.
+            DECLARE @saleTotal DECIMAL(12,2) = (SELECT total FROM [dbo].[income] WHERE incomeId = @incomeId);
+            DECLARE @lines TABLE (productId INT, qty INT, price DECIMAL(12,2), netAmount DECIMAL(12,2));
+            INSERT INTO @lines (productId, qty, price, netAmount)
+            SELECT d.productId, ISNULL(d.quantity, 1),
+                   ISNULL((SELECT SUM(CAST(c.price AS DECIMAL(10,2)) * ISNULL(ido.quantity, 1))
+                           FROM [dbo].[incomeDetailOptions] ido
+                           JOIN [dbo].[productOptionChoices] c ON c.productOptionChoiceId = ido.productOptionChoiceId
+                           WHERE ido.incomeDetailId = d.incomeDetailId), 0),
+                   d.netAmount
             FROM [dbo].[incomeDetails] d
-            JOIN [dbo].[posRewardProductRates] r
-                ON r.productId = d.productId AND r.companyId = @companyId AND r.isActive = 1
-            WHERE d.incomeId = @incomeId
-        );
+            WHERE d.incomeId = @incomeId;
+            DECLARE @sumPrice DECIMAL(12,2) = (SELECT SUM(price) FROM @lines);
+            DECLARE @sumQty INT = (SELECT SUM(qty) FROM @lines);
+
+            SET @points = ROUND((
+                SELECT SUM(COALESCE(l.netAmount,
+                                    CASE WHEN @sumPrice > 0 THEN @saleTotal * l.price / @sumPrice
+                                         ELSE @saleTotal * l.qty / NULLIF(@sumQty, 0) END))
+                FROM @lines l
+                WHERE EXISTS (SELECT 1 FROM [dbo].[posRewardProductRates] r
+                              WHERE r.productId = l.productId AND r.companyId = @companyId AND r.isActive = 1)
+            ) * @earnPct / 100, 2);
+        END
+        ELSE
+            -- Points per unit. Free units (a stamp-card reward redeemed in this
+            -- sale) earn nothing.
+            SET @points = (
+                SELECT SUM(r.pointsPerUnit * CASE WHEN p.qty > p.freeUnits THEN p.qty - p.freeUnits ELSE 0 END)
+                FROM (
+                    SELECT d.productId, SUM(d.quantity) AS qty,
+                           (SELECT COUNT(*) FROM [dbo].[posRewardRedemptions] rd
+                            JOIN [dbo].[posRewardCatalogItems] c ON c.catalogItemId = rd.catalogItemId
+                            WHERE rd.incomeId = @incomeId AND rd.status = 'applied'
+                              AND c.rewardType = 'free_product' AND c.freeProductId = d.productId) AS freeUnits
+                    FROM [dbo].[incomeDetails] d
+                    WHERE d.incomeId = @incomeId
+                    GROUP BY d.productId
+                ) p
+                JOIN [dbo].[posRewardProductRates] r
+                    ON r.productId = p.productId AND r.companyId = @companyId AND r.isActive = 1
+            );
 
         IF @points IS NULL OR @points <= 0
         BEGIN
@@ -730,9 +833,8 @@ BEGIN
         IF @companyId IS NULL OR @clientId IS NULL OR @catalogItemId IS NULL OR @redeemedByUserId IS NULL
             RAISERROR('companyId, clientId, catalogItemId y redeemedByUserId son requeridos.', 16, 1);
 
-        DECLARE @requiredPoints DECIMAL(12,2), @rewardType NVARCHAR(30), @freeProductId INT, @catalogUnits DECIMAL(12,2);
-        SELECT @requiredPoints = requiredPoints, @rewardType = rewardType, @freeProductId = freeProductId,
-               @catalogUnits = requiredUnits
+        DECLARE @requiredPoints DECIMAL(12,2), @rewardType NVARCHAR(30), @freeProductId INT;
+        SELECT @requiredPoints = requiredPoints, @rewardType = rewardType, @freeProductId = freeProductId
         FROM [dbo].[posRewardCatalogItems]
         WHERE catalogItemId = @catalogItemId AND companyId = @companyId AND isActive = 1;
 
@@ -741,68 +843,44 @@ BEGIN
         IF @rewardType = 'coupon_b2g1'
             RAISERROR('Los cupones se aplican con la venta (promotionCode), no se canjean.', 16, 1);
 
-        -- free_product rewards must be earned from THAT specific product, not
-        -- from the client's mixed, fungible points balance -- otherwise 3
-        -- cheap purchases across different products could fund one expensive
-        -- item's "free" reward. Units purchased/consumed are derived from
-        -- real ticket history (incomeDetails), no new tables needed: pointsPerUnit
-        -- converts the catalog item's point cost into a physical unit count for
-        -- this product, and each prior 'applied' redemption of this exact
-        -- catalogItemId is assumed to have consumed that many units.
-        IF @rewardType = 'free_product' AND @freeProductId IS NOT NULL
+        DECLARE @isFreeProduct BIT = CASE WHEN @rewardType = 'free_product' AND @freeProductId IS NOT NULL THEN 1 ELSE 0 END;
+
+        -- Check and consume under one per-client lock, so two concurrent
+        -- redemptions (or a redemption and a sale) can't spend the same points
+        -- or stamps. sp_income_applyDiscounts takes the same lock.
+        BEGIN TRAN;
+        DECLARE @lockName NVARCHAR(255) = CONCAT(N'posRewards:', @companyId, N':', @clientId);
+        EXEC sp_getapplock @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000;
+
+        -- free_product rewards are earned from THAT product's purchases
+        -- (fn_posRewardStampStatus), never from the points balance.
+        IF @isFreeProduct = 1
         BEGIN
-            DECLARE @pointsPerUnit DECIMAL(12,2) = (
-                SELECT pointsPerUnit FROM [dbo].[posRewardProductRates]
-                WHERE companyId = @companyId AND productId = @freeProductId AND isActive = 1
-            );
-            DECLARE @requiredUnits DECIMAL(12,2) = COALESCE(@catalogUnits, CASE
-                WHEN ISNULL(@pointsPerUnit, 0) > 0 THEN @requiredPoints / @pointsPerUnit
-                ELSE @requiredPoints
-            END);
+            DECLARE @requiredUnits DECIMAL(12,2), @unitsPurchased DECIMAL(12,2), @unitsAvailable DECIMAL(12,2);
+            SELECT @requiredUnits = requiredUnits, @unitsPurchased = unitsPurchased, @unitsAvailable = unitsAvailable
+            FROM [dbo].[fn_posRewardStampStatus](@companyId, @clientId, @incomeId)
+            WHERE catalogItemId = @catalogItemId;
 
-            DECLARE @unitsPurchased DECIMAL(12,2) = ISNULL((
-                SELECT SUM(d.quantity)
-                FROM [dbo].[incomeDetails] d
-                JOIN [dbo].[income] i ON i.incomeId = d.incomeId
-                WHERE d.productId = @freeProductId AND i.clientId = @clientId AND i.companyId = @companyId
-            ), 0);
-
-            DECLARE @priorRedemptions INT = (
-                SELECT COUNT(*) FROM [dbo].[posRewardRedemptions]
-                WHERE companyId = @companyId AND clientId = @clientId
-                    AND catalogItemId = @catalogItemId AND status = 'applied'
-            );
-            DECLARE @unitsAvailable DECIMAL(12,2) = @unitsPurchased - (@priorRedemptions * @requiredUnits);
-
-            IF @unitsAvailable < @requiredUnits
+            IF ISNULL(@unitsAvailable, 0) < ISNULL(@requiredUnits, 0) OR @requiredUnits IS NULL
             BEGIN
-                SELECT ('{"error":"insufficient_product_units","required":' + CONVERT(NVARCHAR(30), @requiredUnits) +
-                    ',"purchased":' + CONVERT(NVARCHAR(30), @unitsPurchased) +
-                    ',"available":' + CONVERT(NVARCHAR(30), @unitsAvailable) + '}') AS [jsonResult]
+                ROLLBACK TRAN;
+                SELECT ('{"error":"insufficient_product_units","required":' + CONVERT(NVARCHAR(30), ISNULL(@requiredUnits, 0)) +
+                    ',"purchased":' + CONVERT(NVARCHAR(30), ISNULL(@unitsPurchased, 0)) +
+                    ',"available":' + CONVERT(NVARCHAR(30), ISNULL(@unitsAvailable, 0)) + '}') AS [jsonResult]
                 RETURN;
             END
         END
 
         DECLARE @currentBalance DECIMAL(12,2) = ISNULL(
-            (SELECT balance FROM [dbo].[posRewardBalances] WHERE companyId = @companyId AND clientId = @clientId), 0);
-
-        -- free_product rewards are earned from that product's own purchase
-        -- history (checked above via @unitsAvailable/@requiredUnits) -- they
-        -- never draw from the client's points balance, which is a separate
-        -- currency entirely. Gating/deducting points here too (the bug this
-        -- replaces) meant a client could pass the product-eligibility check
-        -- and still be rejected as "insufficient_points", or have an
-        -- unrelated points balance silently drained for a reward they'd
-        -- already earned with real purchases.
-        DECLARE @isFreeProduct BIT = CASE WHEN @rewardType = 'free_product' AND @freeProductId IS NOT NULL THEN 1 ELSE 0 END;
+            (SELECT balance FROM [dbo].[posRewardBalances] WITH (UPDLOCK)
+             WHERE companyId = @companyId AND clientId = @clientId), 0);
 
         IF @isFreeProduct = 0 AND @currentBalance < @requiredPoints
         BEGIN
+            ROLLBACK TRAN;
             SELECT ('{"error":"insufficient_points","balance":' + CONVERT(NVARCHAR(30), @currentBalance) + '}') AS [jsonResult]
             RETURN;
         END
-
-        BEGIN TRAN;
 
         DECLARE @pointsSpent DECIMAL(12,2) = CASE WHEN @isFreeProduct = 1 THEN 0 ELSE @requiredPoints END;
 
@@ -846,8 +924,8 @@ GO
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- sp_posRewardProductCounts
--- Returns available units per rewardable product for a client.
--- "Available" = total purchased - units consumed by applied redemptions.
+-- Returns available units per stamp-card product for a client
+-- (fn_posRewardStampStatus): purchased (free units excluded) - consumed.
 -- Used by the stamp-card UI to show accurate per-product progress.
 -- Input:  { "posRewardProductCounts": [{ "companyId": int, "clientId": int }] }
 -- Output: { "result": [{ "posRewardProductCounts": [{ "productId", "unitsPurchased", "unitsConsumed", "unitsAvailable" }] }] }
@@ -869,39 +947,16 @@ BEGIN
             RETURN;
         END
 
-        -- Units purchased per product
-        -- Note: income.companyId is not filtered here — the earn SP also omits it
-        -- when summing incomeDetails (see lines 503-508 of sp_posRewardTransactions_earnFromTicket).
-        -- We scope to the client and restrict products to those with active rates for this company.
-        ;WITH purchased AS (
-            SELECT d.productId, SUM(d.quantity) AS unitsPurchased
-            FROM [dbo].[incomeDetails] d
-            JOIN [dbo].[income] i ON i.incomeId = d.incomeId
-            WHERE i.clientId = @clientId
-            GROUP BY d.productId
-        ),
-        -- Units consumed by applied redemptions per catalog item
-        consumed AS (
-            SELECT c.freeProductId AS productId,
-                   COUNT(*) * ISNULL(c.requiredUnits, c.requiredPoints / ISNULL(r.pointsPerUnit, 1)) AS unitsConsumed
-            FROM [dbo].[posRewardRedemptions] rd
-            JOIN [dbo].[posRewardCatalogItems] c ON c.catalogItemId = rd.catalogItemId
-            LEFT JOIN [dbo].[posRewardProductRates] r
-                ON r.companyId = @companyId AND r.productId = c.freeProductId AND r.isActive = 1
-            WHERE rd.companyId = @companyId AND rd.clientId = @clientId AND rd.status = 'applied'
-              AND c.rewardType = 'free_product' AND c.freeProductId IS NOT NULL
-            GROUP BY c.freeProductId, c.requiredUnits, c.requiredPoints, r.pointsPerUnit
-        )
+        -- Same rule as redeem / checkout (fn_posRewardStampStatus): purchases
+        -- at this company, free units excluded, applied redemptions consumed.
+        -- One row per stamp-card product (items of the same product add up).
         SELECT (
-            SELECT
-                p.productId,
-                p.unitsPurchased,
-                ISNULL(con.unitsConsumed, 0) AS unitsConsumed,
-                p.unitsPurchased - ISNULL(con.unitsConsumed, 0) AS unitsAvailable
-            FROM purchased p
-            JOIN [dbo].[posRewardProductRates] pr
-                ON pr.companyId = @companyId AND pr.productId = p.productId AND pr.isActive = 1
-            LEFT JOIN consumed con ON con.productId = p.productId
+            SELECT st.freeProductId AS productId,
+                   MAX(st.unitsPurchased) AS unitsPurchased,
+                   SUM(st.unitsPurchased - st.unitsAvailable) AS unitsConsumed,
+                   MAX(st.unitsPurchased) - SUM(st.unitsPurchased - st.unitsAvailable) AS unitsAvailable
+            FROM [dbo].[fn_posRewardStampStatus](@companyId, @clientId, NULL) st
+            GROUP BY st.freeProductId
             FOR JSON PATH, ROOT('posRewardProductCounts')
         ) AS [jsonResult];
 
@@ -910,5 +965,78 @@ BEGIN
         DECLARE @Error NVARCHAR(500) = ERROR_MESSAGE();
         SELECT ('{"error":"' + REPLACE(@Error, '"', '\"') + '"}') AS [jsonResult]
     END CATCH
+END
+GO
+
+-- ============================================================
+-- sp_posRewardRedemptions_reverseForIncome — a deleted sale gives back the
+-- reward it used: its applied redemptions become 'cancelled' (the stamp-card
+-- units count again, fn_posRewardStampStatus ignores cancelled rows) and any
+-- points spent are credited back with an ADJUSTMENT/C row pointing at the
+-- redemption. Nothing is deleted. Idempotent: only 'applied' rows change.
+-- Called by modules/income.py after sp_income action 2, BEFORE
+-- sp_income_reverseOnDelete (so taking back the sale's earned points sees
+-- the refunded balance). Refuses while the sale still exists.
+-- Input:  @incomeId INT
+-- Output: one row (redemptionsCancelled, pointsRefunded)
+-- ============================================================
+IF OBJECT_ID('dbo.sp_posRewardRedemptions_reverseForIncome', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_posRewardRedemptions_reverseForIncome;
+GO
+CREATE PROCEDURE [dbo].[sp_posRewardRedemptions_reverseForIncome]
+    @incomeId INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF EXISTS (SELECT 1 FROM [dbo].[income] WHERE incomeId = @incomeId)
+    BEGIN
+        RAISERROR('La venta todavía existe; solo se revierten canjes de ventas eliminadas.', 16, 1);
+        RETURN;
+    END
+
+    DECLARE @cancelled INT = 0, @refunded DECIMAL(12,2) = 0;
+    DECLARE @rid INT, @companyId INT, @clientId INT, @points DECIMAL(12,2), @newBalance DECIMAL(12,2);
+
+    BEGIN TRY
+        BEGIN TRAN;
+        DECLARE reds CURSOR LOCAL FAST_FORWARD FOR
+            SELECT redemptionId, companyId, clientId, pointsSpent
+            FROM [dbo].[posRewardRedemptions]
+            WHERE incomeId = @incomeId AND status = 'applied';
+        OPEN reds;
+        FETCH NEXT FROM reds INTO @rid, @companyId, @clientId, @points;
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            DECLARE @lockName NVARCHAR(255) = CONCAT(N'posRewards:', @companyId, N':', @clientId);
+            EXEC sp_getapplock @Resource = @lockName, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000;
+
+            UPDATE [dbo].[posRewardRedemptions] SET status = 'cancelled'
+            WHERE redemptionId = @rid AND status = 'applied';
+            SET @cancelled += 1;
+
+            IF @points > 0
+            BEGIN
+                DECLARE @negPoints DECIMAL(12,2) = -@points;
+                EXEC [dbo].[sp_posRewardBalances_applyDelta]
+                    @companyId = @companyId, @clientId = @clientId,
+                    @pointsDelta = @points, @earnedDelta = 0, @redeemedDelta = @negPoints,
+                    @newBalance = @newBalance OUTPUT;
+                INSERT INTO [dbo].[posRewardTransactions]
+                    (companyId, clientId, txType, direction, points, referenceType, referenceId, balanceAfter, description)
+                VALUES (@companyId, @clientId, 'ADJUSTMENT', 'C', @points, 'redemption', @rid, @newBalance,
+                        CONCAT('Reversa canje #', @rid, ' (venta #', @incomeId, ' eliminada)'));
+                SET @refunded += @points;
+            END
+            FETCH NEXT FROM reds INTO @rid, @companyId, @clientId, @points;
+        END
+        CLOSE reds;
+        DEALLOCATE reds;
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK;
+        THROW;
+    END CATCH
+
+    SELECT @cancelled AS redemptionsCancelled, @refunded AS pointsRefunded;
 END
 GO

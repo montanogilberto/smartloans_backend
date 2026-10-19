@@ -87,6 +87,15 @@ def _apply_terminal_commission(conn, income_id, commission_terminal_id=None) -> 
     return result
 
 
+def _reverse_redemptions(conn, income_id) -> dict:
+    """sp_posRewardRedemptions_reverseForIncome: a deleted sale's reward is
+    cancelled (stamps count again) and its points credited back."""
+    cur = conn.cursor()
+    cur.execute("EXEC sp_posRewardRedemptions_reverseForIncome @incomeId = %s", (int(income_id),))
+    row = cur.fetchone()
+    return dict(zip(("redemptionsCancelled", "pointsRefunded"), row)) if row else {}
+
+
 def _reverse_on_delete(conn, income_id) -> dict:
     """sp_income_reverseOnDelete for a sale that was just deleted (Step 5,
     2026-10-01): VOIDs its income/commission journal entries and takes back
@@ -150,12 +159,98 @@ def _apply_discounts(conn, company_id, income_id, user_id, coupon_code, reward_i
     return (parsed.get("result") or [None])[0]
 
 
+def _take_request_key(json_file: dict) -> str | None:
+    """Removes the POS's idempotency key (one UUID per checkout attempt, the
+    same on every retry) from the payload. Only a new sale with a companyId
+    uses it; dbo.income.clientRequestId is NVARCHAR(64)
+    (sql/migrations/2026-10-18c_income_client_request_id.sql)."""
+    row = (json_file.get("income") or [{}])[0] or {}
+    key = str(row.pop("clientRequestId", None) or "").strip()
+    if not key or str(row.get("action")) != "1" or not row.get("companyId"):
+        return None
+    if len(key) > 64:
+        print(f"[income] clientRequestId longer than 64 chars ignored: {key[:64]}...")
+        return None
+    return key
+
+
+def _lock_request_key(conn, company_id, key) -> None:
+    """Serializes concurrent retries of one checkout: the second waits here
+    until the first has stored its key, then finds that sale. Owned by the
+    session, so it's released by _unlock_request_key or when conn closes."""
+    cur = conn.cursor()
+    cur.execute("DECLARE @r INT; EXEC @r = sp_getapplock @Resource = %s, @LockMode = 'Exclusive', "
+                "@LockOwner = 'Session', @LockTimeout = 15000; SELECT @r",
+                (f"income:{int(company_id)}:{key}",))
+    row = cur.fetchone()
+    if not row or row[0] is None or int(row[0]) < 0:
+        # The unique index still catches the duplicate in _store_request_key.
+        print(f"[income] request lock not granted ({row[0] if row else None}) for {key}")
+
+
+def _unlock_request_key(conn, company_id, key) -> None:
+    try:
+        conn.cursor().execute("EXEC sp_releaseapplock @Resource = %s, @LockOwner = 'Session'",
+                              (f"income:{int(company_id)}:{key}",))
+    except Exception as e:
+        print(f"[income] request lock release failed: {e}")
+
+
+def _find_request(conn, company_id, key) -> int | None:
+    cur = conn.cursor()
+    cur.execute("SELECT incomeId FROM dbo.income WHERE companyId = %s AND clientRequestId = %s",
+                (int(company_id), key))
+    row = cur.fetchone()
+    return int(row[0]) if row else None
+
+
+def _store_request_key(conn, income_id, key) -> None:
+    conn.cursor().execute("UPDATE dbo.income SET clientRequestId = %s WHERE incomeId = %s AND clientRequestId IS NULL",
+                          (key, int(income_id)))
+
+
+def _is_duplicate_key(e: Exception) -> bool:
+    code = e.args[0] if e.args and isinstance(e.args[0], int) else None
+    return code in (2601, 2627) or "duplicate key" in str(e).lower()
+
+
+def _replayed_sale(conn, income_id, company_id) -> JSONResponse:
+    """The response of the sale a retry already created, in the shape of an
+    insert, so the POS carries on as if this call had inserted it."""
+    row = {"value": str(income_id), "msg": "Inserted Successfully", "error": "0"}
+    total, discount_amount, promo_code = _get_final_total_and_discount(conn, income_id, company_id)
+    if discount_amount and total is not None:
+        # Same keys as sp_income_applyDiscounts' result (CartPage reads
+        # rejected); what was applied/rejected isn't kept, only the totals.
+        row["discounts"] = {"incomeId": income_id, "subtotal": total + discount_amount, "total": total,
+                            "discountAmount": discount_amount, "promotionCode": promo_code,
+                            "applied": [], "rejected": []}
+    print(f"[income] retried request returned existing income {income_id}")
+    return JSONResponse(content={"result": [row]}, status_code=200)
+
+
 def income_sp(json_file: dict):
     conn = None
     try:
         conn = connection()
         cursor = conn.cursor()
         coupon_code, reward_ids = _take_discounts(json_file)
+        request_key = _take_request_key(json_file)
+        request_company_id = ((json_file.get("income") or [{}])[0] or {}).get("companyId")
+
+        # Idempotent insert: a retry of a checkout that already made a sale
+        # gets that sale back and runs none of the hooks below again.
+        if request_key:
+            try:
+                _lock_request_key(conn, request_company_id, request_key)
+                existing_id = _find_request(conn, request_company_id, request_key)
+            except Exception as e:
+                # e.g. the 2026-10-18c migration hasn't run: sell as before.
+                print(f"[income] request key lookup failed, inserting without it: {e}")
+                request_key, existing_id = None, None
+            if existing_id:
+                return _replayed_sale(conn, existing_id, request_company_id)
+
         cursor.execute("EXEC sp_income @pjsonfile = %s", (json.dumps(json_file),))
 
         # Obtener resultado en formato JSON
@@ -182,6 +277,28 @@ def income_sp(json_file: dict):
             first_row = (json_file.get("income") or [{}])[0]
             failed = result and str(result[0].get("error") or "") == "1"
             is_new_income = str(first_row.get("action")) == "1" and result and not failed
+
+            # Store the key before any hook runs. A duplicate here means a
+            # concurrent retry stored it first (lock not granted): this row is
+            # a second copy of that sale, so delete it and return the first.
+            if request_key:
+                try:
+                    if is_new_income:
+                        _store_request_key(conn, int(result[0]["value"]), request_key)
+                except Exception as e:
+                    existing_id = _find_request(conn, request_company_id, request_key) if _is_duplicate_key(e) else None
+                    if not existing_id:
+                        print(f"[income] storing clientRequestId failed: {e}")
+                    else:
+                        duplicate_id = int(result[0]["value"])
+                        undo = conn.cursor()
+                        undo.execute("EXEC sp_income @pjsonfile = %s", (json.dumps({"income": [{
+                            "action": 2, "incomeId": duplicate_id, "companyId": request_company_id}]}),))
+                        undo.fetchall()
+                        print(f"[income] deleted duplicate income {duplicate_id} of request {request_key}")
+                        return _replayed_sale(conn, existing_id, request_company_id)
+                finally:
+                    _unlock_request_key(conn, request_company_id, request_key)
 
             # Coupon + loyalty reward, priced server-side. Runs before every
             # hook below so they all use the authoritative total. The sale is
@@ -262,6 +379,13 @@ def income_sp(json_file: dict):
                 is_deleted_income = (str(first_row.get("action")) == "2" and result and not failed
                                      and first_row.get("incomeId"))
                 if is_deleted_income:
+                    # The reward the sale used comes back first, so taking
+                    # back its earned points sees the refunded balance.
+                    try:
+                        given_back = _reverse_redemptions(conn, first_row.get("incomeId"))
+                        print(f"[income] gave back rewards of deleted income {first_row.get('incomeId')}: {given_back}")
+                    except Exception as e:
+                        print(f"[income] reward give-back failed: {e}")
                     reversal = _reverse_on_delete(conn, first_row.get("incomeId"))
                     print(f"[income] reversed deleted income {first_row.get('incomeId')}: {reversal}")
             except Exception as e:
