@@ -116,6 +116,8 @@ origins = [
     "https://www.gmolavanderia.com",
     "https://www.gmoecosystem.com",
     "https://gmo-factory-intake.azurewebsites.net",
+    "https://lively-mud-0fee0c71e.4.azurestaticapps.net",
+    "https://proud-island-02ca13b1e.1.azurestaticapps.net",
 
     # Custom domain
     "https://www.rpmtoolsmx.com",
