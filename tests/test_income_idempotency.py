@@ -61,16 +61,19 @@ class FakeCursor:
                     db.on_insert()
             else:
                 self.rows = [(str(row["incomeId"]), "Deleted Successfully", "0")]
-        elif "sp_getapplock" in sql:
+        elif "sp_income_clientRequest" in sql and "'lock'" in sql:
             self.rows = [(0,)]
-        elif sql.startswith("SELECT incomeId FROM dbo.income"):
+        elif "sp_income_clientRequest" in sql and "'unlock'" in sql:
+            self.rows = [(0,)]
+        elif "sp_income_clientRequest" in sql and "'find'" in sql:
             found = db.keys.get(params)
             self.rows = [(found,)] if found else []
-        elif sql.startswith("UPDATE dbo.income SET clientRequestId"):
-            key, income_id = params
+        elif "sp_income_clientRequest" in sql and "'store'" in sql:
+            company_id, key, income_id = params
             if any(k[1] == key for k in db.keys):
                 raise DuplicateKey()
-            db.keys[(1, key)] = income_id
+            db.keys[(company_id, key)] = income_id
+            self.rows = [(1,)]
 
     def fetchall(self):
         return self.rows
