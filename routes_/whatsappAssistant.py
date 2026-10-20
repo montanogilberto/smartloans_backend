@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from modules.whatsappAssistant import assistant_catalog_sp, customer_rewards
+from modules.whatsappAssistant import assistant_catalog_sp, customer_rewards, whatsapp_agent_dashboard
 from security.worker_key import require_worker_key
 
 router = APIRouter()
@@ -71,3 +71,23 @@ def business_faqs(json: dict):
 )
 def whatsapp_customer_rewards(json: dict, _: str = Depends(require_worker_key)):
     return customer_rewards(json)
+
+
+@router.post(
+    "/whatsapp/agentDashboard",
+    summary="WhatsApp agent dashboard: activity, handoffs, bookings and sales after chatting (read-only)",
+    description="""{ "whatsappAgentDashboard": [{ "companyId": int, "startDate"?: "YYYY-MM-DD",
+  "endDate"?: "YYYY-MM-DD", "attributionDays"?: int (default 14) }] }
+(Hermosillo days; default the last 30 days)
+→ { "result": [{ "period": {startDate, endDate},
+  "kpis": { messagesAnswered, failedCalls, failureRatePct, avgLatencyMs, p95LatencyMs, customers,
+            handoffs, proposals, bookings, bookingsCancelled, customersWhoBought, salesAfterChat,
+            attributionDays },
+  "funnel": { customers, gotProposal, booked, bought },
+  "daily": [{date, messages, customers, failures, handoffs, bookings}],
+  "dataSince": { agentCalls: date|null, bookings: date|null } }] }
+customersWhoBought / salesAfterChat: sales within attributionDays after the customer's
+first message — they happened after the chat, the agent didn't necessarily cause them.""",
+)
+def whatsapp_agent_dashboard_route(json: dict):
+    return whatsapp_agent_dashboard(json)

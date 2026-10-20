@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from observability import log_workflow_step, log_audit
 from observability.integrations import timed_integration
 from modules.ticket_notifications import send_sms, send_whatsapp
-from modules.azure_notifications import send_azure_push
+from modules.azure_notifications import has_push_device, send_azure_push
 from modules.pushNotifications import resolve_push_user_ids
 
 # sp_notificationDispatches action codes -> a human label for workflow/audit logs.
@@ -156,11 +156,8 @@ def _resolve_push_user_id(cursor, recipient_type: str, recipient_id):
     read via sp_pushNotifications_resolveUsers.
 
     Returns the userId to target, or None if this recipient has no linked
-    user account at all (the real "no push possible" case -- NOT the same as
-    "has an account but no device installed", which this system has no way
-    to detect: Azure NH returns 2xx for a tag with zero matching devices, so
-    a successful push call here is fire-and-hope, same as everywhere else in
-    this backend -- not a stronger guarantee than existing push call sites.
+    user account at all. Whether that account has a device registered is a
+    separate check (has_push_device), done by the cascade before sending.
     """
     if recipient_type == "user":
         return recipient_id
@@ -219,16 +216,15 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
     userId column. So _resolve_push_user_id() looks up the linked app
     account via sp_pushNotifications_resolveUsers -- the same resolver
     modules/pushNotifications.py and modules/automatedPayments.py use --
-    and only skips push (fallbackReason=
-    NO_DEVICE) when that client has no linked user account at all.
+    and skips push (fallbackReason=NO_DEVICE) when that client has no linked
+    user account, or the hub has no device registered under its tag for the
+    platform(s) we send to (has_push_device). A "sent" push still only means
+    the hub accepted it: if the hub lacks that platform's credentials (FCM v1
+    / APNs), it is dropped there without an error.
 
-    IMPORTANT, honest limitation this connector cannot fix on its own: there
-    is no local device/installation table anywhere in this backend. Azure NH
-    returns 2xx for a tag with zero matching devices, so a "sent" push here
-    is fire-and-hope -- exactly like every other push call site in this
-    codebase -- not a stronger delivery guarantee. A resolved userId means
-    "this recipient has an app account," not "this recipient's phone is
-    definitely holding a live push token right now."
+    WhatsApp accepted by Meta can still fail seconds later (131026, 131047…).
+    That arrives by webhook; apply_provider_status then sends the SMS step
+    (sms_after_whatsapp_failure).
 
     Body: {
       companyId, sourceType, sourceId, recipientType, recipientId, eventName,
@@ -319,6 +315,15 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                 push_user_id = _resolve_push_user_id(cursor, recipient_type, recipient_id)
                 if push_user_id is None:
                     attempted.append({"channel": "push", "outcome": "NO_DEVICE", "at": _now_iso()})
+                    fallback_reason = fallback_reason or "NO_DEVICE"
+                    continue
+                # The hub answers 2xx for a tag with no devices, so without this
+                # check a client with an app account but no phone registered got
+                # a "sent" push, the cascade stopped, and nothing reached them.
+                device = await has_push_device(push_user_id)
+                if not device["registered"]:
+                    attempted.append({"channel": "push", "outcome": "NO_DEVICE", "at": _now_iso(),
+                                      "detail": device["reason"], "platforms": device["platforms"]})
                     fallback_reason = fallback_reason or "NO_DEVICE"
                     continue
                 try:
@@ -540,7 +545,112 @@ async def apply_provider_status(provider_message_id: str, provider_status: str,
         "providerErrorMessage": _short(error_message, 300) if failed else None,
     }]})
     ok = getattr(response, "status_code", 500) == 200
-    return {"updated": ok, "notificationDispatchId": dispatch_id, "status": new_status}
+    result = {"updated": ok, "notificationDispatchId": dispatch_id, "status": new_status}
+    if ok and failed:
+        result["smsFallback"] = await sms_after_whatsapp_failure(dispatch_id, error_code)
+    return result
+
+
+def _dispatch_row(dispatch_id) -> dict | None:
+    response = one_notificationDispatch_sp({"notificationDispatches": [{"notificationDispatchId": dispatch_id}]})
+    if getattr(response, "status_code", 500) != 200:
+        return None
+    rows = json.loads(response.body).get("notificationDispatches") or []
+    return rows[0] if rows else None
+
+
+def _client_phone(client_id) -> str | None:
+    # Lazy: modules.income imports this module.
+    from modules.income import _get_client_phone
+    return _get_client_phone(connection(), client_id)
+
+
+async def sms_after_whatsapp_failure(dispatch_id, error_code=None) -> dict:
+    """The cascade's SMS step for a WhatsApp that Meta accepted and then
+    failed (131026 undeliverable, 131047 outside 24h…). The cascade had
+    already stopped at "whatsapp SENT", so without this the customer got
+    nothing. Sent as a new dispatch row (selectedChannel sms, fallbackReason
+    WHATSAPP_FAILED) so the log shows both. Never raises.
+
+    Text: the row's messagePreview (the full customer text; the column holds
+    200 chars) + the signed ticket link for sales, as the cascade sends it."""
+    try:
+        row = _dispatch_row(dispatch_id)
+        if not row or row.get("selectedChannel") != "whatsapp":
+            return {"sent": False, "reason": "not_whatsapp"}
+        if row.get("recipientType") != "client" or is_walk_in("client", row.get("recipientId")):
+            return {"sent": False, "reason": "no_client_phone"}
+
+        conn = connection()
+        try:
+            cursor = conn.cursor()
+            policy = _get_policy(cursor, row["eventName"])
+            # Duplicate webhooks: once the SMS row is 'sent' this finds it.
+            existing = _existing_resolved_dispatch(cursor, row["companyId"], row["sourceType"],
+                                                   row["sourceId"], row["eventName"])
+        finally:
+            conn.close()
+        if existing:
+            return {"sent": False, "reason": "already_resolved"}
+        if not policy or not policy["allow_sms_fallback"] or "sms" not in policy["channels"]:
+            return {"sent": False, "reason": "policy_no_sms"}
+
+        phone = _client_phone(row["recipientId"])
+        if not phone:
+            return {"sent": False, "reason": "no_client_phone"}
+        body = row.get("messagePreview") or ""
+        if row.get("sourceType") == "income":
+            from modules.receiptLinks import receipt_link
+            link = receipt_link(row["companyId"], row["sourceId"])
+            if link:
+                body = f"{body}\nVer su ticket: {link}"
+
+        attempted = [{"channel": "whatsapp", "outcome": "FAILED_AFTER_SEND", "at": _now_iso(),
+                      "providerErrorCode": _short(error_code, 20),
+                      "notificationDispatchId": dispatch_id}]
+        status, provider_message_id, error = "failed", None, None
+        try:
+            with timed_integration("twilio_sms", "dispatch_after_whatsapp", request={"to": phone}) as span:
+                sms = send_sms(phone, body)
+                span.response = sms
+                span.http_status = 200
+            status, provider_message_id = "sent", sms.get("messageSid")
+            attempted.append({"channel": "sms", "outcome": "SENT", "at": _now_iso()})
+        except Exception as e:
+            error = e
+            attempted.append({"channel": "sms", "outcome": "FAILED", "at": _now_iso(), "error": str(e)})
+
+        now_sql = _now_sql()
+        notificationDispatch_sp({"notificationDispatches": [{
+            "action": 1,
+            "companyId": row["companyId"],
+            "sourceType": row["sourceType"],
+            "sourceId": row["sourceId"],
+            "recipientType": row["recipientType"],
+            "recipientId": row["recipientId"],
+            "eventName": row["eventName"],
+            "preferredChannel": row.get("preferredChannel"),
+            "selectedChannel": "sms",
+            "attemptedChannels": json.dumps(attempted),
+            "fallbackReason": "WHATSAPP_FAILED",
+            "status": status,
+            "providerMessageId": provider_message_id,
+            "providerName": "twilio_sms",
+            "messagePreview": (row.get("messagePreview") or "")[:200],
+            "sentAt": now_sql if status == "sent" else None,
+            "failedAt": now_sql if status == "failed" else None,
+            "providerErrorCode": _short(getattr(error, "code", None), 20) if error else None,
+            "providerErrorMessage": _short(error, 300) if error else None,
+        }]})
+        log_workflow_step(
+            "NotificationDispatch SMS after WhatsApp failure",
+            workflow_name="notification_dispatch", action="DISPATCH",
+            status="SUCCESS" if status == "sent" else "FAILED", entity="notificationDispatches",
+            message=f"whatsappDispatchId={dispatch_id} errorCode={error_code}",
+        )
+        return {"sent": status == "sent", "reason": "ok" if status == "sent" else "sms_failed"}
+    except Exception as e:
+        return {"sent": False, "reason": f"error: {e}"}
 
 
 async def confirm_notification_connector(payload: dict) -> JSONResponse:

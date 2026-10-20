@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 import urllib.parse
 import socket
@@ -204,6 +205,54 @@ async def register_device_token(user_id, token: str, platform: str, app_env: str
             "status_code": 500,
             "error": str(error),
         }
+
+
+# Registration types (as the hub names them) that each send format reaches.
+_REGISTRATION_PREFIX = {"fcmv1": "FcmV1", "apns": "Apple", "gcm": "Gcm"}
+
+
+def _send_formats() -> list[str]:
+    fmt = os.getenv("AZURE_NOTIFICATION_HUB_FORMAT", "fcmv1").strip().lower() or "fcmv1"
+    return ["fcmv1", "apns"] if fmt == "all" else [fmt]
+
+
+async def has_push_device(target_user_id) -> dict:
+    """Whether tag user_{id} has a device the configured format(s) reach.
+
+    A send to a tag with no devices still gets a 2xx from the hub, so this is
+    the only way to know a push will land on a phone. An iPhone-only user
+    with AZURE_NOTIFICATION_HUB_FORMAT=fcmv1 counts as no device. Never
+    raises: {"registered": bool, "platforms": [...], "reason": str}."""
+    connection_string = os.getenv("AZURE_NOTIFICATION_HUB_CONNECTION_STRING", "")
+    hub_name = (os.getenv("AZURE_NOTIFICATION_HUB_NAME", "") or "").strip().strip('"').strip("'")
+    if not connection_string or not hub_name or not target_user_id:
+        return {"registered": False, "platforms": [], "reason": "missing_config"}
+    endpoint, key_name, key = parse_connection_string(connection_string)
+    if not endpoint or not key_name or not key:
+        return {"registered": False, "platforms": [], "reason": "invalid_connection_string"}
+
+    base_url = endpoint.strip().strip('"').strip("'").replace("sb://", "https://").rstrip("/")
+    uri = f"{base_url}/{hub_name}/tags/user_{target_user_id}/registrations"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{uri}?api-version=2015-01",
+                headers={"Authorization": generate_sas_token(uri, key_name, key)},
+            )
+    except Exception as e:
+        logger.error("[azure_notifications] Registration lookup failed for user_%s: %s", target_user_id, e)
+        return {"registered": False, "platforms": [], "reason": "lookup_exception"}
+    if not 200 <= response.status_code < 300:
+        logger.warning("[azure_notifications] Registration lookup user_%s → %s",
+                       target_user_id, response.status_code)
+        return {"registered": False, "platforms": [], "reason": f"lookup_status_{response.status_code}"}
+
+    # Atom feed: one <XxxRegistrationDescription> (or Template…) per device.
+    platforms = sorted(set(re.findall(r"<(\w+?)(?:Template)?RegistrationDescription\b", response.text)))
+    reachable = [p for p in platforms
+                 if any(p == _REGISTRATION_PREFIX.get(f) for f in _send_formats())]
+    return {"registered": bool(reachable), "platforms": platforms,
+            "reason": "ok" if reachable else ("no_registration" if not platforms else "platform_not_sent")}
 
 
 async def send_azure_push(title: str, message: str, target_user_id: int = None,
