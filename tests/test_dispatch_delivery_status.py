@@ -57,6 +57,11 @@ class ApplyProviderStatusTest(unittest.TestCase):
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
+        # The SMS step on failure has its own tests (test_dispatch_fallbacks.py).
+        self.sms_fallback = mock.AsyncMock(return_value={"sent": False, "reason": "not_whatsapp"})
+        p = mock.patch.object(nd, "sms_after_whatsapp_failure", self.sms_fallback)
+        p.start()
+        self.addCleanup(p.stop)
 
     def _lookup(self, cursor, item):
         self.lookups.append(item)
@@ -68,7 +73,9 @@ class ApplyProviderStatusTest(unittest.TestCase):
 
     def test_failed_marks_the_row_failed_with_failedAt(self):
         out = run(nd.apply_provider_status("SM09e9", "failed", retry_delay_s=0))
-        self.assertEqual(out, {"updated": True, "notificationDispatchId": 120, "status": "failed"})
+        self.assertEqual(out, {"updated": True, "notificationDispatchId": 120, "status": "failed",
+                               "smsFallback": {"sent": False, "reason": "not_whatsapp"}})
+        self.sms_fallback.assert_awaited_once_with(120, None)
         row = self.updates[0]
         self.assertEqual((row["action"], row["status"], row["companyId"]), (2, "failed", 1))
         self.assertIsNotNone(row["failedAt"])
@@ -92,6 +99,7 @@ class ApplyProviderStatusTest(unittest.TestCase):
         run(nd.apply_provider_status("SM09e9", "delivered", retry_delay_s=0))
         self.assertEqual(self.updates[0]["status"], "confirmed")
         self.assertIsNotNone(self.updates[0]["confirmedAt"])
+        self.sms_fallback.assert_not_awaited()
 
     def test_in_flight_status_touches_nothing(self):
         out = run(nd.apply_provider_status("SM09e9", "sent", retry_delay_s=0))

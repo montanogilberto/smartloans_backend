@@ -34,7 +34,8 @@ class _Span:
 
 
 @contextmanager
-def timed_integration(service: str, operation: str, *, request: Any = None):
+def timed_integration(service: str, operation: str, *, request: Any = None,
+                      company_id: Optional[int] = None):
     span = _Span()
     start = time.monotonic()
     status = "SUCCESS"
@@ -54,4 +55,5 @@ def timed_integration(service: str, operation: str, *, request: Any = None):
             request=request,
             response=span.response,
             exception=exc_text,
+            company_id=company_id,
         )

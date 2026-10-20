@@ -33,9 +33,17 @@ _BASE64_RE = re.compile(r"^[A-Za-z0-9+/=\s]{256,}$")
 _DATA_URI_RE = re.compile(r"^data:[^;]+;base64,", re.IGNORECASE)
 
 
+# Too short for a substring match: "pan" is inside "companyId", "pin" inside
+# "shipping", "auth" inside "author". These mask only the exact key or a key
+# ending in them ("userPin", "smsOtp").
+_EXACT_KEYS = {"pan", "pin", "otp", "auth", "pwd", "rfc", "ssn"}
+
+
 def _key_is_sensitive(key: str) -> bool:
     k = key.lower().replace("_", "")
-    return any(deny.replace("_", "") in k for deny in _DENY_KEYS)
+    if any(k == short or k.endswith(short) for short in _EXACT_KEYS):
+        return True
+    return any(deny.replace("_", "") in k for deny in _DENY_KEYS if deny not in _EXACT_KEYS)
 
 
 def _looks_like_blob(value: str) -> bool:

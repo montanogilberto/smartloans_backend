@@ -171,14 +171,17 @@ def log_integration(
     request: Any = None,
     response: Any = None,
     exception: Optional[str] = None,
+    company_id: Optional[int] = None,
 ) -> None:
+    """company_id: for calls made outside a request with company context
+    (e.g. the WhatsApp webhook's background task)."""
     try:
         ctx = get_context()
         writer.enqueue({
             "logType": "integration",
             "correlationId": ctx.get("correlationId"),
             "workflowId": ctx.get("workflowId"),
-            "companyId": ctx.get("companyId"),
+            "companyId": company_id if company_id is not None else ctx.get("companyId"),
             "service": service,
             "operation": operation,
             "status": status,
