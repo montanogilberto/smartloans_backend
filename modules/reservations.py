@@ -214,6 +214,8 @@ def reservations_sp(json_file: dict, background_tasks: BackgroundTasks):
         payload = (json_file.get("reservations") or [{}])[0]
         if payload.get("action") == 1:
             fields = {k: v for k, v in payload.items() if k != "action"}
+            # Public kiosk route: the caller can't claim another source.
+            fields["source"] = "kiosk"
             row = create_reservation(fields)
             if row.get("error"):
                 return JSONResponse(row, status_code=200)

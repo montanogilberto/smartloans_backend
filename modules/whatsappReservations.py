@@ -183,6 +183,7 @@ def _book(channel: dict, phone: str, profile_name: str | None, fields: dict) -> 
         "companyId": company_id,
         "branchId": channel.get("branchId"),
         "phone": phone,
+        "source": "whatsapp",
     })
     if row.get("error"):
         logger.warning("[whatsappReservations] create failed | phone=%s error=%s", phone, row)
@@ -209,7 +210,8 @@ def _ask_agent(channel: dict, phone: str, profile_name: str | None, text: str,
         "message": text,
         "recentReservation": last_booked,
     }
-    with timed_integration("loanagents_smartloans", "whatsapp_reservations", request=request_body) as span:
+    with timed_integration("loanagents_smartloans", "whatsapp_reservations", request=request_body,
+                           company_id=channel["companyId"]) as span:
         resp = httpx.post(f"{AGENT_URL}/support/whatsapp-reservations", json=request_body, timeout=30.0)
         span.http_status = resp.status_code
         resp.raise_for_status()

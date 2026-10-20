@@ -31,6 +31,11 @@ GO
 IF COL_LENGTH('dbo.reservations', 'reservationServiceId') IS NULL
     ALTER TABLE [dbo].[reservations] ADD reservationServiceId INT NULL;
 GO
+-- Where the booking came from (2026-10-20_reservations_source.sql). NULL on
+-- rows created before it: unknown, not kiosk.
+IF COL_LENGTH('dbo.reservations', 'source') IS NULL
+    ALTER TABLE [dbo].[reservations] ADD source NVARCHAR(20) NULL;
+GO
 
 IF OBJECT_ID('dbo.sp_reservations', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_reservations;
 GO
@@ -106,6 +111,8 @@ BEGIN
             DECLARE @resDate       DATE          = TRY_CONVERT(DATE, JSON_VALUE(@pjsonfile, '$.reservations[0].reservationDate'));
             DECLARE @timeSlot      NVARCHAR(10)  = JSON_VALUE(@pjsonfile, '$.reservations[0].timeSlot');
             DECLARE @notes         NVARCHAR(500) = JSON_VALUE(@pjsonfile, '$.reservations[0].notes');
+            DECLARE @source        NVARCHAR(20)  = JSON_VALUE(@pjsonfile, '$.reservations[0].source');
+            IF @source IS NULL OR @source NOT IN ('kiosk', 'whatsapp') SET @source = 'kiosk';
 
             IF @companyId IS NULL OR @clientName IS NULL OR @phone IS NULL
                OR @resDate IS NULL OR @timeSlot IS NULL
@@ -151,10 +158,10 @@ BEGIN
 
             INSERT INTO [dbo].[reservations]
                 (companyId, clientName, phone, email, reservationServiceId, serviceType, serviceDetail,
-                 reservationDate, timeSlot, notes, status)
+                 reservationDate, timeSlot, notes, status, source)
             VALUES
                 (@companyId, @clientName, @phone, @email, @serviceId, @serviceName, @serviceDetail,
-                 @resDate, @timeSlot, @notes, 'pending');
+                 @resDate, @timeSlot, @notes, 'pending', @source);
 
             DECLARE @newId INT = SCOPE_IDENTITY();
             COMMIT TRANSACTION;
@@ -162,7 +169,7 @@ BEGIN
                 SELECT reservationId, companyId, clientName, phone, email,
                        reservationServiceId, serviceType, serviceDetail,
                        CONVERT(NVARCHAR(10), reservationDate, 23) AS reservationDate,
-                       timeSlot, notes, status,
+                       timeSlot, notes, status, source,
                        CONVERT(NVARCHAR, created_At, 127) AS created_At
                 FROM [dbo].[reservations] WHERE reservationId = @newId
                 FOR JSON PATH
