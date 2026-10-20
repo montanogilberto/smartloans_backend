@@ -94,6 +94,26 @@ def send_text(channel: dict, to: str, body: str) -> Dict[str, Any]:
     return {"channel": "whatsapp", "to": to_digits, "provider": "meta", "messageId": message_id}
 
 
+def show_typing(channel: dict, message_id: str | None) -> None:
+    """Marks the customer's message as read (blue ticks) and shows "escribiendo…"
+    until our reply is sent (Meta hides it after ~25 s). Best effort: a
+    failure here must never block the reply."""
+    if not message_id:
+        return
+    try:
+        token = whatsappChannels.access_token(channel)
+        url = f"https://graph.facebook.com/{GRAPH_VERSION}/{channel['phoneNumberId']}/messages"
+        resp = httpx.post(url, json={"messaging_product": "whatsapp", "status": "read",
+                                     "message_id": message_id,
+                                     "typing_indicator": {"type": "text"}},
+                          headers={"Authorization": f"Bearer {token}"}, timeout=5.0)
+        if resp.status_code >= 400:
+            logger.warning("[whatsappCloud] typing indicator failed (%s): %s",
+                           resp.status_code, resp.text[:300])
+    except Exception:
+        logger.exception("[whatsappCloud] typing indicator failed")
+
+
 # ── Outbound templates ──────────────────────────────────────────────────────
 # Messages WE start (receipts, OTP, offers, reservations) reach people who
 # haven't written in 24h, so Meta only delivers them as approved templates.
@@ -280,7 +300,8 @@ def _handle_message(msg: dict) -> None:
 
     if not channel.get("botEnabled"):
         return
-    reply = whatsappReservations.reply_to(channel, phone, msg["name"], msg["text"])
+    reply = whatsappReservations.reply_to(channel, phone, msg["name"], msg["text"],
+                                          on_answering=lambda: show_typing(channel, msg["messageId"]))
     if not reply:
         return
     try:

@@ -35,12 +35,17 @@ import asyncio
 import json
 import logging
 import os
+import re
+
+import time
 
 import httpx
 
+from databases import connection
 from modules import whatsappChannels
+from modules.whatsappAssistant import _sp as assistant_sp
 from modules.posSupportChat import _classify_confirmation
-from modules.pushNotifications import pushNotifications_sp
+from modules.pushNotifications import pushNotifications_sp, resolve_push_user_ids
 from modules.reservations import available_slots, create_reservation, notify_pos
 from observability.integrations import timed_integration
 
@@ -50,8 +55,10 @@ AGENT_URL = os.environ.get("NEGOTIATION_AGENT_URL", "").rstrip("/")
 PENDING_TTL_SECONDS = 600
 STAFF_PAUSE_SECONDS = 2 * 60 * 60
 
-_FALLBACK_REPLY = ("Por el momento no puedo procesar tu mensaje. "
-                   "Alguien del equipo te responderá en breve.")
+# Sent when the agent service fails. It must not promise a person: nobody is
+# notified on this path.
+_FALLBACK_REPLY = ("Perdón, tuve un problema para responderte. "
+                   "¿Me lo puedes escribir de nuevo en un momento?")
 
 
 def pause_for_staff(channel: dict, phone: str) -> None:
@@ -81,6 +88,74 @@ def _hand_off_to_staff(channel: dict, phone: str, profile_name: str | None,
         logger.exception("[whatsappReservations] handoff push failed | phone=%s", phone)
     logger.info("[whatsappReservations] handed off to staff | channel=%s phone=%s reason=%s",
                 channel["channelId"], phone, reason)
+
+
+# Push copies of WhatsApp events. They never change what the customer gets
+# on WhatsApp: every failure here is logged and swallowed.
+FAILURE_ALERT_EVERY_SECONDS = 15 * 60
+_last_failure_alert: dict = {}
+
+
+def _customer_user_id(company_id: int, phone: str) -> int | None:
+    """The app user behind this WhatsApp number (same phone → client match
+    as the points lookup), or None when they don't have the app — then no
+    push is created at all."""
+    result = assistant_sp("sp_whatsappCustomerRewards",
+                          {"customerRewards": [{"companyId": company_id, "phone": phone}]})
+    row = (result.get("result") or [{}])[0]
+    client_id = row.get("clientId") if row.get("status") == "found" else None
+    if not client_id:
+        return None
+    conn = connection()
+    try:
+        return resolve_push_user_ids(conn.cursor(), [client_id]).get(client_id)
+    finally:
+        conn.close()
+
+
+def _push_booking_to_customer(channel: dict, phone: str, row: dict) -> None:
+    try:
+        user_id = _customer_user_id(channel["companyId"], phone)
+        if not user_id:
+            return
+        branch = f" · {channel['branchName']}" if channel.get("branchName") else ""
+        asyncio.run(pushNotifications_sp({"pushNotifications": [{
+            "action": 1,
+            "companyId": channel["companyId"],
+            "title": f"✅ Reservación confirmada #{row['reservationId']}",
+            "message": f"{row.get('serviceType')} — {row.get('reservationDate')} a las {row.get('timeSlot')}{branch}",
+            "notificationType": "Info",
+            "priority": "High",
+            "targetType": "User",
+            "targetUserId": user_id,
+            "payloadJson": json.dumps({"type": "ReservationConfirmed", "reservationId": row["reservationId"]}),
+        }]}))
+    except Exception:
+        logger.exception("[whatsappReservations] customer push failed | phone=%s", phone)
+
+
+def _push_agent_failure_to_staff(channel: dict, phone: str, profile_name: str | None, text: str) -> None:
+    """At most one alert per channel every 15 min, so an outage doesn't
+    flood the POS with one push per customer message."""
+    now = time.time()
+    if now - _last_failure_alert.get(channel["channelId"], 0) < FAILURE_ALERT_EVERY_SECONDS:
+        return
+    _last_failure_alert[channel["channelId"]] = now
+    branch = f" ({channel['branchName']})" if channel.get("branchName") else ""
+    try:
+        asyncio.run(pushNotifications_sp({"pushNotifications": [{
+            "action": 1,
+            "companyId": channel["companyId"],
+            "title": f"⚠️ El asistente de WhatsApp no pudo responder{branch}",
+            "message": f"{profile_name or phone} ({phone}): \"{(text or '')[:120]}\". Revisa el chat en WhatsApp Business.",
+            "notificationType": "Info",
+            "priority": "High",
+            "targetType": "Company",
+            "targetCompanyId": channel["companyId"],
+            "payloadJson": json.dumps({"type": "WhatsAppAgentFailed", "phone": phone}),
+        }]}))
+    except Exception:
+        logger.exception("[whatsappReservations] staff failure push failed | phone=%s", phone)
 
 
 def _book(channel: dict, phone: str, profile_name: str | None, fields: dict) -> str:
@@ -115,6 +190,7 @@ def _book(channel: dict, phone: str, profile_name: str | None, fields: dict) -> 
 
     whatsappChannels.set_last_booked(channel["channelId"], phone, row)
     asyncio.run(notify_pos(row, source="WhatsApp"))
+    _push_booking_to_customer(channel, phone, row)
     return (f"✅ Listo, tu reservación quedó registrada.\n"
             f"{row.get('serviceType')} — {row.get('reservationDate')} a las {row.get('timeSlot')}\n"
             f"Folio: #{row['reservationId']}\n"
@@ -142,8 +218,23 @@ def _ask_agent(channel: dict, phone: str, profile_name: str | None, text: str,
         return data["reply"], data.get("pendingAction")
 
 
-def reply_to(channel: dict, phone: str, profile_name: str | None, text: str) -> str | None:
-    """Returns the text to send back, or None to stay silent."""
+_CHANGE_WORDS = {"pero", "mejor", "cambia", "cambiar", "otro", "otra", "hoy", "mañana",
+                 "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes",
+                 "sábado", "sabado", "domingo", "tarde", "temprano"}
+
+
+def _changes_booking(text: str) -> bool:
+    """A yes/no that also carries new details (a time, a day, "pero ...")
+    is a changed request, not a plain answer to the proposal."""
+    words = re.sub(r"[^\w\s]", " ", (text or "").lower()).split()
+    return (bool(re.search(r"\d", text or "")) or bool(_CHANGE_WORDS & set(words))
+            or len(words) > 5)
+
+
+def reply_to(channel: dict, phone: str, profile_name: str | None, text: str,
+             on_answering=None) -> str | None:
+    """Returns the text to send back, or None to stay silent. on_answering()
+    runs once the bot knows it will answer (whatsappCloud shows "escribiendo…")."""
     if not AGENT_URL:
         return None
     channel_id = channel["channelId"]
@@ -152,10 +243,16 @@ def reply_to(channel: dict, phone: str, profile_name: str | None, text: str) -> 
         logger.info("[whatsappReservations] staff is handling %s on channel %s — bot silent",
                     phone, channel_id)
         return None
+    if on_answering:
+        on_answering()
 
     pending = state["pending"]  # already None when expired (checked by the SP)
     if pending:
         decision = _classify_confirmation(text)
+        if decision and _changes_booking(text):
+            # "sí, pero a las 5" must not book the OLD time: the agent gets it
+            # and re-proposes with the change.
+            decision = None
         # Any reply ends the proposal: confirmed, cancelled, or the customer
         # changed something and the agent re-proposes below.
         whatsappChannels.clear_pending(channel_id, phone)
@@ -168,6 +265,7 @@ def reply_to(channel: dict, phone: str, profile_name: str | None, text: str) -> 
         reply, pending_action = _ask_agent(channel, phone, profile_name, text, state["lastBooked"])
     except Exception:
         logger.exception("[whatsappReservations] agent call failed | phone=%s", phone)
+        _push_agent_failure_to_staff(channel, phone, profile_name, text)
         return _FALLBACK_REPLY
 
     capability = (pending_action or {}).get("capability")
