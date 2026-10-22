@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -75,7 +76,19 @@ from routes_ import (
     laundryDevices,
 )
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # start_scheduler / stop_observability_writer are defined further down;
+    # they're resolved at call time, after the module has fully loaded.
+    await start_scheduler()
+    yield
+    await stop_observability_writer()
+
+
 app = FastAPI(
+    title="SmartLoans Backend API",
+    version="1.0.0",
+    lifespan=lifespan,
     title="Factory Backend API",
     version="1.0.0"
 )
@@ -351,7 +364,6 @@ async def _run_funding_transactions_escalate_due():
         print(f"[scheduler] fundingTransactions.escalate_due: failed: {e}")
 
 
-@app.on_event("startup")
 async def start_scheduler():
     # Start the observability background log writer (async best-effort path).
     writer.start()
@@ -375,7 +387,6 @@ async def start_scheduler():
     scheduler.start()
 
 
-@app.on_event("shutdown")
 async def stop_observability_writer():
     # Flush any queued logs before the process exits.
     writer.flush_and_stop()

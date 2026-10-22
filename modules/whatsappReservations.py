@@ -27,6 +27,10 @@ agent proposes REQUEST_HUMAN. That needs no "sí": the bot goes quiet in the
 chat for STAFF_PAUSE_SECONDS and the branch's POS users get a push, so staff
 answer from the WhatsApp Business app.
 
+Client QR: "mi QR" (menu option 7) makes the agent propose SEND_CLIENT_QR,
+also without "sí". This module finds the sender's client by phone (the same
+match as their points) and sends the QR image the POS scanner reads.
+
 Env vars:
   NEGOTIATION_AGENT_URL   LoanAgents_SmartLoans base URL (shared with posSupportChat)
 """
@@ -88,6 +92,55 @@ def _hand_off_to_staff(channel: dict, phone: str, profile_name: str | None,
         logger.exception("[whatsappReservations] handoff push failed | phone=%s", phone)
     logger.info("[whatsappReservations] handed off to staff | channel=%s phone=%s reason=%s",
                 channel["channelId"], phone, reason)
+
+
+_QR_CAPTION = ("Tu código QR de cliente 📲 Muéstralo en caja al pagar para que la compra "
+               "quede a tu nombre y sumes tus puntos.")
+_QR_NOT_FOUND = ("Todavía no tengo un QR para este número: no está registrado como cliente. "
+                 "En caja te registran con este mismo número de WhatsApp y desde ahí ya "
+                 "puedes pedirme tu QR.")
+_QR_AMBIGUOUS = ("Este número está registrado en más de un cliente, así que no puedo saber "
+                 "cuál QR enviarte. En caja te ayudan a dejar uno solo.")
+_QR_FAILED = "No pude generar tu QR en este momento. Inténtalo en un rato o pídelo en caja."
+
+
+def _client_qr_png(client_id: int, first_name: str) -> bytes:
+    """Same CLIENT:<id>:<name> value the app's "Mi QR" shows and the POS
+    scanner reads (POSVending src/utils/clientQrPdf.ts → ClientQrScannerModal)."""
+    import io
+    import segno
+    buf = io.BytesIO()
+    segno.make(f"CLIENT:{client_id}:{(first_name or '').strip()}", error="h").save(
+        buf, kind="png", scale=12, border=4)
+    return buf.getvalue()
+
+
+def _send_client_qr(channel: dict, phone: str) -> str | None:
+    """SEND_CLIENT_QR: the sender's own client QR, matched by the phone they
+    write from exactly like their points (sp_whatsappCustomerRewards). Sends
+    the image itself; returns a text to add to the reply when it can't."""
+    from modules.whatsappCloud import send_image  # whatsappCloud imports this module
+    try:
+        found = (assistant_sp("sp_whatsappCustomerRewards", {"customerRewards": [
+            {"companyId": channel["companyId"], "phone": phone}]}).get("result") or [{}])[0]
+    except Exception:
+        logger.exception("[whatsappReservations] client lookup for QR failed | phone=%s", phone)
+        return _QR_FAILED
+    if found.get("status") == "not_found":
+        return _QR_NOT_FOUND
+    if found.get("status") == "ambiguous":
+        return _QR_AMBIGUOUS
+    if found.get("status") != "found" or not found.get("clientId"):
+        return _QR_FAILED
+    try:
+        send_image(channel, phone, _client_qr_png(found["clientId"], found.get("firstName")),
+                   _QR_CAPTION, filename="mi-qr.png")
+    except Exception:
+        logger.exception("[whatsappReservations] client QR send failed | phone=%s", phone)
+        return _QR_FAILED
+    logger.info("[whatsappReservations] client QR sent | channel=%s phone=%s clientId=%s",
+                channel["channelId"], phone, found["clientId"])
+    return None
 
 
 # Push copies of WhatsApp events. They never change what the customer gets
@@ -279,4 +332,12 @@ def reply_to(channel: dict, phone: str, profile_name: str | None, text: str,
     elif capability == "CREATE_RESERVATION":
         whatsappChannels.set_pending(channel_id, phone, pending_action.get("fields") or {},
                                      PENDING_TTL_SECONDS)
+    elif capability == "SEND_CLIENT_QR":
+        # No "sí" either: it only shows the customer their own QR. The image
+        # (with its caption) goes out first; the agent's text follows — it
+        # never talks about the QR itself, and may answer more ("2,7"). When
+        # there's no QR, the reason leads the reply.
+        problem = _send_client_qr(channel, phone)
+        if problem:
+            return f"{problem}\n\n{reply}" if reply else problem
     return reply
