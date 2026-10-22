@@ -1,0 +1,5 @@
+Returns a single factoryRunUsage record by its primary key via sp_factoryRunUsages_one.
+Stored procedure: EXEC [dbo].[sp_factoryRunUsages_one] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "https://smartloansbackend.azurewebsites.net/one_factoryRunUsage"   -H "Content-Type: application/json"   -d '{"factoryRunUsages":[{"factoryRunUsageId":1}]}'

@@ -70,6 +70,7 @@ from routes_ import (
     clientCapabilities,
     roles,
     commissionTerminals,
+    factoryRunUsage,
     whatsappCloud,
     whatsappAssistant,
     laundryDevices,
@@ -88,6 +89,8 @@ app = FastAPI(
     title="SmartLoans Backend API",
     version="1.0.0",
     lifespan=lifespan,
+    title="Factory Backend API",
+    version="1.0.0"
 )
 
 
@@ -259,6 +262,7 @@ app.include_router(reservations.router)
 app.include_router(clientCapabilities.router)
 app.include_router(roles.router)
 app.include_router(commissionTerminals.router)
+app.include_router(factoryRunUsage.router)
 app.include_router(whatsappCloud.router)
 app.include_router(whatsappAssistant.router)
 app.include_router(laundryDevices.router)
