@@ -89,8 +89,6 @@ app = FastAPI(
     title="SmartLoans Backend API",
     version="1.0.0",
     lifespan=lifespan,
-    title="Factory Backend API",
-    version="1.0.0"
 )
 
 
