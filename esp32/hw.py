@@ -6,7 +6,7 @@ from machine import Pin, UART, WDT
 import config as C
 
 # Reinicia el ESP32 si algo se cuelga más de 2 min (p. ej. un saludo TLS).
-# Para pruebas en Thonny puedes cambiarlo por: wdt = None
+# Para pruebas en Thonny puedes comentar esta línea y usar: wdt = None
 wdt = WDT(timeout=120000)
 
 

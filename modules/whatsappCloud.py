@@ -94,6 +94,50 @@ def send_text(channel: dict, to: str, body: str) -> Dict[str, Any]:
     return {"channel": "whatsapp", "to": to_digits, "provider": "meta", "messageId": message_id}
 
 
+def send_image(channel: dict, to: str, image: bytes, caption: str,
+               filename: str = "image.png", mime_type: str = "image/png") -> Dict[str, Any]:
+    """Uploads the image to Meta's media store and sends it from the
+    channel's number. No public URL involved, so private data (a client's
+    QR) is never left on an open link."""
+    token = whatsappChannels.access_token(channel)
+    phone_number_id = channel["phoneNumberId"]
+    to_digits = normalize_mx_number(to)
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"https://graph.facebook.com/{GRAPH_VERSION}/{phone_number_id}"
+
+    with timed_integration("whatsapp_cloud", "upload_media",
+                           request={"phoneNumberId": phone_number_id, "mimeType": mime_type}) as span:
+        resp = httpx.post(f"{base}/media", headers=headers, timeout=20.0,
+                          data={"messaging_product": "whatsapp", "type": mime_type},
+                          files={"file": (filename, image, mime_type)})
+        span.http_status = resp.status_code
+        data = resp.json()
+        span.response = data
+        if resp.status_code >= 400 or not data.get("id"):
+            raise RuntimeError(f"WhatsApp Cloud media upload failed ({resp.status_code}): {data}")
+    media_id = data["id"]
+
+    request_body = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_digits,
+        "type": "image",
+        "image": {"id": media_id, "caption": caption},
+    }
+    with timed_integration("whatsapp_cloud", "send_image",
+                           request={"to": to_digits, "phoneNumberId": phone_number_id}) as span:
+        resp = httpx.post(f"{base}/messages", json=request_body, headers=headers, timeout=15.0)
+        span.http_status = resp.status_code
+        data = resp.json()
+        span.response = data
+        if resp.status_code >= 400:
+            raise RuntimeError(f"WhatsApp Cloud image send failed ({resp.status_code}): {data}")
+
+    message_id = (data.get("messages") or [{}])[0].get("id")
+    logger.info("[whatsappCloud] sent image | to=%s id=%s", to_digits, message_id)
+    return {"channel": "whatsapp", "to": to_digits, "provider": "meta", "messageId": message_id}
+
+
 def show_typing(channel: dict, message_id: str | None) -> None:
     """Marks the customer's message as read (blue ticks) and shows "escribiendo…"
     until our reply is sent (Meta hides it after ~25 s). Best effort: a

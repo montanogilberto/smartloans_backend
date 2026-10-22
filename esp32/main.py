@@ -96,3 +96,4 @@ except Exception as e:
     print("Error fatal:", e)
     time.sleep(5)
     reset()
+
