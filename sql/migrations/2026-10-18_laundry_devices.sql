@@ -121,8 +121,13 @@ GO
 --   action 4  auth        { deviceId }  -> device WITH keyHash (internal: modules/laundryDevices.py)
 --   action 5  heartbeat   { deviceId, status?, firmwareVersion?, ip?, rssi? }
 --   action 6  price       { deviceId, productOptionChoiceId? } -> { priceMXN, productOptionChoiceId, choiceName }
---   action 7  cycles      { deviceId } -> { cycles: [{ productOptionChoiceId, name, priceMXN }] }
+--   action 7  cycles      { deviceId } -> { cycles: [{ productOptionChoiceId, name, priceMXN, description }] }
 --             What the machine's screen offers: the priced choices of its product.
+--             description (productOptionChoices.description, edited in the POS)
+--             is the screen's detail line, e.g. "Agua baja".
+--   action 8  client      { deviceId, clientId } -> { clientId, firstName }
+--             Only an active client of the device's company; the screen is public,
+--             so it never returns the last name.
 --             The choice must be an option of the device's product (same company).
 --             A device without productId only accepts no choice (fixed priceMXN).
 -- Actions 1, 2, 3 and 5 return the device without keyHash.
@@ -249,7 +254,7 @@ BEGIN
         ELSE IF @action = 7
         BEGIN
             SELECT ISNULL(
-                (SELECT c.productOptionChoiceId, c.name, c.price AS priceMXN
+                (SELECT c.productOptionChoiceId, c.name, c.price AS priceMXN, c.description
                  FROM [dbo].[laundryDevices] d
                  JOIN [dbo].[products] p ON p.productId = d.productId AND p.companyId = d.companyId
                  JOIN [dbo].[productOptions] o ON o.productId = p.productId
@@ -258,6 +263,18 @@ BEGIN
                  ORDER BY c.price, c.productOptionChoiceId
                  FOR JSON PATH, ROOT('cycles')),
                 '{"cycles":[]}') AS [jsonResult]
+            RETURN
+        END
+        ELSE IF @action = 8
+        BEGIN
+            DECLARE @clientId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDevices[0].clientId'))
+            SELECT ISNULL(
+                (SELECT c.clientId, LTRIM(RTRIM(c.first_name)) AS firstName
+                 FROM [dbo].[clients] c
+                 JOIN [dbo].[laundryDevices] d ON d.companyId = c.companyId
+                 WHERE d.deviceId = @deviceId AND c.clientId = @clientId AND c.isActive = 1
+                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+                '{"error":"client_not_found"}') AS [jsonResult]
             RETURN
         END
         ELSE

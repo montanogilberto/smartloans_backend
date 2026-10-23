@@ -1,51 +1,64 @@
-# Pantalla de selección de ciclo: Nextion NX8048P070 por UART.
+# Pantalla de selección de ciclo: Nextion GMO, diseño v2 (página main).
 #
-# Misma interfaz que la versión provisional, así que main.py no cambia:
-#   set_cycles(cycles), selected(), poll(), message(text)
+# Todo lo que se muestra viene del heartbeat del backend:
+#   deviceName            -> título ("LAVADORA 1")
+#   cycles[].name/priceMXN/cycleMinutes
+#   cycles[].description  -> línea de detalle ("Agua baja"); se edita en el POS
 #
-# Requiere nextion.py en la placa y el diseño de NEXTION_DISENO.md cargado
-# en la pantalla (componentes tTitle, b0..b3, tStatus, tTimer).
+# Las otras páginas (confirm, inuse, nofunds, msg) las maneja main.py con screen.lcd.
+# config.py: MACHINE_NAME sólo se usa si el servidor todavía no mandó deviceName.
 
 import config as C
-from nextion import Nextion, COLOR_INFO
+from nextion import Nextion, NAVY, money
 
-_lcd = Nextion(
+lcd = Nextion(
     uart_id=getattr(C, "NEXTION_UART", 1),
     tx=getattr(C, "NEXTION_TX", 27),
     rx=getattr(C, "NEXTION_RX", 26),
     baud=getattr(C, "NEXTION_BAUD", 9600),
 )
+title = str(getattr(C, "MACHINE_NAME", "")).upper()
 _cycles = []
 _index = 0
-
-_title = getattr(C, "MACHINE_NAME", "")
-if _title:
-    _lcd.set_title(_title)
+_dirty = False     # hay cambios del servidor sin dibujar (llegaron fuera de main)
 
 
-def set_cycles(cycles):
-    """cycles = [{productOptionChoiceId, name, priceMXN, cycleMinutes}] del heartbeat."""
-    global _cycles, _index
-    current = selected()
-    new = list(cycles or [])
-    if len(new) > _lcd.max:
-        print("[pantalla] Aviso: hay %d ciclos, sólo caben %d" % (len(new), _lcd.max))
-        new = new[: _lcd.max]
+def _card(c):
+    return {
+        "name": c["name"],
+        "detail": c.get("description") or "",
+        "minutes": "%s min" % c["cycleMinutes"],
+        "price": money(c["priceMXN"]),
+    }
 
-    # Si no cambió nada, no redibujar (el heartbeat llega cada minuto)
-    if [c["productOptionChoiceId"] for c in new] == [c["productOptionChoiceId"] for c in _cycles] \
-            and [(c["name"], c["priceMXN"], c["cycleMinutes"]) for c in new] \
-            == [(c["name"], c["priceMXN"], c["cycleMinutes"]) for c in _cycles]:
+
+def _key(c):
+    return (c["productOptionChoiceId"], c["name"], c["priceMXN"], c["cycleMinutes"], c.get("description"))
+
+
+def set_cycles(cycles, device_name=None):
+    """Datos del heartbeat. Sólo redibuja si algo cambió, y nunca saca al cliente
+    de otra página (confirm, inuse...): se dibuja al volver a main."""
+    global _cycles, _index, title, _dirty
+    new_title = str(device_name).upper() if device_name else title
+    new = list(cycles or [])[:4]
+    if [_key(c) for c in new] == [_key(c) for c in _cycles] and new_title == title and not _dirty:
         return
-
-    _cycles = new
+    current = selected()
+    _cycles, title = new, new_title
     ids = [c["productOptionChoiceId"] for c in _cycles]
-    if current and current["productOptionChoiceId"] in ids:
-        _index = ids.index(current["productOptionChoiceId"])
+    _index = ids.index(current["productOptionChoiceId"]) if current and current["productOptionChoiceId"] in ids else 0
+    if lcd.page in (None, "main"):
+        show_main()
     else:
-        _index = 0
+        _dirty = True
 
-    _lcd.show_cycles([(c["name"], c["priceMXN"], c["cycleMinutes"]) for c in _cycles])
+
+def show_main():
+    """Dibuja la página main completa (también sirve para regresar a ella)."""
+    global _dirty
+    _dirty = False
+    lcd.show_main(title, [_card(c) for c in _cycles])
     _show()
 
 
@@ -55,23 +68,30 @@ def selected():
 
 
 def poll():
-    """Llamar en cada vuelta del bucle: lee los toques de la pantalla."""
+    """Llamar en cada vuelta del bucle. Devuelve el evento de la pantalla (o None);
+    los toques de ciclo ya se aplican aquí."""
     global _index
-    i = _lcd.poll()
-    if i is not None and i < len(_cycles):
-        _index = i
-        _show()
+    ev = lcd.poll()
+    if ev and ev.startswith("SEL") and lcd.page == "main":
+        i = int(ev[3:])
+        if i < len(_cycles) and i != _index:
+            _index = i
+            _show()
+    return ev
 
 
-def message(text, color=COLOR_INFO):
+def message(text, pco=NAVY):
+    """Mensaje corto en el panel inferior de la página main."""
     print("[pantalla]", text)
-    _lcd.set_status(str(text)[:80], color)
+    if lcd.page == "main":
+        lcd.status(str(text)[:45], pco)
 
 
 def _show():
     c = selected()
-    if c:
-        _lcd.select(_index)
-        message("{}: ${} - {} min. Escanea tu QR".format(c["name"], c["priceMXN"], c["cycleMinutes"]))
-    else:
-        message("Sin ciclos: revisa el productId del dispositivo")
+    if not c:
+        lcd.select(None, "Sin ciclos", "")
+        message("Revisa el productId del dispositivo")
+        return
+    lcd.select(_index, "%s · %s min" % (c["name"], c["cycleMinutes"]), money(c["priceMXN"]))
+    lcd.status("Escanea tu QR\npara continuar")
