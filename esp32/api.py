@@ -21,6 +21,21 @@ def heartbeat(running):
     return None
 
 
+def quote(client_qr, choice_id):
+    """Consulta nombre y saldo SIN cobrar (pantalla de confirmación).
+    Devuelve (status, data); status None = sin conexión."""
+    body = {"clientQr": client_qr, "productOptionChoiceId": choice_id}
+    for attempt in range(1, 4):
+        net.ensure_wifi()
+        status, data = net.post("/laundryDevices/quote", body)
+        print("quote intento", attempt, "->", status, data)
+        if status is not None and status < 500:
+            return status, data
+        hw.feed()
+        time.sleep(attempt)
+    return None, {}
+
+
 def _new_request_id():
     return binascii.hexlify(os.urandom(16)).decode()
 

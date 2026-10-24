@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Header, Request
 
 from modules.laundryDevices import (
-    heartbeat, authorize, client_qr, laundry_devices_sp,
+    heartbeat, authorize, quote, client_qr, laundry_devices_sp,
     all_laundry_devices_sp, all_laundry_device_uses_sp, regenerate_client_qrs,
 )
 from security.worker_key import require_worker_key
@@ -19,8 +19,10 @@ de la máquina).
 
 Headers: X-Device-Id: int, X-Device-Key: str
 Body: { "status"?: "idle|running|error", "firmwareVersion"?: str, "rssi"?: int }
-Returns: { ok, serverTimeUtc, productId, priceMXN, cycleMinutes,
-           cycles: [{ productOptionChoiceId, name, priceMXN, cycleMinutes }] }
+Returns: { ok, serverTimeUtc, deviceName, machineType, productId, priceMXN, cycleMinutes,
+           cycles: [{ productOptionChoiceId, name, priceMXN, description, cycleMinutes }] }
+deviceName es el título de la pantalla. description es la línea de detalle del
+ciclo (p. ej. "Agua baja"): se edita en el POS, en la opción del producto.
 priceMXN es null cuando la máquina cobra por ciclo (productId).
 
 401 device_unauthorized   403 device_inactive
@@ -52,7 +54,8 @@ reintento — la respuesta es la misma y el cobro ocurre una sola vez.
 Headers: X-Device-Id: int, X-Device-Key: str
 Body: { "requestId": str (8-40, [A-Za-z0-9_-]), "clientQr": str, "productOptionChoiceId": int }
 Returns 200: { authorized: true, useId, amountMXN, choiceName, balanceAfter, cycleMinutes, replayed }
-        402: { authorized: false, useId, amountMXN, choiceName, reason: "insufficient_funds", replayed }
+        402: { authorized: false, useId, amountMXN, choiceName, reason: "insufficient_funds",
+               availableBalance, missingMXN, replayed }
 
 400 choice_not_for_device (el ciclo no es de esta máquina, p. ej. un ciclo de
     secado mandado por la lavadora)
@@ -67,6 +70,32 @@ def laundry_device_authorize(
     x_device_key: str | None = Header(default=None),
 ):
     return authorize(x_device_id, x_device_key, json)
+
+
+@router.post(
+    "/laundryDevices/quote",
+    summary="ESP32: consultar antes de cobrar (pantalla de confirmación)",
+    description="""
+Mismas validaciones que authorize (llave, QR firmado, ciclo de esta máquina),
+pero NO cobra. Llena la pantalla de confirmación o la de saldo insuficiente.
+Sólo devuelve el nombre de pila: la pantalla está en un lugar público.
+
+Headers: X-Device-Id: int, X-Device-Key: str
+Body: { "clientQr": str, "productOptionChoiceId": int }
+Returns: { firstName, availableBalance, priceMXN, productOptionChoiceId, choiceName,
+           cycleMinutes, enough: bool, missingMXN }
+
+El saldo puede cambiar entre quote y authorize: el cobro real lo decide authorize.
+400 choice_not_for_device   401 device_unauthorized / qr_*   403 device_inactive
+404 client_not_found (cliente inactivo o de otra compañía)
+""",
+)
+def laundry_device_quote(
+    json: dict,
+    x_device_id: str | None = Header(default=None),
+    x_device_key: str | None = Header(default=None),
+):
+    return quote(x_device_id, x_device_key, json)
 
 
 @router.post(

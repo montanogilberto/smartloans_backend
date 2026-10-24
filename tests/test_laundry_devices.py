@@ -27,6 +27,8 @@ import security.worker_key as worker_key  # noqa: E402
 DEVICE_KEY = "test-device-key"
 # productOptionChoices of the live catalog: 1002 Servicio de lavado / 1003 Servicio de secado
 CHOICES = {1004: (1002, "Basico", 40.0), 1006: (1002, "Carga Alta", 70.0), 1009: (1003, "50 Min", 70.0)}
+DESCRIPTIONS = {1004: "Agua baja", 1006: "Agua alta", 1009: None}
+CLIENTS = {2260: "Juan"}   # active clients of company 1
 
 
 class FakeDb:
@@ -60,9 +62,13 @@ class FakeDb:
                     return {"error": "choice_not_for_device"}
                 return {"priceMXN": price, "productOptionChoiceId": choice, "choiceName": name}
             if row["action"] == 7:
-                return {"cycles": [{"productOptionChoiceId": cid, "name": name, "priceMXN": price}
+                return {"cycles": [{"productOptionChoiceId": cid, "name": name, "priceMXN": price,
+                                    "description": DESCRIPTIONS[cid]}
                                    for cid, (product, name, price) in CHOICES.items()
                                    if product == self.device["productId"]]}
+            if row["action"] == 8:
+                name = CLIENTS.get(row["clientId"])
+                return {"clientId": row["clientId"], "firstName": name} if name else {"error": "client_not_found"}
         if proc == "sp_laundryDeviceUses":
             if row["action"] == 1:
                 key = (row["deviceId"], row["requestId"])
@@ -102,6 +108,8 @@ class Base(unittest.TestCase):
             mock.patch.dict(os.environ, {"LAUNDRY_QR_SECRET": "s3cret"}),
             mock.patch.object(ld, "_sp", side_effect=self.db.sp),
             mock.patch.object(ld, "post_entry", side_effect=self.db.post_entry),
+            mock.patch.object(ld, "get_balance",
+                              side_effect=lambda company, client: {"availableBalance": self.db.balance}),
         ]
         for p in patches:
             p.start()
@@ -188,9 +196,18 @@ class AuthorizeTest(Base):
     def test_insufficient_funds_is_402(self):
         self.db.balance = 10.0
         r = self.authorize(self.qr())
-        self.assertEqual((r.status_code, r.json()["reason"]), (402, "insufficient_funds"))
+        body = r.json()
+        self.assertEqual((r.status_code, body["reason"]), (402, "insufficient_funds"))
+        self.assertEqual((body["availableBalance"], body["missingMXN"]), (10.0, 30.0))
         self.db.balance = 50.0  # client tops up, ESP32 starts a new request
         self.assertEqual(self.authorize(self.qr(), request_id="req-00000002").status_code, 200)
+
+    def test_replayed_402_still_reports_the_balance(self):
+        self.db.balance = 25.0
+        self.authorize(self.qr())
+        body = self.authorize(self.qr()).json()
+        self.assertTrue(body["replayed"])
+        self.assertEqual((body["availableBalance"], body["missingMXN"]), (25.0, 15.0))
 
     def test_ledger_failure_leaves_use_pending_and_retry_settles(self):
         self.db.ledger_error = "timeout"
@@ -238,14 +255,52 @@ class AuthorizeTest(Base):
         self.assertEqual(self.authorize(self.qr(), request_id="x").status_code, 400)
 
 
+class QuoteTest(Base):
+    def quote(self, qr, choice=1004, key=DEVICE_KEY):
+        body = {"clientQr": qr}
+        if choice is not None:
+            body["productOptionChoiceId"] = choice
+        return self.client.post("/laundryDevices/quote",
+                                headers={"X-Device-Id": "7", "X-Device-Key": key}, json=body)
+
+    def test_enough_balance(self):
+        r = self.quote(self.qr(), choice=1006)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {
+            "firstName": "Juan", "availableBalance": 100.0, "priceMXN": 70.0, "productOptionChoiceId": 1006,
+            "choiceName": "Carga Alta", "cycleMinutes": 45, "enough": True, "missingMXN": 0,
+        })
+
+    def test_not_enough_balance(self):
+        self.db.balance = 20.0
+        body = self.quote(self.qr()).json()
+        self.assertEqual((body["enough"], body["missingMXN"]), (False, 20.0))
+
+    def test_never_charges_or_opens_a_use(self):
+        self.quote(self.qr())
+        self.assertEqual((self.db.ledger, self.db.uses, self.db.balance), ({}, {}, 100.0))
+
+    def test_same_checks_as_authorize(self):
+        self.assertEqual(self.quote(self.qr(), choice=1009).json()["reason"], "choice_not_for_device")
+        self.assertEqual(self.quote("2260").json()["reason"], "qr_malformed")
+        self.assertEqual(self.quote(self.qr(company_id=2)).json()["reason"], "qr_wrong_company")
+        self.assertEqual(self.quote(self.qr(), key="nope").status_code, 401)
+
+    def test_unknown_or_inactive_client(self):
+        r = self.quote(self.qr(client_id=999))
+        self.assertEqual((r.status_code, r.json()["reason"]), (404, "client_not_found"))
+
+
 class DeviceAdminTest(Base):
     def test_heartbeat_lists_the_screen_cycles(self):
         r = self.client.post("/laundryDevices/heartbeat", headers={"X-Device-Id": "7", "X-Device-Key": DEVICE_KEY},
                              json={"status": "idle", "firmwareVersion": "0.1.0", "rssi": -61})
         self.assertEqual(r.status_code, 200)
         cycles = r.json()["cycles"]
-        self.assertEqual([(c["productOptionChoiceId"], c["priceMXN"], c["cycleMinutes"]) for c in cycles],
-                         [(1004, 40.0, 45), (1006, 70.0, 45)])
+        self.assertEqual([(c["productOptionChoiceId"], c["priceMXN"], c["description"], c["cycleMinutes"])
+                          for c in cycles],
+                         [(1004, 40.0, "Agua baja", 45), (1006, 70.0, "Agua alta", 45)])
+        self.assertEqual((r.json()["deviceName"], r.json()["machineType"]), ("Lavadora 1", "washer"))
         sent = self.db.calls[-2][1]["laundryDevices"][0]
         self.assertEqual((sent["status"], sent["rssi"]), ("idle", -61))
 

@@ -34,7 +34,7 @@ import secrets
 from fastapi.responses import JSONResponse
 
 from databases import connection
-from modules.walletTransactions import post_entry
+from modules.walletTransactions import get_balance, post_entry
 
 CLIENT_QR_PREFIX = "GMO1"
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,40}$")
@@ -121,7 +121,12 @@ def _authenticate(device_id, device_key):
     return device
 
 
-def _use_response(use: dict, device: dict) -> JSONResponse:
+def _available(device: dict, client_id) -> float:
+    return float(get_balance(device["companyId"], client_id).get("availableBalance") or 0)
+
+
+def _use_response(use: dict, device: dict, available: float = None) -> JSONResponse:
+    """available: the client's balance when a debit was refused (fetched if not given)."""
     authorized = use.get("status") == "authorized"
     body = {
         "authorized": authorized,
@@ -134,6 +139,11 @@ def _use_response(use: dict, device: dict) -> JSONResponse:
         body.update(balanceAfter=use.get("balanceAfter"), cycleMinutes=cycle_minutes(use.get("choiceName"), device))
     else:
         body["reason"] = use.get("reason")
+        if use.get("reason") == "insufficient_funds":
+            if available is None:
+                available = _available(device, use.get("clientId"))
+            body.update(availableBalance=available,
+                        missingMXN=round(max(float(use.get("amountMXN") or 0) - available, 0), 2))
     return JSONResponse(body, status_code=200 if authorized else 402)
 
 
@@ -155,10 +165,69 @@ def heartbeat(device_id, device_key, payload: dict, client_ip: str = None):
             return JSONResponse(result, status_code=500)
         cycles = _sp("sp_laundryDevices", {"laundryDevices": [{"action": 7, "deviceId": device["deviceId"]}]})
         return JSONResponse({
-            "ok": True, "serverTimeUtc": result.get("serverTimeUtc"), "productId": result.get("productId"),
+            "ok": True, "serverTimeUtc": result.get("serverTimeUtc"), "deviceName": result.get("name"),
+            "machineType": result.get("machineType"), "productId": result.get("productId"),
             "priceMXN": result.get("priceMXN"), "cycleMinutes": result.get("cycleMinutes"),
             "cycles": [{**c, "cycleMinutes": cycle_minutes(c.get("name"), device)}
                        for c in cycles.get("cycles") or []],
+        }, status_code=200)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def _client_and_price(device: dict, payload: dict):
+    """(client, price) from the scanned QR and the chosen cycle, or a JSONResponse.
+    Same checks for quote and authorize, so a quote never promises what authorize refuses."""
+    try:
+        client = verify_client_qr(payload.get("clientQr"))
+    except ValueError as e:
+        return JSONResponse({"authorized": False, "reason": str(e)}, status_code=401)
+    if client["companyId"] != device["companyId"]:
+        return JSONResponse({"authorized": False, "reason": "qr_wrong_company"}, status_code=401)
+    choice = payload.get("productOptionChoiceId")
+    if choice is not None and not isinstance(choice, int):
+        return JSONResponse({"error": "productOptionChoiceId debe ser entero"}, status_code=400)
+
+    price = _sp("sp_laundryDevices", {"laundryDevices": [{
+        "action": 6, "deviceId": device["deviceId"], "productOptionChoiceId": choice,
+    }]})
+    if price.get("error") == "choice_not_for_device":
+        return JSONResponse({"authorized": False, "reason": "choice_not_for_device"}, status_code=400)
+    if price.get("error"):
+        return JSONResponse(price, status_code=500)
+    return client, price
+
+
+def quote(device_id, device_key, payload: dict):
+    """What the confirm / nofunds screens show before charging. Never debits."""
+    try:
+        device = _authenticate(device_id, device_key)
+        if isinstance(device, JSONResponse):
+            return device
+        resolved = _client_and_price(device, payload)
+        if isinstance(resolved, JSONResponse):
+            return resolved
+        client, price = resolved
+
+        person = _sp("sp_laundryDevices", {"laundryDevices": [{
+            "action": 8, "deviceId": device["deviceId"], "clientId": client["clientId"],
+        }]})
+        if person.get("error") == "client_not_found":
+            return JSONResponse({"authorized": False, "reason": "client_not_found"}, status_code=404)
+        if person.get("error"):
+            return JSONResponse(person, status_code=500)
+
+        amount = float(price["priceMXN"])
+        available = _available(device, client["clientId"])
+        return JSONResponse({
+            "firstName": person.get("firstName"),
+            "availableBalance": available,
+            "priceMXN": amount,
+            "productOptionChoiceId": price.get("productOptionChoiceId"),
+            "choiceName": price.get("choiceName"),
+            "cycleMinutes": cycle_minutes(price.get("choiceName"), device),
+            "enough": available >= amount,
+            "missingMXN": round(max(amount - available, 0), 2),
         }, status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -174,23 +243,10 @@ def authorize(device_id, device_key, payload: dict):
         if not _REQUEST_ID_RE.match(request_id):
             return JSONResponse({"error": "requestId inválido (8-40 caracteres: letras, números, - o _)"},
                                 status_code=400)
-        try:
-            client = verify_client_qr(payload.get("clientQr"))
-        except ValueError as e:
-            return JSONResponse({"authorized": False, "reason": str(e)}, status_code=401)
-        if client["companyId"] != device["companyId"]:
-            return JSONResponse({"authorized": False, "reason": "qr_wrong_company"}, status_code=401)
-        choice = payload.get("productOptionChoiceId")
-        if choice is not None and not isinstance(choice, int):
-            return JSONResponse({"error": "productOptionChoiceId debe ser entero"}, status_code=400)
-
-        price = _sp("sp_laundryDevices", {"laundryDevices": [{
-            "action": 6, "deviceId": device["deviceId"], "productOptionChoiceId": choice,
-        }]})
-        if price.get("error") == "choice_not_for_device":
-            return JSONResponse({"authorized": False, "reason": "choice_not_for_device"}, status_code=400)
-        if price.get("error"):
-            return JSONResponse(price, status_code=500)
+        resolved = _client_and_price(device, payload)
+        if isinstance(resolved, JSONResponse):
+            return resolved
+        client, price = resolved
 
         use = _sp("sp_laundryDeviceUses", {"laundryDeviceUses": [{
             "action": 1, "deviceId": device["deviceId"], "companyId": device["companyId"],
@@ -214,8 +270,11 @@ def authorize(device_id, device_key, payload: dict):
             reference_type="laundryDeviceUse", reference_id=use["useId"],
             note=f"Lavandería: {device.get('name')}" + (f" · {use['choiceName']}" if use.get("choiceName") else ""),
         )
+        available = None
         if entry.get("error") == "Saldo insuficiente":
             settle = {"status": "rejected", "reason": "insufficient_funds"}
+            if entry.get("available") is not None:
+                available = float(entry["available"])
         elif entry.get("error"):
             # Left pending: the ESP32 retries with the same requestId.
             return JSONResponse({"error": entry["error"]}, status_code=502)
@@ -227,7 +286,7 @@ def authorize(device_id, device_key, payload: dict):
         if settled.get("error"):
             return JSONResponse(settled, status_code=500)
         settled["replayed"] = use.get("replayed")
-        return _use_response(settled, device)
+        return _use_response(settled, device, available)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

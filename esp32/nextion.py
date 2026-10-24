@@ -1,30 +1,104 @@
-# Driver mínimo para pantalla Nextion en MicroPython (ESP32).
-# Protocolo:
-#   ESP32 -> Nextion : comandos de texto terminados en FF FF FF
-#   Nextion -> ESP32 : líneas de texto "SEL0".."SEL3" + "\n" al tocar un ciclo
+# Driver de la pantalla Nextion GMO (diseño v2, 5 páginas) para MicroPython.
+#
+# MODO DIBUJO: el proyecto del Editor sólo tiene fuentes, imágenes y 5 páginas
+# con su fondo (sta=image), sin componentes. Todo el texto lo dibuja el ESP32
+# con xstr, la tarjeta seleccionada con picq y la barra con fill. Los toques
+# llegan como coordenadas (sendxy=1 en el Preinitialize de main) y aquí se
+# traducen a los mismos eventos de antes: SEL0..SEL3, OK, CANCEL, BACK.
+#
+# Para mover un texto o cambiar un color, edita las tablas de abajo: no hace
+# falta volver a compilar ni cargar el .tft.
+#
+# Páginas e imágenes (deben coincidir con el proyecto del Editor):
+#   main=0 (main_sel=1), confirm=2, inuse=3, nofunds=4, msg=5
+# Fuentes (IDs del Editor):
+#   0 r16, 1 r18, 2 b24, 3 b36, 4 b30, 5 b72
 
 from machine import UART
 
 END = b"\xff\xff\xff"
 
-COLOR_NORMAL = 50712    # gris claro
-COLOR_SELECTED = 2016   # verde
-COLOR_OK = 2016         # verde
-COLOR_ERROR = 63488     # rojo
-COLOR_INFO = 0          # negro
+# Colores en formato Nextion (RGB565), iguales a los del diseño
+NAVY = 4425
+SEC = 23375
+GREEN = 7146
+GREEN_D = 4936
+AMBER_D = 39616
+RED_D = 45315
+WHITE = 65535
+SEL_SEC = 55196
+BAR_BG = 57117
+
+LEFT, CENTER, RIGHT = 0, 1, 2
+SLOTS = 4
+
+PAGES = {"main": 0, "confirm": 2, "inuse": 3, "nofunds": 4, "msg": 5}
+PIC_MAIN_SEL = 1
+
+# Cajas de texto: (x, y, w, h, fuente, alineación, color)
+TITLE = (28, 48, 300, 28, 1, LEFT, SEC)
+
+CARDS = [(28, 122), (408, 122), (28, 251), (408, 251)]   # esquina de cada tarjeta
+CARD_W, CARD_H = 364, 117
+# dentro de la tarjeta, relativo a su esquina
+CARD_NAME = (60, 14, 190, 34, 2, LEFT)
+CARD_DETAIL = (60, 50, 190, 26, 1, LEFT)
+CARD_MIN = (60, 78, 190, 24, 0, LEFT)
+CARD_PRICE = (254, 30, 90, 56, 3, RIGHT)
+
+MAIN = {
+    "sel": (48, 414, 330, 40, 2, LEFT, NAVY),
+    "selp": (400, 396, 160, 56, 3, RIGHT, GREEN),
+    "status": (638, 392, 128, 64, 0, LEFT, NAVY),
+}
+CONFIRM = {
+    "hello": (170, 108, 460, 44, 4, CENTER, NAVY),
+    "bal": (170, 152, 460, 28, 1, CENTER, SEC),
+    "total": (170, 226, 460, 80, 5, CENTER, NAVY),
+    "detail": (170, 308, 460, 28, 1, CENTER, NAVY),
+    "timeout": (170, 338, 460, 26, 0, CENTER, SEC),
+}
+INUSE = {
+    "paid": (84, 102, 676, 40, 2, LEFT, GREEN_D),
+    "step1": (92, 218, 316, 36, 1, LEFT, NAVY),
+    "warn": (60, 344, 330, 40, 0, LEFT, AMBER_D),
+    "cycle": (48, 404, 352, 28, 0, LEFT, SEC),
+    "timer": (452, 212, 304, 88, 5, CENTER, NAVY),
+    "ends": (452, 346, 304, 28, 1, CENTER, SEC),
+}
+BAR = (468, 318, 272, 14)
+NOFUNDS = {
+    "head": (28, 104, 470, 44, 4, LEFT, NAVY),
+    "detail": (28, 150, 470, 30, 1, LEFT, SEC),
+    "timeout": (236, 404, 264, 32, 0, LEFT, SEC),
+    "url": (546, 150, 200, 160, 0, CENTER, SEC),   # sólo si el QR no está en el fondo
+}
+MSG = {
+    "head": (170, 166, 460, 48, 4, CENTER, NAVY),
+    "sub": (170, 222, 460, 64, 1, CENTER, SEC),
+    "foot": (28, 420, 744, 32, 0, CENTER, SEC),
+}
+
+# Zonas táctiles por página: (x, y, w, h, evento)
+TOUCH = {
+    "main": [(x, y, CARD_W, CARD_H, "SEL%d" % i) for i, (x, y) in enumerate(CARDS)],
+    "confirm": [(150, 388, 180, 64, "CANCEL"), (346, 388, 304, 64, "OK")],
+    "nofunds": [(28, 388, 192, 64, "BACK")],
+}
 
 
 class Nextion:
-    def __init__(self, uart_id=1, tx=27, rx=26, baud=9600, max_cycles=4):
+    def __init__(self, uart_id=1, tx=27, rx=26, baud=9600):
         self.uart = UART(uart_id, baudrate=baud, tx=tx, rx=rx, timeout=10)
-        self.max = max_cycles
-        self.cycles = []
-        self.selected = None
         self._buf = b""
-        self.uart.write(END)           # limpia cualquier comando a medias
-        self.cmd("page main")
-        self.cmd("thsp=0")             # nunca entrar en reposo
+        self.page = None
+        self.used = 0          # tarjetas con ciclo en main
+        self.selected = None
+        self._cards = []
+        self.uart.write(END)   # limpia cualquier comando a medias
+        self.cmd("thsp=0")     # nunca entrar en reposo
         self.cmd("dim=100")
+        self.cmd("sendxy=1")   # por si el .tft no lo trae en Preinitialize
 
     # ---------- bajo nivel ----------
     def cmd(self, s):
@@ -35,78 +109,159 @@ class Nextion:
         # comillas escapadas; salto de línea real -> \r de Nextion
         return str(text).replace('"', '\\"').replace("\n", "\\r")
 
-    def set_text(self, comp, text):
-        self.cmd('%s.txt="%s"' % (comp, self._q(text)))
+    def text(self, box, value, pco=None, pic=None):
+        """Dibuja `value` en la caja, borrando lo anterior con el recorte del fondo."""
+        x, y, w, h, font, xcen = box[:6]
+        color = pco if pco is not None else box[6]
+        bg = pic if pic is not None else PAGES[self.page]
+        self.cmd('xstr %d,%d,%d,%d,%d,%d,%d,%d,1,0,"%s"'
+                 % (x, y, w, h, font, color, bg, xcen, self._q(value)))
 
-    # ---------- alto nivel ----------
-    def set_title(self, text):
-        self.set_text("tTitle", text)
+    def goto(self, page, title=None):
+        """Cambia de página: la Nextion repinta el fondo y borra todo lo dibujado."""
+        self.cmd("page " + page)
+        self.page = page
+        if title is not None:
+            self.text(TITLE, title)
 
-    def show_cycles(self, cycles):
-        """cycles: lista de (nombre, precio, minutos). Máximo 4."""
-        self.cycles = list(cycles)[: self.max]
-        for i in range(self.max):
-            b = "b%d" % i
-            if i < len(self.cycles):
-                name, price, minutes = self.cycles[i]
-                self.set_text(b, "%s\n$%s - %s min" % (name, _money(price), minutes))
-                self.cmd("vis %s,1" % b)
-            else:
-                self.cmd("vis %s,0" % b)
-        self.select(None)
+    # ---------- página main: elegir ciclo ----------
+    def show_main(self, title, cards):
+        """cards: lista de dicts {name, detail, minutes, price} (máximo 4)."""
+        self.goto("main", title)
+        self._cards = list(cards)[:SLOTS]
+        self.used = len(self._cards)
+        self.selected = None
+        for i in range(self.used):
+            self._card(i, False)
 
-    def select(self, index):
-        self.selected = index
-        for i in range(len(self.cycles)):
-            color = COLOR_SELECTED if i == index else COLOR_NORMAL
-            self.cmd("b%d.bco=%d" % (i, color))
-            self.cmd("b%d.bco2=%d" % (i, color))
+    def _card(self, i, on):
+        x, y = CARDS[i]
+        pic = PIC_MAIN_SEL if on else PAGES["main"]
+        self.cmd("picq %d,%d,%d,%d,%d" % (x, y, CARD_W, CARD_H, pic))
+        c = self._cards[i]
+        for box, key, normal, sel in ((CARD_NAME, "name", NAVY, WHITE),
+                                      (CARD_DETAIL, "detail", SEC, SEL_SEC),
+                                      (CARD_MIN, "minutes", SEC, SEL_SEC),
+                                      (CARD_PRICE, "price", NAVY, WHITE)):
+            bx, by, w, h, font, xcen = box
+            self.text((x + bx, y + by, w, h, font, xcen), c[key], sel if on else normal, pic)
 
-    def set_status(self, text, color=COLOR_INFO):
-        self.set_text("tStatus", text)
-        self.cmd("tStatus.pco=%d" % color)
+    def select(self, index, sel_text="", sel_price=""):
+        """Marca la tarjeta `index` (o ninguna con None) y llena el panel inferior.
+        Sólo repinta las tarjetas que cambian."""
+        if index != self.selected:
+            if self.selected is not None and self.selected < self.used:
+                self._card(self.selected, False)
+            if index is not None and index < self.used:
+                self._card(index, True)
+            self.selected = index
+        self.text(MAIN["sel"], sel_text)
+        self.text(MAIN["selp"], sel_price)
 
-    def set_timer(self, text):
-        self.set_text("tTimer", text)
+    def status(self, text, pco=NAVY):
+        """Texto chico del panel inferior derecho (2-3 renglones)."""
+        self.text(MAIN["status"], text, pco)
 
-    def lock(self, locked):
-        """Bloquea/desbloquea el toque de todos los botones."""
-        self.cmd("tsw 255,%d" % (0 if locked else 1))
+    # ---------- página confirm ----------
+    def show_confirm(self, title, hello, balance, total, detail, timeout):
+        self.goto("confirm", title)
+        self.text(CONFIRM["hello"], hello)
+        self.text(CONFIRM["bal"], balance)
+        self.text(CONFIRM["total"], total)
+        self.text(CONFIRM["detail"], detail)
+        self.text(CONFIRM["timeout"], timeout)
 
-    # ---------- lectura ----------
+    def confirm_timeout(self, text):
+        self.text(CONFIRM["timeout"], text)
+
+    # ---------- página inuse ----------
+    def show_inuse(self, title, paid, step1, warn, cycle, timer, ends, progress=0):
+        self.goto("inuse", title)
+        self.text(INUSE["paid"], paid)
+        self.text(INUSE["step1"], step1)
+        self.text(INUSE["warn"], warn)
+        self.text(INUSE["cycle"], cycle)
+        self.text(INUSE["ends"], ends)
+        self.update_timer(timer, progress)
+
+    def update_timer(self, timer, progress, warn=None):
+        self.text(INUSE["timer"], timer)
+        x, y, w, h = BAR
+        done = w * max(0, min(100, int(progress))) // 100
+        self.cmd("fill %d,%d,%d,%d,%d" % (x, y, w, h, BAR_BG))
+        if done:
+            self.cmd("fill %d,%d,%d,%d,%d" % (x, y, done, h, GREEN))
+        if warn is not None:
+            self.text(INUSE["warn"], warn)
+
+    # ---------- página nofunds ----------
+    def show_nofunds(self, title, head, detail, qr_url, timeout):
+        """qr_url: si el QR de la app ya está en la imagen de fondo, pásalo vacío;
+        si no, se escribe el enlace como texto en el recuadro."""
+        self.goto("nofunds", title)
+        self.text(NOFUNDS["head"], head)
+        self.text(NOFUNDS["detail"], detail)
+        if qr_url:
+            self.text(NOFUNDS["url"], qr_url)
+        self.text(NOFUNDS["timeout"], timeout)
+
+    def nofunds_timeout(self, text):
+        self.text(NOFUNDS["timeout"], text)
+
+    # ---------- página msg ----------
+    def show_msg(self, title, head, sub="", foot="", pco=NAVY):
+        self.goto("msg", title)
+        self.text(MSG["head"], head, pco)
+        self.text(MSG["sub"], sub)
+        self.text(MSG["foot"], foot)
+
+    # ---------- lectura de toques ----------
+    def _event_at(self, x, y):
+        for zx, zy, zw, zh, ev in TOUCH.get(self.page, ()):
+            if zx <= x < zx + zw and zy <= y < zy + zh:
+                if ev.startswith("SEL") and int(ev[3:]) >= self.used:
+                    return None
+                return ev
+        return None
+
     def poll(self):
-        """Devuelve el índice del ciclo tocado, o None. No bloquea."""
+        """Devuelve 'SEL0'..'SEL3', 'OK', 'CANCEL', 'BACK' o None. No bloquea."""
         if self.uart.any():
             self._buf += self.uart.read() or b""
         while self._buf:
-            nl = self._buf.find(b"\n")
-            ff = self._buf.find(END)
-            if ff != -1 and (nl == -1 or ff < nl):
-                frame = self._buf[:ff]
-                self._buf = self._buf[ff + 3:]
-                if frame:
-                    print("[nextion] respuesta:", frame)   # p. ej. 1A = nombre inválido
+            # Toque: 0x67 xH xL yH yL evento FF FF FF (evento 0 = soltar)
+            if self._buf[0] == 0x67:
+                if len(self._buf) < 9:
+                    return None
+                frame, self._buf = self._buf[:9], self._buf[9:]
+                if frame[6:9] != END:
+                    self._resync()
+                    continue
+                x = (frame[1] << 8) | frame[2]
+                y = (frame[3] << 8) | frame[4]
+                if frame[5] == 0:
+                    ev = self._event_at(x, y)
+                    if ev:
+                        return ev
                 continue
-            if nl == -1:
+            ff = self._buf.find(END)
+            if ff == -1:
                 if len(self._buf) > 256:
                     self._buf = b""
                 return None
-            line = self._buf[:nl].strip()
-            self._buf = self._buf[nl + 1:]
-            if line.startswith(b"SEL"):
-                try:
-                    i = int(line[3:])
-                except ValueError:
-                    continue
-                if i < len(self.cycles):
-                    self.select(i)
-                    return i
+            frame, self._buf = self._buf[:ff], self._buf[ff + 3:]
+            if frame and frame[0] not in (0x00, 0x88, 0x66):   # arranque / listo / id de página
+                print("[nextion] respuesta:", frame)          # 0x1A/0x1B/0x1C = comando inválido
         return None
 
+    def _resync(self):
+        ff = self._buf.find(END)
+        self._buf = self._buf[ff + 3:] if ff != -1 else b""
 
-def _money(v):
+
+def money(v):
     try:
         v = float(v)
-        return ("%d" % v) if v == int(v) else ("%.2f" % v)
+        return ("$%d" % v) if v == int(v) else ("$%.2f" % v)
     except (TypeError, ValueError):
-        return str(v)
+        return "$" + str(v)
