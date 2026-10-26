@@ -52,7 +52,7 @@ def products_sp(json_file: dict):
         payload = json.dumps(json_file)
 
         result = execute_sp_json(
-            "EXEC dbo.sp_products_save @pjsonfile = %s",
+            "EXEC dbo.sp_products @pjsonfile = %s",
             (payload,)
         )
 
@@ -144,7 +144,7 @@ async def upload_product_image_connector(json_file: dict) -> JSONResponse:
     """Uploads a product photo (usually the front photo the label reader used
     to fill "Nuevo Producto") to Azure Blob Storage -- same helpers/container
     as expense receipts, company-scoped folder. Returns: { blobUrl }.
-    The caller persists the URL via sp_products_save (products[].imageUrl) --
+    The caller persists the URL via sp_products (products[].imageUrl) --
     this endpoint only uploads bytes.
         {"companyId": 1, "imageBase64": "data:image/jpeg;base64,..."}"""
     try:
