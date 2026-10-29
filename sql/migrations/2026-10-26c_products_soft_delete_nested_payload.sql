@@ -732,8 +732,9 @@ GO
 SELECT
     CASE WHEN COL_LENGTH('dbo.products', 'imageUrl') IS NOT NULL THEN 1 ELSE 0 END AS hasImageUrl,
     COL_LENGTH('dbo.productsDescription', 'Dosage') AS dosageBytes,  -- 1000 = NVARCHAR(500)
-    CASE WHEN OBJECT_DEFINITION(OBJECT_ID('dbo.sp_products')) LIKE '%products[0].productDetails%'
-          AND OBJECT_DEFINITION(OBJECT_ID('dbo.sp_products')) LIKE '%Deactivated Successfully%' THEN 1 ELSE 0 END AS spProductsP0,
+    -- CHARINDEX, not LIKE: "[0]" is a character class in a LIKE pattern.
+    CASE WHEN CHARINDEX('products[0].productDetails', OBJECT_DEFINITION(OBJECT_ID('dbo.sp_products'))) > 0
+          AND CHARINDEX('Deactivated Successfully', OBJECT_DEFINITION(OBJECT_ID('dbo.sp_products'))) > 0 THEN 1 ELSE 0 END AS spProductsP0,
     CASE WHEN OBJECT_DEFINITION(OBJECT_ID('dbo.sp_products_by_company')) LIKE '%includeSupplies%' THEN 1 ELSE 0 END AS byCompanyFlags,
     CASE WHEN OBJECT_DEFINITION(OBJECT_ID('dbo.sp_products_one')) LIKE '%packingPresentationName%' THEN 1 ELSE 0 END AS oneHasForm,
     CASE WHEN OBJECT_DEFINITION(OBJECT_ID('dbo.sp_products_all')) LIKE '%isActive = 1%' THEN 1 ELSE 0 END AS allActiveOnly;
