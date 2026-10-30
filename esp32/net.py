@@ -31,12 +31,21 @@ def wifi_connect(timeout_s=20):
         hw.feed()
         time.sleep_ms(250)
     print("Wi-Fi OK:", wlan.ifconfig()[0])
+    sync_time()
+    return True
+
+
+def sync_time():
+    """Pone el reloj del ESP32 en UTC por NTP. main.py lo llama al arrancar aunque
+    el Wi-Fi ya esté conectado: Thonny, al conectarse, pone el reloj en la hora
+    local de la computadora, y la pantalla sumaría otra vez la zona horaria."""
     try:
         import ntptime
-        ntptime.settime()   # hora correcta para TLS y registros
+        ntptime.settime()
+        return True
     except Exception as e:
         print("NTP falló:", e)
-    return True
+        return False
 
 
 def ensure_wifi():
