@@ -52,7 +52,7 @@ from routes_ import (
     manufacturing, rewards, loanChat, clientDashboards,
     digitalContracts, legalCases, disbursement,
     document_intelligence, geocoding, onboardingReminders, registrationReminders,
-    clientFollowUps,
+    clientFollowUps, clientContactPreferences,
     bankAccounts, walletTransactions, transfers,
     paymentIntents, fundingTransactions, transferEvidence, paymentHistory,
     featureFlags,
@@ -218,6 +218,7 @@ app.include_router(clientDashboards.router)
 app.include_router(clientFaceRecognition.router)
 app.include_router(pushNotification.router)
 app.include_router(clientFollowUps.router)
+app.include_router(clientContactPreferences.router)
 app.include_router(loanProposals.router)
 app.include_router(loanOffers.router)
 app.include_router(stripe_payments.router)

@@ -124,7 +124,7 @@ async def onboarding_link(json: dict):
 Backend creates the PaymentIntent with your Stripe secret key and returns only
 the client_secret to the frontend. The card number never passes through your servers.
 
-paymentType values: wallet_top_up | loan_disbursement | loan_repayment | wallet_withdrawal
+paymentType values: wallet_top_up | laundry_top_up | loan_disbursement | loan_repayment | wallet_withdrawal
 
 Body: {
   "companyId": int, "fromClientId": int, "toClientId": int,

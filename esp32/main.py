@@ -76,16 +76,26 @@ def show_error(head, sub=""):
 
 # ---------- main: QR escaneado ----------
 QR_ERRORS = {
-    "qr_malformed": "QR no válido para las máquinas",
-    "qr_invalid": "QR no válido para las máquinas",
+    "qr_malformed": "QR antiguo o de otro tipo.\nActualiza tu QR en la app",
+    "qr_invalid": "QR no válido",
     "qr_wrong_company": "Este QR es de otra sucursal",
     "client_not_found": "Cliente no encontrado",
     "choice_not_for_device": "Ciclo no disponible",
 }
 
 
+def describe_qr(text):
+    """Resumen del QR para la consola, sin la firma (es la credencial del cliente)."""
+    parts = text.split(".")
+    if len(parts) == 4:
+        return "prefijo=%s empresa=%s cliente=%s firma=%d car. (largo %d)" % (
+            parts[0], parts[1], parts[2], len(parts[3]), len(text))
+    return "formato desconocido: %d partes, largo %d, empieza con %r" % (len(parts), len(text), text[:4])
+
+
 def on_qr(client_qr):
     global state, deadline, pending
+    print("[qr]", describe_qr(client_qr))
     cycle = screen.selected()
     if not cycle:
         screen.message("Sin ciclos disponibles", RED_D)
@@ -97,6 +107,7 @@ def on_qr(client_qr):
 
     if status != 200:
         reason = data.get("reason") or data.get("error") or ""
+        print("[qr] rechazado:", status, reason)
         text = QR_ERRORS.get(reason) or ("Sin conexión.\nIntenta de nuevo" if status is None else "Error: %s" % reason)
         screen.message(text, RED_D)
         hw.blink(3, 200)
@@ -187,6 +198,8 @@ def main():
     lcd.show_msg(screen.title, "Iniciando...", "Conectando al servidor")
     if not net.wifi_connect():
         lcd.show_msg(screen.title, "Fuera de servicio", "Sin conexión. Reintentando...", "", RED_D)
+    else:
+        net.sync_time()   # reloj en UTC aunque el Wi-Fi ya estuviera conectado
     do_heartbeat()
     go_main()
     last_heartbeat = time.ticks_ms()

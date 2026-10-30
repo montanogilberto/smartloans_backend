@@ -1,0 +1,8 @@
+One product of a company, with its form, details, descriptions and active options/choices (sp_products_one).
+
+Request:
+{ "products": [ { "companyId": 1, "productId": 1004 } ] }
+
+companyId is required: a product is only returned to its own company.
+Response: { "products": [ { ... } ] }; no match → { "products": [] };
+missing companyId → { "error": "companyId is required" }.

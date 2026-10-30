@@ -118,8 +118,11 @@ class Nextion:
                  % (x, y, w, h, font, color, bg, xcen, self._q(value)))
 
     def goto(self, page, title=None):
-        """Cambia de página: la Nextion repinta el fondo y borra todo lo dibujado."""
+        """Cambia de página y pinta su fondo. El fondo se pinta aquí también (no sólo
+        con el pic de la página en el Editor), así una página mal configurada en el
+        .tft no deja el fondo de otra debajo de los textos."""
         self.cmd("page " + page)
+        self.cmd("pic 0,0,%d" % PAGES[page])
         self.page = page
         if title is not None:
             self.text(TITLE, title)

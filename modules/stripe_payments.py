@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from databases import connection
 from datetime import datetime
 from modules.walletBalance import debit_wallet
+from modules.walletTransactions import post_entry
 from observability.logger import log_workflow_step, log_integration
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
@@ -767,8 +768,15 @@ def _stripe_fee_and_net_mxn(intent, gross_mxn: float) -> tuple[float, float]:
     return fee, round(gross_mxn - fee, 2)
 
 
+# Recarga del saldo prepago de GMO Lavandería: se acredita en walletTransactions,
+# el mismo libro que /laundryDevices/authorize descuenta (LAUNDRY_USAGE). La
+# cartera P2P (wallet_top_up) sigue en clientWallets — no se mezclan.
+LAUNDRY_TOP_UP = "laundry_top_up"
+_TOP_UP_TYPES = ("wallet_top_up", LAUNDRY_TOP_UP)
+
+
 async def _settle_wallet_top_up(tx: dict, net_mxn: float = None):
-    """Credit the client's wallet ledger for a wallet_top_up transaction that
+    """Credit the client's wallet ledger for a wallet_top_up / laundry_top_up transaction that
     JUST transitioned to succeeded. Runs from both the app's confirm call and
     the Stripe webhook — sp_stripe_transactions.update_status returns the
     previous status, so only the caller that performed the pending→succeeded
@@ -778,7 +786,7 @@ async def _settle_wallet_top_up(tx: dict, net_mxn: float = None):
     pasa (webhook), se resuelve aquí desde el balance transaction del intent,
     con la fórmula MX como fallback. El cliente ve la comisión en la app."""
     try:
-        if not isinstance(tx, dict) or tx.get("paymentType") != "wallet_top_up":
+        if not isinstance(tx, dict) or tx.get("paymentType") not in _TOP_UP_TYPES:
             return
         if tx.get("status") != "succeeded" or tx.get("prevStatus") == "succeeded":
             print(f"[stripe][topup] settle skipped (status={tx.get('status')}, prev={tx.get('prevStatus')})")
@@ -799,6 +807,24 @@ async def _settle_wallet_top_up(tx: dict, net_mxn: float = None):
                 except Exception as e:
                     print(f"[stripe][topup] intent retrieve for net FAILED: {e}")
             _fee, net_mxn = _stripe_fee_and_net_mxn(intent, gross_mxn)
+
+        if tx.get("paymentType") == LAUNDRY_TOP_UP:
+            intent_id = tx.get("stripePaymentIntentId") or ""
+            entry = post_entry(
+                company_id=int(company_id), client_id=int(client_id), entry_type="DEPOSIT",
+                direction="C", amount_mxn=net_mxn, idempotency_key=f"stripe:{intent_id}",
+                reference_type="stripe_tx", reference_id=tx.get("transactionId"),
+                note="Recarga con tarjeta (Stripe)",
+            )
+            if entry.get("error"):
+                raise RuntimeError(entry["error"])
+            log_workflow_step("Laundry Balance Credited", workflow_name="money_trail",
+                              action=LAUNDRY_TOP_UP, entity="walletTransactions",
+                              entity_id=entry.get("entryId"),
+                              message=f"+${net_mxn:,.2f} MXN neto (bruto ${gross_mxn:,.2f}) — intent {intent_id}")
+            print(f"[stripe][topup] laundry balance CREDITED clientId={client_id} +{net_mxn} MXN neto "
+                  f"(bruto {gross_mxn}, intent {intent_id})")
+            return
 
         from modules.walletBalance import credit_wallet
         await credit_wallet({
@@ -901,6 +927,7 @@ def _send_transaction_receipt_email(tx: dict, intent_id: str,
         folio = tx.get("transactionId") or "—"
         payment_type = tx.get("paymentType") or ""
         concepto = ("Recarga de cartera P2P" if payment_type == "wallet_top_up"
+                    else "Recarga de saldo GMO Lavandería" if payment_type == LAUNDRY_TOP_UP
                     else "Pago de préstamo" if payment_type == "loan_repayment"
                     else payment_type or "Movimiento")
         fecha = datetime.utcnow().strftime("%d/%m/%Y %H:%M UTC")
@@ -919,6 +946,8 @@ def _send_transaction_receipt_email(tx: dict, intent_id: str,
         ]
         if payment_type == "wallet_top_up":
             lineas.append(f"Abonado a tu cartera: ${net_mxn:,.2f} MXN")
+        elif payment_type == LAUNDRY_TOP_UP:
+            lineas.append(f"Abonado a tu saldo:   ${net_mxn:,.2f} MXN")
         lineas += [
             "",
             "Puedes consultar este movimiento en la app GMO → SmartLoans → Movimientos.",

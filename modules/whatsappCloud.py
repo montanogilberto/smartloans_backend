@@ -36,7 +36,7 @@ from typing import Any, Dict, List
 
 import httpx
 
-from modules import whatsappChannels, whatsappReservations
+from modules import clientContactPreferences, whatsappChannels, whatsappReservations
 from modules.whatsapp import log_message_to_database
 from observability.integrations import timed_integration
 
@@ -342,10 +342,14 @@ def _handle_message(msg: dict) -> None:
     except Exception:
         logger.exception("[whatsappCloud] failed to log inbound message")
 
-    if not channel.get("botEnabled"):
-        return
-    reply = whatsappReservations.reply_to(channel, phone, msg["name"], msg["text"],
-                                          on_answering=lambda: show_typing(channel, msg["messageId"]))
+    # BAJA/ALTA (marketing consent) is answered even when the bot is off: an
+    # opt-out must always work, and it is never passed on to the agent.
+    reply = clientContactPreferences.handle_keyword(channel["companyId"], phone, msg["text"])
+    if reply is None:
+        if not channel.get("botEnabled"):
+            return
+        reply = whatsappReservations.reply_to(channel, phone, msg["name"], msg["text"],
+                                              on_answering=lambda: show_typing(channel, msg["messageId"]))
     if not reply:
         return
     try:

@@ -37,25 +37,54 @@ def blink(times, ms=120):
 scanner = UART(C.SCANNER_UART, baudrate=C.SCANNER_BAUD,
                tx=C.SCANNER_TX, rx=C.SCANNER_RX, timeout=10)
 _buffer = b""
+_last_byte = 0
+QR_IDLE_MS = 150    # sin bytes nuevos por este tiempo = código completo
+
+
+def _take(raw):
+    """bytes -> texto del QR, o None si es basura (respuestas del lector, ruido)."""
+    try:
+        text = raw.decode().strip()
+    except UnicodeError:
+        return None
+    text = "".join(ch for ch in text if " " <= ch <= "~")   # sólo caracteres imprimibles
+    return text or None
 
 
 def read_qr():
-    """Devuelve un QR completo (str) o None. Los lectores terminan con \\r o \\n."""
-    global _buffer
+    """Devuelve un QR completo (str) o None.
+
+    Algunos lectores terminan cada código con \r o \n; otros (GM65/GM861 en modo
+    serial, según su configuración) no mandan terminador. Por eso el código se da
+    por completo con el salto de línea O cuando el lector deja de mandar bytes
+    durante QR_IDLE_MS."""
+    global _buffer, _last_byte
+    now = time.ticks_ms()
     if scanner.any():
-        _buffer += scanner.read() or b""
-        for sep in (b"\r", b"\n"):
-            if sep in _buffer:
-                line, _, rest = _buffer.partition(sep)
-                _buffer = rest.lstrip(b"\r\n")
-                try:
-                    text = line.decode().strip()
-                except UnicodeError:
-                    text = ""      # ruido en el UART: se ignora
-                if text:
-                    return text
-        if len(_buffer) > 1024:   # basura sin fin de línea
-            _buffer = b""
+        chunk = scanner.read() or b""
+        if chunk:
+            print("[qr] llegaron", len(chunk), "bytes")
+            _buffer += chunk
+            _last_byte = now
+    if not _buffer:
+        return None
+
+    for sep in (b"\r", b"\n"):
+        if sep in _buffer:
+            line, _, rest = _buffer.partition(sep)
+            _buffer = rest.lstrip(b"\r\n")
+            text = _take(line)
+            if text:
+                print("[qr] leído,", len(text), "caracteres")
+                return text
+            return None
+
+    if time.ticks_diff(now, _last_byte) >= QR_IDLE_MS or len(_buffer) > 512:
+        line, _buffer = _buffer, b""
+        text = _take(line)
+        if text:
+            print("[qr] leído sin terminador,", len(text), "caracteres")
+        return text
     return None
 
 
