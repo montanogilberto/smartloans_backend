@@ -28,6 +28,7 @@ DEVICE_KEY = "test-device-key"
 # productOptionChoices of the live catalog: 1002 Servicio de lavado / 1003 Servicio de secado
 CHOICES = {1004: (1002, "Basico", 40.0), 1006: (1002, "Carga Alta", 70.0), 1009: (1003, "50 Min", 70.0)}
 DESCRIPTIONS = {1004: "Agua baja", 1006: "Agua alta", 1009: None}
+OPTIONS = {1004: 2001, 1006: 2001, 1009: 2002}   # productOptionId of each choice
 CLIENTS = {2260: "Juan"}   # active clients of company 1
 
 
@@ -67,7 +68,8 @@ class FakeDb:
                 product, name, price = CHOICES.get(choice, (None, None, None))
                 if product not in self.products():
                     return {"error": "choice_not_for_device"}
-                return {"priceMXN": price, "productOptionChoiceId": choice, "choiceName": name, "productId": product}
+                return {"priceMXN": price, "productOptionChoiceId": choice, "choiceName": name, "productId": product,
+                        "productOptionId": OPTIONS[choice]}
             if row["action"] == 7:
                 labels = {1002: "Servicio de lavado", 1003: "Servicio de secado", **self.labels}
                 return {"cycles": [{"productOptionChoiceId": cid, "name": name, "priceMXN": price,
@@ -119,7 +121,11 @@ class Base(unittest.TestCase):
             mock.patch.object(ld, "post_entry", side_effect=self.db.post_entry),
             mock.patch.object(ld, "get_balance",
                               side_effect=lambda company, client: {"availableBalance": self.db.balance}),
+            # The POS ticket runs in a thread against the real income module: record it instead.
+            mock.patch.object(ld, "_record_ticket_async",
+                              side_effect=lambda *args: self.tickets.append(ld._ticket_payload(*args))),
         ]
+        self.tickets = []
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -422,6 +428,49 @@ class RegenerateClientQrsTest(Base):
     def test_png_encodes_the_signed_text(self):
         png = ld.client_qr_png(ld.client_qr_text(1, 1))
         self.assertTrue(png.startswith(b"\x89PNG"))
+
+
+class TicketTest(Base):
+    """Every authorized use is a POS sale (income), idempotent on the same key as the debit."""
+
+    def test_authorized_use_creates_one_ticket(self):
+        r = self.authorize(self.qr())
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(self.tickets), 1)
+        row = self.tickets[0]["income"][0]
+        self.assertEqual(row["action"], 1)
+        self.assertEqual(row["clientRequestId"], "laundry:7:req-00000001")
+        self.assertEqual((row["total"], row["paymentMethod"]), (40.0, "monedero"))
+        self.assertEqual((row["clientId"], row["companyId"], row["userId"]), (2260, 1, 1))
+        self.assertEqual(row["products"], [{"productId": 1002, "quantity": 1, "options": [
+            {"productOptionId": 2001, "productOptionChoiceId": 1004, "quantity": 1}]}])
+
+    def test_rejected_use_creates_no_ticket(self):
+        self.db.balance = 10.0
+        self.assertEqual(self.authorize(self.qr()).status_code, 402)
+        self.assertEqual(self.tickets, [])
+
+    def test_retry_reuses_the_same_ticket_key(self):
+        self.authorize(self.qr())
+        self.authorize(self.qr())
+        self.assertEqual(self.db.balance, 60.0)   # charged once
+        keys = {t["income"][0]["clientRequestId"] for t in self.tickets}
+        self.assertEqual(keys, {"laundry:7:req-00000001"})
+
+    def test_ticket_user_comes_from_env(self):
+        with mock.patch.dict(os.environ, {"LAUNDRY_TICKET_USER_ID": "42"}):
+            self.authorize(self.qr())
+        self.assertEqual(self.tickets[0]["income"][0]["userId"], 42)
+
+    def test_fixed_price_device_sells_its_product_without_option(self):
+        payload = ld._ticket_payload({"deviceId": 7, "companyId": 1, "productId": 1002},
+                                     {"amountMXN": 35, "clientId": 2260}, {"priceMXN": 35}, "req-00000009")
+        self.assertEqual(payload["income"][0]["products"], [{"productId": 1002, "quantity": 1, "options": []}])
+
+    def test_ticket_failure_never_raises(self):
+        with mock.patch("modules.income.income_sp", side_effect=RuntimeError("db down")):
+            ld._record_ticket({"deviceId": 7, "companyId": 1, "productId": 1002},
+                              {"useId": 1, "amountMXN": 40, "clientId": 2260}, {"priceMXN": 40}, "req-00000001")
 
 
 if __name__ == "__main__":
