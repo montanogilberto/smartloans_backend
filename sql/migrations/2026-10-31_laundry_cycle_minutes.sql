@@ -38,7 +38,9 @@ SET ch.quantity = s.minutes,
 FROM dbo.productOptionChoices ch
 JOIN dbo.productOptions o ON o.productOptionId = ch.productOptionId
 JOIN dbo.products p ON p.productId = o.productId AND p.companyId = 1
-JOIN @minutes s ON s.product = p.name AND (s.optionName IS NULL OR s.optionName = o.name) AND s.choice = ch.name
+JOIN @minutes s ON s.product = LTRIM(RTRIM(p.name))
+             AND (s.optionName IS NULL OR s.optionName = LTRIM(RTRIM(o.name)))
+             AND s.choice = LTRIM(RTRIM(ch.name))
 JOIN dbo.measurements m ON m.prefix = 'min';
 
 PRINT CONCAT('Cycles timed: ', @@ROWCOUNT);
