@@ -46,6 +46,11 @@ CARD_DETAIL = (60, 50, 190, 26, 1, LEFT)
 CARD_MIN = (60, 78, 190, 24, 0, LEFT)
 CARD_PRICE = (254, 30, 90, 56, 3, RIGHT)
 
+# Tabs de la máquina combo (Lavado / Secado), en la fila de "Selecciona tu ciclo".
+# Con un solo producto no se dibujan.
+TABS = [(468, 88, 148, 30), (624, 88, 148, 30)]
+TAB_FONT = 1
+
 MAIN = {
     "sel": (48, 414, 330, 40, 2, LEFT, NAVY),
     "selp": (400, 396, 160, 56, 3, RIGHT, GREEN),
@@ -81,7 +86,8 @@ MSG = {
 
 # Zonas táctiles por página: (x, y, w, h, evento)
 TOUCH = {
-    "main": [(x, y, CARD_W, CARD_H, "SEL%d" % i) for i, (x, y) in enumerate(CARDS)],
+    "main": [(x, y, CARD_W, CARD_H, "SEL%d" % i) for i, (x, y) in enumerate(CARDS)]
+            + [(x, y, w, h, "TAB%d" % i) for i, (x, y, w, h) in enumerate(TABS)],
     "confirm": [(150, 388, 180, 64, "CANCEL"), (346, 388, 304, 64, "OK")],
     "nofunds": [(28, 388, 192, 64, "BACK")],
 }
@@ -93,6 +99,7 @@ class Nextion:
         self._buf = b""
         self.page = None
         self.used = 0          # tarjetas con ciclo en main
+        self.tabs = []         # etiquetas de los tabs (vacío = sin tabs)
         self.selected = None
         self._cards = []
         self.uart.write(END)   # limpia cualquier comando a medias
@@ -128,14 +135,35 @@ class Nextion:
             self.text(TITLE, title)
 
     # ---------- página main: elegir ciclo ----------
-    def show_main(self, title, cards):
-        """cards: lista de dicts {name, detail, minutes, price} (máximo 4)."""
+    def show_main(self, title, cards, tabs=None, active=0):
+        """cards: lista de dicts {name, detail, minutes, price} (máximo 4).
+        tabs: etiquetas (["Lavado", "Secado"]); con menos de 2 no se dibujan."""
         self.goto("main", title)
+        self.tabs = list(tabs or [])[:len(TABS)] if tabs and len(tabs) > 1 else []
+        self.draw_tabs(active)
+        self.show_cards(cards)
+
+    def draw_tabs(self, active):
+        for i, label in enumerate(self.tabs):
+            x, y, w, h = TABS[i]
+            on = (i == active)
+            bg = GREEN if on else BAR_BG
+            self.cmd("fill %d,%d,%d,%d,%d" % (x, y, w, h, bg))
+            self.cmd('xstr %d,%d,%d,%d,%d,%d,%d,1,1,1,"%s"'
+                     % (x, y, w, h, TAB_FONT, WHITE if on else NAVY, bg, self._q(label)))
+
+    def show_cards(self, cards):
+        """Redibuja las 4 tarjetas (al cambiar de tab). Las que sobran quedan vacías."""
+        old = self.used
         self._cards = list(cards)[:SLOTS]
         self.used = len(self._cards)
         self.selected = None
-        for i in range(self.used):
-            self._card(i, False)
+        for i in range(max(old, self.used)):
+            if i < self.used:
+                self._card(i, False)
+            else:
+                x, y = CARDS[i]
+                self.cmd("picq %d,%d,%d,%d,%d" % (x, y, CARD_W, CARD_H, PAGES["main"]))
 
     def _card(self, i, on):
         x, y = CARDS[i]
@@ -224,11 +252,13 @@ class Nextion:
             if zx <= x < zx + zw and zy <= y < zy + zh:
                 if ev.startswith("SEL") and int(ev[3:]) >= self.used:
                     return None
+                if ev.startswith("TAB") and int(ev[3:]) >= len(self.tabs):
+                    return None
                 return ev
         return None
 
     def poll(self):
-        """Devuelve 'SEL0'..'SEL3', 'OK', 'CANCEL', 'BACK' o None. No bloquea."""
+        """Devuelve 'SEL0'..'SEL3', 'TAB0'/'TAB1', 'OK', 'CANCEL', 'BACK' o None. No bloquea."""
         if self.uart.any():
             self._buf += self.uart.read() or b""
         while self._buf:

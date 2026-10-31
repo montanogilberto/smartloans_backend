@@ -163,13 +163,19 @@ def heartbeat(device_id, device_key, payload: dict, client_ip: str = None):
         }]})
         if result.get("error"):
             return JSONResponse(result, status_code=500)
-        cycles = _sp("sp_laundryDevices", {"laundryDevices": [{"action": 7, "deviceId": device["deviceId"]}]})
+        cycles = [{**c, "cycleMinutes": cycle_minutes(c.get("name"), device)}
+                  for c in _sp("sp_laundryDevices", {"laundryDevices": [{"action": 7, "deviceId": device["deviceId"]}]})
+                  .get("cycles") or []]
+        groups = []
+        for c in cycles:   # already ordered by groupOrder: one tab per product
+            if not groups or groups[-1]["productId"] != c.get("productId"):
+                groups.append({"productId": c.get("productId"), "label": c.get("groupLabel")})
         return JSONResponse({
             "ok": True, "serverTimeUtc": result.get("serverTimeUtc"), "deviceName": result.get("name"),
             "machineType": result.get("machineType"), "productId": result.get("productId"),
             "priceMXN": result.get("priceMXN"), "cycleMinutes": result.get("cycleMinutes"),
-            "cycles": [{**c, "cycleMinutes": cycle_minutes(c.get("name"), device)}
-                       for c in cycles.get("cycles") or []],
+            "groups": groups,
+            "cycles": cycles,
         }, status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)

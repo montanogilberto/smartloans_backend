@@ -39,6 +39,13 @@ class FakeDb:
         self.uses, self.ledger, self.balance = {}, {}, balance
         self.ledger_error = None
         self.calls = []
+        self.combo = []      # laundryDeviceProducts rows: productIds in tab order
+        self.labels = {}
+
+    def products(self):
+        if self.combo:
+            return self.combo
+        return [self.device["productId"]] if self.device["productId"] else []
 
     def sp(self, proc, payload):
         self.calls.append((proc, payload))
@@ -58,14 +65,16 @@ class FakeDb:
                         return {"error": "choice_not_for_device"}
                     return {"priceMXN": self.device["priceMXN"]}
                 product, name, price = CHOICES.get(choice, (None, None, None))
-                if product != self.device["productId"]:
+                if product not in self.products():
                     return {"error": "choice_not_for_device"}
-                return {"priceMXN": price, "productOptionChoiceId": choice, "choiceName": name}
+                return {"priceMXN": price, "productOptionChoiceId": choice, "choiceName": name, "productId": product}
             if row["action"] == 7:
+                labels = {1002: "Servicio de lavado", 1003: "Servicio de secado", **self.labels}
                 return {"cycles": [{"productOptionChoiceId": cid, "name": name, "priceMXN": price,
-                                    "description": DESCRIPTIONS[cid]}
-                                   for cid, (product, name, price) in CHOICES.items()
-                                   if product == self.device["productId"]]}
+                                    "description": DESCRIPTIONS[cid], "productId": product,
+                                    "groupLabel": labels[product], "groupOrder": order}
+                                   for order, prod in enumerate(self.products())
+                                   for cid, (product, name, price) in CHOICES.items() if product == prod]}
             if row["action"] == 8:
                 name = CLIENTS.get(row["clientId"])
                 return {"clientId": row["clientId"], "firstName": name} if name else {"error": "client_not_found"}
@@ -224,6 +233,14 @@ class AuthorizeTest(Base):
     def test_missing_cycle_on_catalog_device_is_rejected(self):
         self.assertEqual(self.authorize(self.qr(), choice=None).status_code, 400)
 
+    def test_combo_machine_accepts_wash_and_dry_cycles(self):
+        self.db.device["machineType"] = "combo"
+        self.db.combo = [1002, 1003]
+        self.db.balance = 500.0
+        self.assertEqual(self.authorize(self.qr(), choice=1004).json()["cycleMinutes"], 45)
+        body = self.authorize(self.qr(), choice=1009, request_id="req-00000002").json()
+        self.assertEqual((body["amountMXN"], body["cycleMinutes"]), (70.0, 50))
+
     def test_dryer_takes_minutes_from_the_cycle(self):
         self.db.device.update(machineType="dryer", productId=1003)
         body = self.authorize(self.qr(), choice=1009).json()
@@ -303,6 +320,19 @@ class DeviceAdminTest(Base):
         self.assertEqual((r.json()["deviceName"], r.json()["machineType"]), ("Lavadora 1", "washer"))
         sent = self.db.calls[-2][1]["laundryDevices"][0]
         self.assertEqual((sent["status"], sent["rssi"]), ("idle", -61))
+
+    def test_heartbeat_groups_cycles_by_tab_on_a_combo(self):
+        self.db.combo, self.db.labels = [1002, 1003], {1002: "Lavado", 1003: "Secado"}
+        body = self.client.post("/laundryDevices/heartbeat",
+                                headers={"X-Device-Id": "7", "X-Device-Key": DEVICE_KEY}).json()
+        self.assertEqual(body["groups"], [{"productId": 1002, "label": "Lavado"}, {"productId": 1003, "label": "Secado"}])
+        self.assertEqual([(c["productOptionChoiceId"], c["groupLabel"]) for c in body["cycles"]],
+                         [(1004, "Lavado"), (1006, "Lavado"), (1009, "Secado")])
+
+    def test_single_product_has_one_group(self):
+        body = self.client.post("/laundryDevices/heartbeat",
+                                headers={"X-Device-Id": "7", "X-Device-Key": DEVICE_KEY}).json()
+        self.assertEqual(len(body["groups"]), 1)
 
     def test_heartbeat_without_body(self):
         r = self.client.post("/laundryDevices/heartbeat", headers={"X-Device-Id": "7", "X-Device-Key": DEVICE_KEY})

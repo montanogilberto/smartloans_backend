@@ -20,7 +20,11 @@ de la máquina).
 Headers: X-Device-Id: int, X-Device-Key: str
 Body: { "status"?: "idle|running|error", "firmwareVersion"?: str, "rssi"?: int }
 Returns: { ok, serverTimeUtc, deviceName, machineType, productId, priceMXN, cycleMinutes,
-           cycles: [{ productOptionChoiceId, name, priceMXN, description, cycleMinutes }] }
+           groups: [{ productId, label }],
+           cycles: [{ productOptionChoiceId, name, priceMXN, description, cycleMinutes,
+                      productId, groupLabel, groupOrder }] }
+groups son los tabs de la pantalla (máquina combo: Lavado, Secado); con un
+solo producto hay un solo grupo y la pantalla no dibuja tabs.
 deviceName es el título de la pantalla. description es la línea de detalle del
 ciclo (p. ej. "Agua baja"): se edita en el POS, en la opción del producto.
 priceMXN es null cuando la máquina cobra por ciclo (productId).
@@ -118,9 +122,13 @@ def laundry_device_client_qr(json: dict):
     "/laundryDevices",
     summary="Alta, edición y rotación de llave de dispositivos",
     description="""
-action 1 crear:  { companyId, name, machineType: "washer|dryer", productId | priceMXN, cycleMinutes?, branchId? }
-                 productId = cobra el ciclo elegido en la app; priceMXN = precio fijo.
-action 2 editar: { deviceId, companyId, name?, productId?, priceMXN?, cycleMinutes?, isActive?, branchId? }
+action 1 crear:  { companyId, name, machineType: "washer|dryer|combo", productId | products | priceMXN,
+                   cycleMinutes?, branchId? }
+                 productId = cobra el ciclo elegido en la pantalla; priceMXN = precio fijo.
+                 products = [{ productId, label? }] en orden de tabs, p. ej. combo:
+                 [{ "productId": 1002, "label": "Lavado" }, { "productId": 1003, "label": "Secado" }]
+action 2 editar: { deviceId, companyId, name?, machineType?, productId?, products?, priceMXN?,
+                   cycleMinutes?, isActive?, branchId? }   (products reemplaza la lista completa)
 action 3 rotar llave: { deviceId, companyId }
 
 Crear y rotar devuelven deviceKey UNA sola vez — grábala en el ESP32; el
