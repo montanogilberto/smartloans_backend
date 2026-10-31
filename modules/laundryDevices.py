@@ -107,8 +107,13 @@ def verify_client_qr(text: str) -> dict:
     return {"companyId": company_id, "clientId": client_id}
 
 
-def cycle_minutes(choice_name, device: dict) -> int:
-    """'50 Min' -> 50 (secado); cycles without minutes in the name use the device's cycleMinutes."""
+def cycle_minutes(choice_name, device: dict, choice_minutes=None) -> int:
+    """Length of a cycle, first that applies:
+    1. the choice's own minutes (quantity with unit 'min', edited in the POS product wizard);
+    2. minutes in its name: '50 Min' -> 50;
+    3. the device's cycleMinutes."""
+    if choice_minutes:
+        return int(choice_minutes)
     match = _MINUTES_RE.search(choice_name or "")
     return int(match.group(1)) if match else device.get("cycleMinutes")
 
@@ -132,8 +137,9 @@ def _available(device: dict, client_id) -> float:
     return float(get_balance(device["companyId"], client_id).get("availableBalance") or 0)
 
 
-def _use_response(use: dict, device: dict, available: float = None) -> JSONResponse:
-    """available: the client's balance when a debit was refused (fetched if not given)."""
+def _use_response(use: dict, device: dict, available: float = None, choice_minutes=None) -> JSONResponse:
+    """available: the client's balance when a debit was refused (fetched if not given).
+    choice_minutes: the priced choice's own minutes (see cycle_minutes)."""
     authorized = use.get("status") == "authorized"
     body = {
         "authorized": authorized,
@@ -143,7 +149,7 @@ def _use_response(use: dict, device: dict, available: float = None) -> JSONRespo
         "replayed": bool(use.get("replayed")),
     }
     if authorized:
-        body.update(balanceAfter=use.get("balanceAfter"), cycleMinutes=cycle_minutes(use.get("choiceName"), device))
+        body.update(balanceAfter=use.get("balanceAfter"), cycleMinutes=cycle_minutes(use.get("choiceName"), device, choice_minutes))
     else:
         body["reason"] = use.get("reason")
         if use.get("reason") == "insufficient_funds":
@@ -212,7 +218,7 @@ def heartbeat(device_id, device_key, payload: dict, client_ip: str = None):
         }]})
         if result.get("error"):
             return JSONResponse(result, status_code=500)
-        cycles = [{**c, "cycleMinutes": cycle_minutes(c.get("name"), device)}
+        cycles = [{**c, "cycleMinutes": cycle_minutes(c.get("name"), device, c.get("cycleMinutes"))}
                   for c in _sp("sp_laundryDevices", {"laundryDevices": [{"action": 7, "deviceId": device["deviceId"]}]})
                   .get("cycles") or []]
         groups = []
@@ -280,7 +286,7 @@ def quote(device_id, device_key, payload: dict):
             "priceMXN": amount,
             "productOptionChoiceId": price.get("productOptionChoiceId"),
             "choiceName": price.get("choiceName"),
-            "cycleMinutes": cycle_minutes(price.get("choiceName"), device),
+            "cycleMinutes": cycle_minutes(price.get("choiceName"), device, price.get("cycleMinutes")),
             "enough": available >= amount,
             "missingMXN": round(max(amount - available, 0), 2),
         }, status_code=200)
@@ -316,7 +322,7 @@ def authorize(device_id, device_key, payload: dict):
         if use.get("status") != "pending":
             if use.get("status") == "authorized":
                 _record_ticket_async(device, use, price, request_id)
-            return _use_response(use, device)
+            return _use_response(use, device, choice_minutes=price.get("cycleMinutes"))
 
         # Pending: first try, or a retry after a crash between open and settle.
         # The ledger key makes the debit happen at most once either way.
@@ -345,7 +351,7 @@ def authorize(device_id, device_key, payload: dict):
         settled["replayed"] = use.get("replayed")
         if settled.get("status") == "authorized":
             _record_ticket_async(device, {**use, **settled}, price, request_id)
-        return _use_response(settled, device, available)
+        return _use_response(settled, device, available, price.get("cycleMinutes"))
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
