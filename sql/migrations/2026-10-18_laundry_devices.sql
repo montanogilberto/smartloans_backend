@@ -309,7 +309,7 @@ BEGIN
             END
 
             SELECT ISNULL(
-                (SELECT c.price AS priceMXN, c.productOptionChoiceId, c.name AS choiceName, o.productId
+                (SELECT c.price AS priceMXN, c.productOptionChoiceId, c.name AS choiceName, o.productId, c.productOptionId
                  FROM [dbo].[productOptionChoices] c
                  JOIN [dbo].[productOptions] o ON o.productOptionId = c.productOptionId
                  JOIN [dbo].[products] p ON p.productId = o.productId

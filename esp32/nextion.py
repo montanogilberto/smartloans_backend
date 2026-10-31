@@ -84,11 +84,16 @@ MSG = {
     "foot": (28, 420, 744, 32, 0, CENTER, SEC),
 }
 
+# Botones de confirm (mismas zonas que los toques)
+BTN_CANCEL = (150, 388, 180, 64)
+BTN_OK = (346, 388, 304, 64)
+BTN_FONT = 2
+
 # Zonas táctiles por página: (x, y, w, h, evento)
 TOUCH = {
     "main": [(x, y, CARD_W, CARD_H, "SEL%d" % i) for i, (x, y) in enumerate(CARDS)]
             + [(x, y, w, h, "TAB%d" % i) for i, (x, y, w, h) in enumerate(TABS)],
-    "confirm": [(150, 388, 180, 64, "CANCEL"), (346, 388, 304, 64, "OK")],
+    "confirm": [BTN_CANCEL + ("CANCEL",), BTN_OK + ("OK",)],
     "nofunds": [(28, 388, 192, 64, "BACK")],
 }
 
@@ -204,6 +209,23 @@ class Nextion:
 
     def confirm_timeout(self, text):
         self.text(CONFIRM["timeout"], text)
+
+    def confirm_busy(self, text="Procesando pago..."):
+        """Al tocar Confirmar: el botón verde pasa a gris con el texto y Cancelar
+        se apaga, en el mismo instante, antes de la llamada al servidor."""
+        x, y, w, h = BTN_CANCEL
+        self.cmd("fill %d,%d,%d,%d,%d" % (x, y, w, h, BAR_BG))
+        self.cmd('xstr %d,%d,%d,%d,%d,%d,%d,1,1,1,"Cancelar"' % (x, y, w, h, BTN_FONT, SEC, BAR_BG))
+        x, y, w, h = BTN_OK
+        self.cmd("fill %d,%d,%d,%d,%d" % (x, y, w, h, SEC))
+        self.cmd('xstr %d,%d,%d,%d,%d,%d,%d,1,1,1,"%s"' % (x, y, w, h, BTN_FONT, WHITE, SEC, self._q(text)))
+        self.text(CONFIRM["timeout"], "Recibimos tu confirmación. Procesando el pago...", GREEN_D)
+
+    def flush_touches(self):
+        """Descarta los toques que llegaron mientras el ESP32 esperaba al servidor."""
+        self._buf = b""
+        while self.uart.any():
+            self.uart.read()
 
     # ---------- página inuse ----------
     def show_inuse(self, title, paid, step1, warn, cycle, timer, ends, progress=0):

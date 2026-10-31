@@ -101,10 +101,11 @@ def on_qr(client_qr):
         screen.message("Primero toca tu ciclo" if screen.has_cycles() else "Sin ciclos disponibles", RED_D)
         hw.blink(2)
         return
-    screen.message("Consultando...")
+    screen.message("Consultando tu saldo...")
     hw.led.on()
     status, data = api.quote(client_qr, cycle["productOptionChoiceId"])
     hw.led.off()
+    lcd.flush_touches()
 
     if status != 200:
         reason = data.get("reason") or data.get("error") or ""
@@ -128,10 +129,11 @@ def on_qr(client_qr):
 
 # ---------- confirm: OK ----------
 def on_confirm():
-    lcd.confirm_timeout("Procesando pago...")
+    lcd.confirm_busy("Procesando...")
     hw.led.on()
     result, data = api.authorize(pending["qr"], pending["cycle"]["productOptionChoiceId"])
     hw.led.off()
+    lcd.flush_touches()      # toques repetidos mientras esperaba: no cuentan
     if result == "ok":
         start_machine(int(data.get("cycleMinutes") or pending["cycle"]["cycleMinutes"] or C.DEFAULT_CYCLE_MINUTES),
                       data.get("balanceAfter"))

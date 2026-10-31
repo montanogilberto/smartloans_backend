@@ -18,6 +18,10 @@ Flow of one machine use:
      (idempotent on deviceId + requestId), debit that price as LAUNDRY_USAGE in
      walletTransactions (idempotent on the same key), settle.
   5. The ESP32 only switches the machine on when authorized = true.
+  6. An authorized use is also a POS sale: a ticket (income) with the machine's
+     product + the cycle option, paymentMethod "monedero", idempotent on the
+     same deviceId + requestId. It runs in a background thread so the machine
+     never waits on the sale hooks (accounting, points, client notification).
 
 The device never sends an amount. A device without productId charges its
 fixed laundryDevices.priceMXN and takes no cycle.
@@ -30,6 +34,8 @@ import json
 import os
 import re
 import secrets
+import threading
+from datetime import datetime, timezone
 
 from fastapi.responses import JSONResponse
 
@@ -39,6 +45,7 @@ from modules.walletTransactions import get_balance, post_entry
 CLIENT_QR_PREFIX = "GMO1"
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,40}$")
 _MINUTES_RE = re.compile(r"(\d+)\s*min", re.IGNORECASE)
+TICKET_PAYMENT_METHOD = "monedero"
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -145,6 +152,48 @@ def _use_response(use: dict, device: dict, available: float = None) -> JSONRespo
             body.update(availableBalance=available,
                         missingMXN=round(max(float(use.get("amountMXN") or 0) - available, 0), 2))
     return JSONResponse(body, status_code=200 if authorized else 402)
+
+
+def _ticket_payload(device: dict, use: dict, price: dict, request_id: str) -> dict:
+    """The POS sale for one authorized machine use, in the same shape CartPage sends."""
+    product_id = price.get("productId") or device.get("productId")
+    options = []
+    if price.get("productOptionId") and price.get("productOptionChoiceId"):
+        options.append({"productOptionId": price["productOptionId"],
+                        "productOptionChoiceId": price["productOptionChoiceId"], "quantity": 1})
+    return {"income": [{
+        "action": 1,
+        # Same key as the ledger debit: a retried authorize never makes a second sale.
+        "clientRequestId": f"laundry:{device['deviceId']}:{request_id}",
+        "total": float(use["amountMXN"]),
+        "paymentMethod": TICKET_PAYMENT_METHOD,
+        "cashPaid": 0, "cashReturn": 0,
+        "paymentDate": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        # No cashier at a machine: the sale is attributed to this user (company admin by default).
+        "userId": int(os.getenv("LAUNDRY_TICKET_USER_ID", "1")),
+        "clientId": int(use["clientId"]),
+        "companyId": int(device["companyId"]),
+        "products": [{"productId": int(product_id), "quantity": 1, "options": options}] if product_id else [],
+    }]}
+
+
+def _record_ticket(device: dict, use: dict, price: dict, request_id: str) -> None:
+    """Best-effort: a failed ticket never blocks the machine. The next authorize
+    retry with the same requestId tries again (income replays an existing one)."""
+    try:
+        from modules.income import income_sp  # lazy: income pulls in accounting/notifications
+        payload = _ticket_payload(device, use, price, request_id)
+        response = income_sp(payload)
+        body = json.loads(response.body or b"{}")
+        row = (body.get("result") or [{}])[0]
+        print(f"[laundryDevices] ticket use={use.get('useId')} -> income {row.get('value')} "
+              f"({row.get('msg') or body.get('error')})")
+    except Exception as e:
+        print(f"[laundryDevices] ticket FAILED use={use.get('useId')}: {e}")
+
+
+def _record_ticket_async(device: dict, use: dict, price: dict, request_id: str) -> None:
+    threading.Thread(target=_record_ticket, args=(device, use, price, request_id), daemon=True).start()
 
 
 # ── Device endpoints (X-Device-Id / X-Device-Key) ───────────────────────────
@@ -265,6 +314,8 @@ def authorize(device_id, device_key, payload: dict):
         if use.get("error"):
             return JSONResponse(use, status_code=500)
         if use.get("status") != "pending":
+            if use.get("status") == "authorized":
+                _record_ticket_async(device, use, price, request_id)
             return _use_response(use, device)
 
         # Pending: first try, or a retry after a crash between open and settle.
@@ -292,6 +343,8 @@ def authorize(device_id, device_key, payload: dict):
         if settled.get("error"):
             return JSONResponse(settled, status_code=500)
         settled["replayed"] = use.get("replayed")
+        if settled.get("status") == "authorized":
+            _record_ticket_async(device, {**use, **settled}, price, request_id)
         return _use_response(settled, device, available)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
