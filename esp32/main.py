@@ -44,7 +44,7 @@ def seconds_left():
 def go_main():
     global state, deadline, pending
     state, deadline, pending = "main", None, None
-    screen.show_main()
+    screen.show_main(clear=True)
     hw.flush_qr()
 
 
@@ -98,7 +98,8 @@ def on_qr(client_qr):
     print("[qr]", describe_qr(client_qr))
     cycle = screen.selected()
     if not cycle:
-        screen.message("Sin ciclos disponibles", RED_D)
+        screen.message("Primero toca tu ciclo" if screen.has_cycles() else "Sin ciclos disponibles", RED_D)
+        hw.blink(2)
         return
     screen.message("Consultando...")
     hw.led.on()
@@ -189,7 +190,7 @@ def do_heartbeat():
     net.ensure_wifi()
     data = api.heartbeat(state == "inuse")
     if data is not None:
-        screen.set_cycles(data.get("cycles"), data.get("deviceName"))
+        screen.set_cycles(data.get("cycles"), data.get("deviceName"), data.get("groups"))
 
 
 def main():

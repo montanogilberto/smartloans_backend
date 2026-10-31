@@ -50,7 +50,7 @@ CREATE TABLE [dbo].[laundryDevices] (
     lastRssi         INT            NULL,
     created_At       DATETIME2(0)   NOT NULL CONSTRAINT DF_laundryDevices_created DEFAULT (SYSUTCDATETIME()),
     updated_At       DATETIME2(0)   NOT NULL CONSTRAINT DF_laundryDevices_updated DEFAULT (SYSUTCDATETIME()),
-    CONSTRAINT CK_laundryDevices_machineType CHECK (machineType IN ('washer','dryer')),
+    CONSTRAINT CK_laundryDevices_machineType CHECK (machineType IN ('washer','dryer','combo')),
     CONSTRAINT CK_laundryDevices_price CHECK (priceMXN IS NULL OR priceMXN > 0),
     CONSTRAINT CK_laundryDevices_cycle CHECK (cycleMinutes BETWEEN 1 AND 240)
 );
@@ -67,6 +67,32 @@ BEGIN
     ALTER TABLE [dbo].[laundryDevices] ALTER COLUMN priceMXN DECIMAL(12,2) NULL;
     ALTER TABLE [dbo].[laundryDevices] ADD CONSTRAINT CK_laundryDevices_price CHECK (priceMXN IS NULL OR priceMXN > 0);
 END
+GO
+
+-- Combo machines (wash + dry on one controller): allow machineType 'combo'.
+IF EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_laundryDevices_machineType'
+           AND definition NOT LIKE '%combo%')
+BEGIN
+    ALTER TABLE [dbo].[laundryDevices] DROP CONSTRAINT CK_laundryDevices_machineType;
+    ALTER TABLE [dbo].[laundryDevices] ADD CONSTRAINT CK_laundryDevices_machineType
+        CHECK (machineType IN ('washer','dryer','combo'));
+END
+GO
+
+-- ── Table: laundryDeviceProducts ──
+-- Products a device sells, one tab per row on the machine's screen (a combo
+-- machine has Lavado 1002 + Secado 1003). When a device has rows here they
+-- replace laundryDevices.productId; a device without rows keeps working with
+-- its single productId (or fixed priceMXN).
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'laundryDeviceProducts')
+CREATE TABLE [dbo].[laundryDeviceProducts] (
+    deviceId    INT           NOT NULL,
+    productId   INT           NOT NULL,
+    label       NVARCHAR(30)  NULL,       -- tab text; NULL = product name
+    sortOrder   INT           NOT NULL CONSTRAINT DF_laundryDeviceProducts_sort DEFAULT (0),
+    CONSTRAINT PK_laundryDeviceProducts PRIMARY KEY (deviceId, productId),
+    CONSTRAINT FK_laundryDeviceProducts_device FOREIGN KEY (deviceId) REFERENCES [dbo].[laundryDevices] (deviceId)
+);
 GO
 
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_laundryDevices_company')
@@ -115,20 +141,25 @@ GO
 
 -- ============================================================
 -- sp_laundryDevices
---   action 1  create      { companyId, branchId?, name, machineType, productId? | priceMXN, cycleMinutes?, keyHash }
---   action 2  update      { deviceId, companyId, name?, branchId?, productId?, priceMXN?, cycleMinutes?, isActive? }
+--   action 1  create      { companyId, branchId?, name, machineType, productId? | products? | priceMXN, cycleMinutes?, keyHash }
+--   action 2  update      { deviceId, companyId, name?, branchId?, productId?, products?, priceMXN?, cycleMinutes?, isActive? }
+--             products = [{ productId, label? }] in tab order (combo: Lavado, Secado).
+--             When sent, it replaces the device's laundryDeviceProducts rows and
+--             productId becomes the first one.
 --   action 3  rotate key  { deviceId, companyId, keyHash }
 --   action 4  auth        { deviceId }  -> device WITH keyHash (internal: modules/laundryDevices.py)
 --   action 5  heartbeat   { deviceId, status?, firmwareVersion?, ip?, rssi? }
---   action 6  price       { deviceId, productOptionChoiceId? } -> { priceMXN, productOptionChoiceId, choiceName }
---   action 7  cycles      { deviceId } -> { cycles: [{ productOptionChoiceId, name, priceMXN, description }] }
---             What the machine's screen offers: the priced choices of its product.
+--   action 6  price       { deviceId, productOptionChoiceId? } -> { priceMXN, productOptionChoiceId, choiceName, productId }
+--   action 7  cycles      { deviceId } -> { cycles: [{ productOptionChoiceId, name, priceMXN, description,
+--                                                   productId, groupLabel, groupOrder }] }
+--             What the machine's screen offers: the priced choices of its products,
+--             grouped by product (one tab per group).
 --             description (productOptionChoices.description, edited in the POS)
 --             is the screen's detail line, e.g. "Agua baja".
 --   action 8  client      { deviceId, clientId } -> { clientId, firstName }
 --             Only an active client of the device's company; the screen is public,
 --             so it never returns the last name.
---             The choice must be an option of the device's product (same company).
+--             The choice must be an option of one of the device's products (same company).
 --             A device without productId only accepts no choice (fixed priceMXN).
 -- Actions 1, 2, 3 and 5 return the device without keyHash.
 -- ============================================================
@@ -156,13 +187,30 @@ BEGIN
         DECLARE @firmwareVersion NVARCHAR(30)  = JSON_VALUE(@pjsonfile, '$.laundryDevices[0].firmwareVersion')
         DECLARE @ip              NVARCHAR(45)  = JSON_VALUE(@pjsonfile, '$.laundryDevices[0].ip')
         DECLARE @rssi            INT           = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.laundryDevices[0].rssi'))
+        DECLARE @productsJson    NVARCHAR(MAX) = JSON_QUERY(@pjsonfile, '$.laundryDevices[0].products')
+        DECLARE @products TABLE (productId INT, label NVARCHAR(30), sortOrder INT)
+        IF @productsJson IS NOT NULL
+            INSERT INTO @products (productId, label, sortOrder)
+            SELECT TRY_CONVERT(INT, JSON_VALUE(value, '$.productId')),
+                   NULLIF(LTRIM(RTRIM(JSON_VALUE(value, '$.label'))), ''),
+                   TRY_CONVERT(INT, [key])
+            FROM OPENJSON(@productsJson)
+        IF @productsJson IS NOT NULL AND @productId IS NULL
+            SELECT TOP 1 @productId = productId FROM @products ORDER BY sortOrder
 
         IF @action = 1
         BEGIN
             IF @companyId IS NULL OR @name IS NULL OR @machineType IS NULL OR @keyHash IS NULL
                OR (@productId IS NULL AND @priceMXN IS NULL)
             BEGIN
-                SELECT '{"error":"companyId, name, machineType y productId o priceMXN son requeridos"}' AS [jsonResult]
+                SELECT '{"error":"companyId, name, machineType y productId, products o priceMXN son requeridos"}' AS [jsonResult]
+                RETURN
+            END
+            IF EXISTS (SELECT 1 FROM @products x
+                       WHERE x.productId IS NULL OR NOT EXISTS
+                             (SELECT 1 FROM [dbo].[products] p WHERE p.productId = x.productId AND p.companyId = @companyId))
+            BEGIN
+                SELECT '{"error":"product_not_found"}' AS [jsonResult]
                 RETURN
             END
             IF @productId IS NOT NULL AND NOT EXISTS
@@ -174,11 +222,21 @@ BEGIN
             INSERT INTO [dbo].[laundryDevices] (companyId, branchId, name, machineType, productId, priceMXN, cycleMinutes, keyHash)
             VALUES (@companyId, @branchId, @name, @machineType, @productId, @priceMXN, ISNULL(@cycleMinutes, 45), @keyHash)
             SET @deviceId = SCOPE_IDENTITY()
+            INSERT INTO [dbo].[laundryDeviceProducts] (deviceId, productId, label, sortOrder)
+            SELECT @deviceId, productId, label, sortOrder FROM @products
         END
         ELSE IF @action = 2
         BEGIN
+            IF EXISTS (SELECT 1 FROM @products x
+                       WHERE x.productId IS NULL OR NOT EXISTS
+                             (SELECT 1 FROM [dbo].[products] p WHERE p.productId = x.productId AND p.companyId = @companyId))
+            BEGIN
+                SELECT '{"error":"product_not_found"}' AS [jsonResult]
+                RETURN
+            END
             UPDATE [dbo].[laundryDevices]
             SET name         = ISNULL(@name, name),
+                machineType  = ISNULL(@machineType, machineType),
                 branchId     = ISNULL(@branchId, branchId),
                 productId    = ISNULL(@productId, productId),
                 priceMXN     = ISNULL(@priceMXN, priceMXN),
@@ -190,6 +248,12 @@ BEGIN
             BEGIN
                 SELECT '{"error":"device_not_found"}' AS [jsonResult]
                 RETURN
+            END
+            IF @productsJson IS NOT NULL
+            BEGIN
+                DELETE FROM [dbo].[laundryDeviceProducts] WHERE deviceId = @deviceId
+                INSERT INTO [dbo].[laundryDeviceProducts] (deviceId, productId, label, sortOrder)
+                SELECT @deviceId, productId, label, sortOrder FROM @products
             END
         END
         ELSE IF @action = 3
@@ -229,7 +293,13 @@ BEGIN
             SELECT @devProductId = productId, @devPrice = priceMXN, @devCompanyId = companyId
             FROM [dbo].[laundryDevices] WHERE deviceId = @deviceId
 
-            IF @devProductId IS NULL
+            -- the device's products: its laundryDeviceProducts rows, else productId
+            DECLARE @devProducts TABLE (productId INT)
+            INSERT INTO @devProducts SELECT productId FROM [dbo].[laundryDeviceProducts] WHERE deviceId = @deviceId
+            IF NOT EXISTS (SELECT 1 FROM @devProducts) AND @devProductId IS NOT NULL
+                INSERT INTO @devProducts VALUES (@devProductId)
+
+            IF NOT EXISTS (SELECT 1 FROM @devProducts)
             BEGIN
                 IF @choiceId IS NOT NULL OR @devPrice IS NULL
                     SELECT '{"error":"choice_not_for_device"}' AS [jsonResult]
@@ -239,12 +309,12 @@ BEGIN
             END
 
             SELECT ISNULL(
-                (SELECT c.price AS priceMXN, c.productOptionChoiceId, c.name AS choiceName
+                (SELECT c.price AS priceMXN, c.productOptionChoiceId, c.name AS choiceName, o.productId
                  FROM [dbo].[productOptionChoices] c
                  JOIN [dbo].[productOptions] o ON o.productOptionId = c.productOptionId
                  JOIN [dbo].[products] p ON p.productId = o.productId
                  WHERE c.productOptionChoiceId = @choiceId
-                   AND o.productId = @devProductId
+                   AND o.productId IN (SELECT productId FROM @devProducts)
                    AND p.companyId = @devCompanyId
                    AND c.price > 0
                  FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
@@ -253,14 +323,23 @@ BEGIN
         END
         ELSE IF @action = 7
         BEGIN
+            DECLARE @groups TABLE (productId INT, label NVARCHAR(30), sortOrder INT)
+            INSERT INTO @groups SELECT productId, label, sortOrder
+            FROM [dbo].[laundryDeviceProducts] WHERE deviceId = @deviceId
+            IF NOT EXISTS (SELECT 1 FROM @groups)
+                INSERT INTO @groups SELECT productId, NULL, 0
+                FROM [dbo].[laundryDevices] WHERE deviceId = @deviceId AND productId IS NOT NULL
+
             SELECT ISNULL(
-                (SELECT c.productOptionChoiceId, c.name, c.price AS priceMXN, c.description
-                 FROM [dbo].[laundryDevices] d
-                 JOIN [dbo].[products] p ON p.productId = d.productId AND p.companyId = d.companyId
+                (SELECT c.productOptionChoiceId, c.name, c.price AS priceMXN, c.description,
+                        p.productId, ISNULL(g.label, p.name) AS groupLabel, g.sortOrder AS groupOrder
+                 FROM @groups g
+                 JOIN [dbo].[laundryDevices] d ON d.deviceId = @deviceId
+                 JOIN [dbo].[products] p ON p.productId = g.productId AND p.companyId = d.companyId
                  JOIN [dbo].[productOptions] o ON o.productId = p.productId
                  JOIN [dbo].[productOptionChoices] c ON c.productOptionId = o.productOptionId
-                 WHERE d.deviceId = @deviceId AND c.price > 0
-                 ORDER BY c.price, c.productOptionChoiceId
+                 WHERE c.price > 0
+                 ORDER BY g.sortOrder, c.price, c.productOptionChoiceId
                  FOR JSON PATH, ROOT('cycles')),
                 '{"cycles":[]}') AS [jsonResult]
             RETURN
@@ -287,8 +366,11 @@ BEGIN
             (SELECT deviceId, companyId, branchId, name, machineType, productId, priceMXN, cycleMinutes,
                     CAST(isActive AS INT) AS isActive, lastStatus, firmwareVersion, lastIp, lastRssi,
                     CONVERT(NVARCHAR, lastSeenAtUtc, 127) AS lastSeenAtUtc,
-                    CONVERT(NVARCHAR, SYSUTCDATETIME(), 127) AS serverTimeUtc
-             FROM [dbo].[laundryDevices] WHERE deviceId = @deviceId
+                    CONVERT(NVARCHAR, SYSUTCDATETIME(), 127) AS serverTimeUtc,
+                    JSON_QUERY(ISNULL((SELECT x.productId, x.label FROM [dbo].[laundryDeviceProducts] x
+                                       WHERE x.deviceId = d.deviceId ORDER BY x.sortOrder
+                                       FOR JSON PATH), '[]')) AS products
+             FROM [dbo].[laundryDevices] d WHERE deviceId = @deviceId
              FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
             '{"error":"device_not_found"}') AS [jsonResult]
     END TRY
