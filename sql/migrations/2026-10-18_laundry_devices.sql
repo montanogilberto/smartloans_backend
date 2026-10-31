@@ -22,7 +22,7 @@
 -- ============================================================
 
 -- ── Ledger entry type ──
-MERGE [dbo].[walletTransactions_entryType] AS t
+MERGE [dbo].[walletTransactionsEntryType] AS t
 USING (VALUES ('LAUNDRY_USAGE', 20, 'Client pays one laundry machine use (out, ESP32 controller)'))
     AS s (entryType, sortOrder, description)
 ON t.entryType = s.entryType

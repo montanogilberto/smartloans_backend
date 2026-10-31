@@ -677,6 +677,16 @@ async def create_payment_intent(payload: dict):
     description    = payload.get("description", "P2P GMO Payment")
     metadata       = payload.get("metadata", {})
 
+    # RFC-010 (POSVending docs/rfcs): a laundry card top-up must be a direct charge on
+    # the laundry's own connected Stripe account. A charge here lands in the platform
+    # account (SmartLoans would hold customer money, against D1), so it stays off
+    # until that flow ships. Intents created before this keep crediting on confirm.
+    if payment_type == LAUNDRY_TOP_UP:
+        return JSONResponse({
+            "error": "laundry_card_topup_unavailable",
+            "message": "La recarga con tarjeta no está disponible por ahora. Recarga en mostrador.",
+        }, status_code=503)
+
     if not stripe.api_key or stripe.api_key.startswith("sk_test_YOUR"):
         # Stripe not configured — return a mock client secret for development
         mock_intent_id = f"pi_mock_{int(datetime.utcnow().timestamp())}"
