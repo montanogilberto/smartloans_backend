@@ -25,7 +25,11 @@ INSERT INTO @minutes VALUES
     (N'Servicio de lavado', N'Ciclo', N'Basico',         20),
     (N'Servicio de lavado', N'Ciclo', N'Medio',          35),
     (N'Servicio de lavado', N'Ciclo', N'Carga Alta',     50),
-    (N'Servicio de lavado', N'Ciclo', N'Colcha Grandes', 65);
+    (N'Servicio de lavado', N'Ciclo', N'Colcha Grandes', 65),
+    (N'Servicio de secado', NULL,    N'40 Min',          40),
+    (N'Servicio de secado', NULL,    N'50 Min',          50),
+    (N'Servicio de secado', NULL,    N'60 Min',          60),
+    (N'Servicio de secado', NULL,    N'Colchas Grandes', 60);
 
 UPDATE ch
 SET ch.quantity = s.minutes,
@@ -34,7 +38,7 @@ SET ch.quantity = s.minutes,
 FROM dbo.productOptionChoices ch
 JOIN dbo.productOptions o ON o.productOptionId = ch.productOptionId
 JOIN dbo.products p ON p.productId = o.productId AND p.companyId = 1
-JOIN @minutes s ON s.product = p.name AND s.optionName = o.name AND s.choice = ch.name
+JOIN @minutes s ON s.product = p.name AND (s.optionName IS NULL OR s.optionName = o.name) AND s.choice = ch.name
 JOIN dbo.measurements m ON m.prefix = 'min';
 
 PRINT CONCAT('Cycles timed: ', @@ROWCOUNT);
