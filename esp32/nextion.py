@@ -28,6 +28,7 @@ RED_D = 45315
 WHITE = 65535
 SEL_SEC = 55196
 BAR_BG = 57117
+BLUE = 8989          # #2563eb, el azul del botón "Mi QR" de la app
 
 LEFT, CENTER, RIGHT = 0, 1, 2
 SLOTS = 4
@@ -50,6 +51,13 @@ CARD_PRICE = (254, 30, 90, 56, 3, RIGHT)
 # Con un solo producto no se dibujan.
 TABS = [(468, 88, 148, 30), (624, 88, 148, 30)]
 TAB_FONT = 1
+
+# Aviso azul "Escanea tu QR" arriba de main, entre el título (GMO LAVANDERÍA /
+# LAVADORA 1) y "DISPONIBLE" del fondo; no toca los tabs (y=88). Se pinta con
+# fill, así no depende del fondo del .tft.
+QR_BANNER = (340, 20, 280, 52)
+QR_BANNER_TEXT = "Escanea tu QR"
+QR_BANNER_FONT = 2
 
 MAIN = {
     "sel": (48, 414, 330, 40, 2, LEFT, NAVY),
@@ -145,8 +153,15 @@ class Nextion:
         tabs: etiquetas (["Lavado", "Secado"]); con menos de 2 no se dibujan."""
         self.goto("main", title)
         self.tabs = list(tabs or [])[:len(TABS)] if tabs and len(tabs) > 1 else []
+        self.draw_qr_banner()
         self.draw_tabs(active)
         self.show_cards(cards)
+
+    def draw_qr_banner(self):
+        x, y, w, h = QR_BANNER
+        self.cmd("fill %d,%d,%d,%d,%d" % (x, y, w, h, BLUE))
+        self.cmd('xstr %d,%d,%d,%d,%d,%d,%d,1,1,1,"%s"'
+                 % (x, y, w, h, QR_BANNER_FONT, WHITE, BLUE, self._q(QR_BANNER_TEXT)))
 
     def draw_tabs(self, active):
         for i, label in enumerate(self.tabs):
