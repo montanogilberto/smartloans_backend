@@ -21,19 +21,22 @@ import hw
 import net
 import api
 import screen
-from nextion import money, RED_D
+from nextion import money, RED_D, NAVY
 
 lcd = screen.lcd
 CONFIRM_SECONDS = 30
 NOFUNDS_SECONDS = 20
 DONE_SECONDS = 15
 START_WARNING_SECONDS = 5 * 60
+OFFLINE_SETUP_SECONDS = 120     # sin internet tanto tiempo en main -> pantalla de Wi-Fi
+WIFI_RETRY_SECONDS = 60         # en la pantalla de Wi-Fi, reintentar las redes guardadas
 TZ = getattr(C, "TZ_OFFSET_HOURS", -7)
 
 state = "main"
 deadline = None        # ticks_ms en que vence la página actual
 last_tick = 0          # último refresco de contador (1 s)
 pending = None         # {"qr", "cycle", "quote"} entre quote y authorize
+offline_since = None   # ticks_ms desde que se perdió el Wi-Fi
 run = None             # {"start", "end", "minutes"} mientras la máquina trabaja
 
 
@@ -187,6 +190,62 @@ def tick_inuse():
     lcd.update_timer("%d:%02d" % (left // 60, left % 60), elapsed * 100 // total, warn)
 
 
+# ---------- configuración de Wi-Fi ----------
+def setup_wifi(reason):
+    """Pantalla de configuración: espera el QR de una red Wi-Fi (Ajustes / Wi-Fi /
+    Compartir en el celular), la prueba y, si conecta, la guarda en la placa.
+    Sólo se usa sin internet, así nadie le cambia la red a una máquina que funciona.
+    Bloquea hasta que haya conexión."""
+    def instructions(error=None):
+        lcd.show_msg(screen.title, "Configura el Wi-Fi",
+                     error or "En tu celular: Ajustes / Wi-Fi / Compartir\ny escanea ese QR en el lector",
+                     reason, RED_D if error else NAVY)
+    print("[wifi] configuración:", reason)
+    instructions()
+    hw.flush_qr()
+    last_retry = time.ticks_ms()
+    while True:
+        hw.feed()
+        qr = hw.read_qr()
+        if qr:
+            parsed = net.parse_wifi_qr(qr)
+            if not parsed:
+                instructions("Ese QR no es de una red Wi-Fi.\nUsa Compartir red en tu celular.")
+            else:
+                ssid, password = parsed
+                lcd.show_msg(screen.title, "Conectando...", ssid)
+                if net.try_network(ssid, password):
+                    net.save_network(ssid, password)
+                    lcd.show_msg(screen.title, "Wi-Fi conectado", ssid)
+                    time.sleep(2)
+                    return
+                instructions("No se pudo conectar a %s.\nRevisa la contraseña y escanea otra vez." % ssid)
+            hw.flush_qr()
+            last_retry = time.ticks_ms()
+        elif time.ticks_diff(time.ticks_ms(), last_retry) >= WIFI_RETRY_SECONDS * 1000:
+            if net.saved_networks() and net.wifi_connect(10):   # el router regresó
+                return
+            instructions()
+            last_retry = time.ticks_ms()
+        time.sleep_ms(50)
+
+
+def check_offline(now):
+    """Si en la pantalla principal pasan OFFLINE_SETUP_SECONDS sin Wi-Fi, pide
+    configurar la red. Nunca interrumpe una compra ni una máquina en uso."""
+    global offline_since
+    if net.wlan.isconnected():
+        offline_since = None
+        return
+    if offline_since is None:
+        offline_since = now
+    elif state == "main" and time.ticks_diff(now, offline_since) >= OFFLINE_SETUP_SECONDS * 1000:
+        setup_wifi("Se perdió la conexión a internet")
+        offline_since = None
+        do_heartbeat()
+        go_main()
+
+
 # ---------- servidor ----------
 def do_heartbeat():
     net.ensure_wifi()
@@ -198,11 +257,11 @@ def do_heartbeat():
 def main():
     global last_tick
     hw.blink(1)
-    lcd.show_msg(screen.title, "Iniciando...", "Conectando al servidor")
+    lcd.show_msg(screen.title, "Iniciando...", "Conectando al Wi-Fi")
     if not net.wifi_connect():
-        lcd.show_msg(screen.title, "Fuera de servicio", "Sin conexión. Reintentando...", "", RED_D)
-    else:
-        net.sync_time()   # reloj en UTC aunque el Wi-Fi ya estuviera conectado
+        setup_wifi("La red guardada no responde" if net.saved_networks() else "Primera configuración")
+    net.sync_time()   # reloj en UTC aunque el Wi-Fi ya estuviera conectado
+    net.diag()        # ¿conectado? y memoria libre antes del primer HTTPS
     do_heartbeat()
     go_main()
     last_heartbeat = time.ticks_ms()
@@ -236,6 +295,7 @@ def main():
         # contadores, una vez por segundo
         if time.ticks_diff(now, last_tick) >= 1000:
             last_tick = now
+            check_offline(now)
             if state == "inuse":
                 tick_inuse()
             elif state == "confirm":

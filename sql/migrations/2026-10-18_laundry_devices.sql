@@ -22,7 +22,7 @@
 -- ============================================================
 
 -- ── Ledger entry type ──
-MERGE [dbo].[walletTransactions_entryType] AS t
+MERGE [dbo].[walletTransactionsEntryType] AS t
 USING (VALUES ('LAUNDRY_USAGE', 20, 'Client pays one laundry machine use (out, ESP32 controller)'))
     AS s (entryType, sortOrder, description)
 ON t.entryType = s.entryType
@@ -309,10 +309,13 @@ BEGIN
             END
 
             SELECT ISNULL(
-                (SELECT c.price AS priceMXN, c.productOptionChoiceId, c.name AS choiceName, o.productId, c.productOptionId
+                (SELECT c.price AS priceMXN, c.productOptionChoiceId, c.name AS choiceName, o.productId, c.productOptionId,
+                        -- cycle length: the choice's size when its unit is minutes (edited in the POS product wizard)
+                        CASE WHEN m.prefix = 'min' THEN CAST(c.quantity AS INT) END AS cycleMinutes
                  FROM [dbo].[productOptionChoices] c
                  JOIN [dbo].[productOptions] o ON o.productOptionId = c.productOptionId
                  JOIN [dbo].[products] p ON p.productId = o.productId
+                 LEFT JOIN [dbo].[measurements] m ON m.measurementId = c.measurementId
                  WHERE c.productOptionChoiceId = @choiceId
                    AND o.productId IN (SELECT productId FROM @devProducts)
                    AND p.companyId = @devCompanyId
@@ -332,12 +335,14 @@ BEGIN
 
             SELECT ISNULL(
                 (SELECT c.productOptionChoiceId, c.name, c.price AS priceMXN, c.description,
-                        p.productId, ISNULL(g.label, p.name) AS groupLabel, g.sortOrder AS groupOrder
+                        p.productId, ISNULL(g.label, p.name) AS groupLabel, g.sortOrder AS groupOrder,
+                        CASE WHEN m.prefix = 'min' THEN CAST(c.quantity AS INT) END AS cycleMinutes
                  FROM @groups g
                  JOIN [dbo].[laundryDevices] d ON d.deviceId = @deviceId
                  JOIN [dbo].[products] p ON p.productId = g.productId AND p.companyId = d.companyId
                  JOIN [dbo].[productOptions] o ON o.productId = p.productId
                  JOIN [dbo].[productOptionChoices] c ON c.productOptionId = o.productOptionId
+                 LEFT JOIN [dbo].[measurements] m ON m.measurementId = c.measurementId
                  WHERE c.price > 0
                  ORDER BY g.sortOrder, c.price, c.productOptionChoiceId
                  FOR JSON PATH, ROOT('cycles')),

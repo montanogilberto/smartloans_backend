@@ -473,5 +473,36 @@ class TicketTest(Base):
                               {"useId": 1, "amountMXN": 40, "clientId": 2260}, {"priceMXN": 40}, "req-00000001")
 
 
+class CycleMinutesTest(Base):
+    """A cycle's own minutes (quantity in 'min', set in the POS) win over its name and the device default."""
+
+    def test_choice_minutes_win(self):
+        self.assertEqual(ld.cycle_minutes("Basico", {"cycleMinutes": 45}, 20), 20)
+
+    def test_name_then_device_default(self):
+        self.assertEqual(ld.cycle_minutes("50 Min", {"cycleMinutes": 45}), 50)
+        self.assertEqual(ld.cycle_minutes("Basico", {"cycleMinutes": 45}), 45)
+
+    def test_heartbeat_quote_and_authorize_use_choice_minutes(self):
+        sp = self.db.sp
+
+        def with_minutes(proc, payload):
+            out = sp(proc, payload)
+            row = payload[next(iter(payload))][0]
+            if proc == "sp_laundryDevices" and row["action"] == 6 and out.get("productOptionChoiceId") == 1004:
+                out["cycleMinutes"] = 20
+            if proc == "sp_laundryDevices" and row["action"] == 7:
+                for c in out["cycles"]:
+                    c["cycleMinutes"] = 20 if c["productOptionChoiceId"] == 1004 else None
+            return out
+
+        with mock.patch.object(ld, "_sp", side_effect=with_minutes):
+            hb = self.client.post("/laundryDevices/heartbeat", json={},
+                                  headers={"X-Device-Id": "7", "X-Device-Key": DEVICE_KEY}).json()
+            minutes = {c["productOptionChoiceId"]: c["cycleMinutes"] for c in hb["cycles"]}
+            self.assertEqual((minutes[1004], minutes[1006]), (20, 45))
+            self.assertEqual(self.authorize(self.qr()).json()["cycleMinutes"], 20)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -65,5 +65,18 @@ class LaundryTopUpTests(unittest.TestCase):
         self.credit_wallet.assert_not_called()
 
 
+class LaundryCardTopUpBlockedTests(unittest.TestCase):
+    """RFC-010: no laundry card charge on the platform account."""
+
+    def test_create_intent_is_refused_without_calling_stripe(self):
+        with mock.patch.object(sp.stripe.PaymentIntent, "create") as create:
+            resp = asyncio.run(sp.create_payment_intent({
+                "companyId": 1, "fromClientId": 2260, "toClientId": 2260,
+                "amount": 10000, "paymentType": "laundry_top_up"}))
+        self.assertEqual(resp.status_code, 503)
+        self.assertIn(b"laundry_card_topup_unavailable", resp.body)
+        create.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

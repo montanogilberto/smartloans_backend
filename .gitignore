@@ -10,3 +10,5 @@
 # ESP32 firmware: real Wi-Fi password and device key
 esp32/config.py
 esp32/qr_cliente_*.png
+esp32/wifi.json
+esp32/dist/

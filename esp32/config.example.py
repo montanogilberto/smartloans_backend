@@ -1,7 +1,7 @@
 # Copia este archivo como config.py (git lo ignora) y súbelo al ESP32 junto con main.py.
 
-WIFI_SSID = "NOMBRE_DE_TU_WIFI"
-WIFI_PASSWORD = "CONTRASENA_DE_TU_WIFI"
+# El Wi-Fi ya no va aquí: al arrancar sin internet, la pantalla pide escanear
+# el QR de la red (Ajustes / Wi-Fi / Compartir en el celular) y se guarda en wifi.json.
 
 API_BASE = "https://smartloansbackend.azurewebsites.net"
 
