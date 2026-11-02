@@ -1,8 +1,8 @@
-# Prueba de las 5 páginas del diseño v2, sin backend.
+# Prueba de las 5 páginas (main diseño v3), sin backend.
 # Ejecútalo en Thonny (NO lo guardes como main.py). Toca la pantalla para avanzar.
 
 import time
-from nextion import Nextion, RED_D
+from nextion import Nextion, RED_D, STEP_PENDING, STEP_ACTIVE, STEP_DONE, STEP_ERROR
 
 lcd = Nextion(uart_id=1, tx=27, rx=26, baud=9600)
 T = "LAVADORA 01"
@@ -21,20 +21,31 @@ def wait(events, seconds=30):
 
 
 cards = [
-    {"name": "Básico", "detail": "Agua baja", "minutes": "45 min", "price": "$40"},
-    {"name": "Medio", "detail": "Agua media", "minutes": "45 min", "price": "$50"},
-    {"name": "Carga Alta", "detail": "Agua alta", "minutes": "45 min", "price": "$70"},
-    {"name": "Colcha Grandes", "detail": "Agua máxima", "minutes": "45 min", "price": "$100"},
+    {"name": "Básico", "detail": "Agua baja · 45 min", "price": "$40", "icon": 0},
+    {"name": "Medio", "detail": "Agua media · 45 min", "price": "$50", "icon": 1},
+    {"name": "Carga Alta", "detail": "Agua alta · 45 min", "price": "$70", "icon": 2},
+    {"name": "Colcha Grandes", "detail": "Agua máxima · 45 min", "price": "$100", "icon": 3},
 ]
 
-print("1) main: toca un ciclo")
-lcd.show_main(T, cards)
-lcd.select(0, "Básico · 45 min", "$40")
-lcd.status("Escanea tu QR\npara continuar")
+print("1) main: toca un ciclo (Cancelar quita la selección)")
+lcd.show_main(T, cards, ["Lavado", "Secado"], 0)
+lcd.step(1, STEP_ACTIVE, "Elige tu ciclo")
+lcd.step(2, STEP_PENDING, "Escanea tu QR")
+lcd.status("Toca Lavado o Secado y luego tu ciclo")
 ev = wait(("SEL",))
 if ev:
     i = int(ev[3:])
-    lcd.select(i, "%s · 45 min" % cards[i]["name"], cards[i]["price"])
+    lcd.select(i)
+    lcd.step(1, STEP_DONE, "%s · %s" % (cards[i]["name"], cards[i]["price"]))
+    lcd.step(2, STEP_ACTIVE, "Escanea tu QR")
+    lcd.qr_panel(True)
+    time.sleep(2)
+    lcd.step(2, STEP_ERROR, "QR no válido")
+    if wait(("CANCEL",), 10):
+        lcd.select(None)
+        lcd.qr_panel(False)
+        lcd.step(1, STEP_ACTIVE, "Elige tu ciclo")
+        lcd.step(2, STEP_PENDING, "Escanea tu QR")
     time.sleep(2)
 
 print("2) confirm: toca Confirmar o Cancelar")

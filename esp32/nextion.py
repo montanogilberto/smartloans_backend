@@ -1,16 +1,18 @@
-# Driver de la pantalla Nextion GMO (diseño v2, 5 páginas) para MicroPython.
+# Driver de la pantalla Nextion GMO (main diseño v3, otras páginas v2) para MicroPython.
 #
 # MODO DIBUJO: el proyecto del Editor sólo tiene fuentes, imágenes y 5 páginas
 # con su fondo (sta=image), sin componentes. Todo el texto lo dibuja el ESP32
-# con xstr, la tarjeta seleccionada con picq y la barra con fill. Los toques
-# llegan como coordenadas (sendxy=1 en el Preinitialize de main) y aquí se
-# traducen a los mismos eventos de antes: SEL0..SEL3, OK, CANCEL, BACK.
+# con xstr, las tarjetas con picq, los íconos, pasos y tabs con xpic (recortes de
+# una imagen con todas las variantes) y la barra con fill. Los toques llegan como
+# coordenadas (sendxy=1 en el Preinitialize de main) y aquí se traducen a
+# eventos: SEL0..SEL3, TAB0/TAB1, STEP1, OK, CANCEL, BACK.
 #
 # Para mover un texto o cambiar un color, edita las tablas de abajo: no hace
-# falta volver a compilar ni cargar el .tft.
+# falta volver a compilar ni cargar el .tft. Las imágenes de main salen de
+# esp32/design/make_main.py, con la misma geometría y colores que aquí.
 #
 # Páginas e imágenes (deben coincidir con el proyecto del Editor):
-#   main=0 (main_sel=1), confirm=2, inuse=3, nofunds=4, msg=5
+#   main=0 (main_sel=1, main_card=6, icons=7, steps=8, tabs=9), confirm=2, inuse=3, nofunds=4, msg=5
 # Fuentes (IDs del Editor):
 #   0 r16, 1 r18, 2 b24, 3 b36, 4 b30, 5 b72
 
@@ -26,44 +28,55 @@ GREEN_D = 4936
 AMBER_D = 39616
 RED_D = 45315
 WHITE = 65535
-SEL_SEC = 55196
 BAR_BG = 57117
-BLUE = 8989          # #2563eb, el azul del botón "Mi QR" de la app
+# main v3 (los mismos colores que esp32/design/make_main.py)
+INK = 2381           # #0b2a6b nombre del ciclo, textos
+PRICE = 2513         # #0b3a8f precio
+DETAIL = 19282       # #4b6a96 detalle, nombre de la máquina
 
 LEFT, CENTER, RIGHT = 0, 1, 2
-SLOTS = 4
+SLOTS = 4            # tarjetas por tab
 
 PAGES = {"main": 0, "confirm": 2, "inuse": 3, "nofunds": 4, "msg": 5}
-PIC_MAIN_SEL = 1
+PIC_MAIN_SEL = 1     # tarjetas marcadas y panel QR resaltado
+PIC_MAIN_CARD = 6    # tarjetas sin marcar
+PIC_ICONS = 7        # íconos 48x48: renglón 0 sobre tarjeta normal, renglón 1 sobre marcada
+PIC_STEPS = 8        # renglón (paso - 1) * 5 + estado
+PIC_TABS = 9         # renglón 0 encendido, 1 apagado
 
 # Cajas de texto: (x, y, w, h, fuente, alineación, color)
-TITLE = (28, 48, 300, 28, 1, LEFT, SEC)
+TITLE = (200, 16, 260, 26, 1, LEFT, SEC)
 
-CARDS = [(28, 122), (408, 122), (28, 251), (408, 251)]   # esquina de cada tarjeta
-CARD_W, CARD_H = 364, 117
+# Pasos "1 Elige tu ciclo > 2 Escanea tu QR". El texto va en la parte plana de la
+# píldora con fondo de color sólido, así cambia sin redibujar la forma.
+STEP_PENDING, STEP_ACTIVE, STEP_PULSE, STEP_DONE, STEP_ERROR = range(5)
+STEPS = [(16, 64), (418, 64)]
+STEP_W, STEP_H = 366, 44
+STEP_TEXT = (50, 9, 294, 26, 2, CENTER)
+STEP_COLORS = [(55103, 19282), (4890, 65535), (15455, 65535), (57244, 2886), (65340, 45315)]  # (píldora, texto)
+
+# Tabs del servicio (Lavado | Secado) en una máquina combo
+TABS = [(16, 116), (288, 116)]
+TAB_W, TAB_H = 264, 40
+TAB_TEXT = (16, 6, 232, 28, 2, CENTER)
+TAB_COLORS = [(4890, 65535), (65535, 2381)]     # (fondo, texto): encendido, apagado
+
+# Rejilla de 2x2 tarjetas (esquina de cada una)
+CARDS = [(16, 164), (288, 164), (16, 292), (288, 292)]
+CARD_W, CARD_H = 264, 122
 # dentro de la tarjeta, relativo a su esquina
-CARD_NAME = (60, 14, 190, 34, 2, LEFT)
-CARD_DETAIL = (60, 50, 190, 26, 1, LEFT)
-CARD_MIN = (60, 78, 190, 24, 0, LEFT)
-CARD_PRICE = (254, 30, 90, 56, 3, RIGHT)
+CARD_ICON = (14, 37)
+ICON = 48
+CARD_NAME = (74, 12, 182, 28, 2, LEFT)
+CARD_DETAIL = (74, 42, 182, 22, 0, LEFT)
+CARD_PRICE = (74, 66, 182, 44, 3, LEFT)
 
-# Tabs de la máquina combo (Lavado / Secado), en la fila de "Selecciona tu ciclo".
-# Con un solo producto no se dibujan.
-TABS = [(468, 88, 148, 30), (624, 88, 148, 30)]
-TAB_FONT = 1
-
-# Aviso azul "Escanea tu QR" arriba de main, entre el título (GMO LAVANDERÍA /
-# LAVADORA 1) y "DISPONIBLE" del fondo; no toca los tabs (y=88). Se pinta con
-# fill, así no depende del fondo del .tft.
-QR_BANNER = (340, 20, 280, 52)
-QR_BANNER_TEXT = "Escanea tu QR"
-QR_BANNER_FONT = 2
+QR_PANEL = (564, 116, 220, 298)   # se resalta (main_sel) mientras el paso 2 está activo
 
 MAIN = {
-    "sel": (48, 414, 330, 40, 2, LEFT, NAVY),
-    "selp": (400, 396, 160, 56, 3, RIGHT, GREEN),
-    "status": (638, 392, 128, 64, 0, LEFT, NAVY),
+    "status": (52, 428, 540, 44, 1, LEFT, INK),   # renglón de abajo, junto a la (i)
 }
+MAIN_CANCEL = (604, 428, 180, 44)
 CONFIRM = {
     "hello": (170, 108, 460, 44, 4, CENTER, NAVY),
     "bal": (170, 152, 460, 28, 1, CENTER, SEC),
@@ -100,7 +113,8 @@ BTN_FONT = 2
 # Zonas táctiles por página: (x, y, w, h, evento)
 TOUCH = {
     "main": [(x, y, CARD_W, CARD_H, "SEL%d" % i) for i, (x, y) in enumerate(CARDS)]
-            + [(x, y, w, h, "TAB%d" % i) for i, (x, y, w, h) in enumerate(TABS)],
+            + [(x, y, TAB_W, TAB_H, "TAB%d" % i) for i, (x, y) in enumerate(TABS)]
+            + [STEPS[0] + (STEP_W, STEP_H, "STEP1"), MAIN_CANCEL + ("CANCEL",)],
     "confirm": [BTN_CANCEL + ("CANCEL",), BTN_OK + ("OK",)],
     "nofunds": [(28, 388, 192, 64, "BACK")],
 }
@@ -112,7 +126,7 @@ class Nextion:
         self._buf = b""
         self.page = None
         self.used = 0          # tarjetas con ciclo en main
-        self.tabs = []         # etiquetas de los tabs (vacío = sin tabs)
+        self.tabs = 0          # tabs dibujados (0 = máquina de un solo servicio)
         self.selected = None
         self._cards = []
         self.uart.write(END)   # limpia cualquier comando a medias
@@ -148,32 +162,42 @@ class Nextion:
             self.text(TITLE, title)
 
     # ---------- página main: elegir ciclo ----------
-    def show_main(self, title, cards, tabs=None, active=0):
-        """cards: lista de dicts {name, detail, minutes, price} (máximo 4).
-        tabs: etiquetas (["Lavado", "Secado"]); con menos de 2 no se dibujan."""
+    def show_main(self, title, cards, tabs=(), active=0):
+        """cards: lista de dicts {name, detail, price, icon} (máximo 4).
+        tabs: etiquetas de servicio (["Lavado", "Secado"]); con una sola, se dibuja como
+        etiqueta (no se puede tocar). Los pasos los dibuja quien llama (step), después de esto."""
         self.goto("main", title)
-        self.tabs = list(tabs or [])[:len(TABS)] if tabs and len(tabs) > 1 else []
-        self.draw_qr_banner()
-        self.draw_tabs(active)
+        self.used = 0
+        self.tabs = len(tabs) if len(tabs) > 1 else 0
+        for i in range(len(tabs[:len(TABS)])):
+            self.tab(i, tabs[i], i == active)
         self.show_cards(cards)
 
-    def draw_qr_banner(self):
-        x, y, w, h = QR_BANNER
-        self.cmd("fill %d,%d,%d,%d,%d" % (x, y, w, h, BLUE))
-        self.cmd('xstr %d,%d,%d,%d,%d,%d,%d,1,1,1,"%s"'
-                 % (x, y, w, h, QR_BANNER_FONT, WHITE, BLUE, self._q(QR_BANNER_TEXT)))
+    def tab(self, i, label, on):
+        x, y = TABS[i]
+        self.cmd("xpic %d,%d,%d,%d,0,%d,%d" % (x, y, TAB_W, TAB_H, 0 if on else TAB_H, PIC_TABS))
+        bg, color = TAB_COLORS[0 if on else 1]
+        self._solid(x, y, TAB_TEXT, label, color, bg)
 
-    def draw_tabs(self, active):
-        for i, label in enumerate(self.tabs):
-            x, y, w, h = TABS[i]
-            on = (i == active)
-            bg = GREEN if on else BAR_BG
-            self.cmd("fill %d,%d,%d,%d,%d" % (x, y, w, h, bg))
-            self.cmd('xstr %d,%d,%d,%d,%d,%d,%d,1,1,1,"%s"'
-                     % (x, y, w, h, TAB_FONT, WHITE if on else NAVY, bg, self._q(label)))
+    def step(self, n, state, text):
+        """Paso n (1 o 2) en un estado STEP_*, con su texto."""
+        x, y = STEPS[n - 1]
+        self.cmd("xpic %d,%d,%d,%d,0,%d,%d" % (x, y, STEP_W, STEP_H, ((n - 1) * 5 + state) * STEP_H, PIC_STEPS))
+        bg, color = STEP_COLORS[state]
+        self._solid(x, y, STEP_TEXT, text, color, bg)
+
+    def qr_panel(self, ready):
+        """Panel del lector resaltado cuando ya se puede escanear."""
+        x, y, w, h = QR_PANEL
+        self.cmd("picq %d,%d,%d,%d,%d" % (x, y, w, h, PIC_MAIN_SEL if ready else PAGES["main"]))
+
+    def _solid(self, x, y, box, text, color, bg):
+        bx, by, w, h, font, xcen = box
+        self.cmd('xstr %d,%d,%d,%d,%d,%d,%d,%d,1,1,"%s"'
+                 % (x + bx, y + by, w, h, font, color, bg, xcen, self._q(text)))
 
     def show_cards(self, cards):
-        """Redibuja las 4 tarjetas (al cambiar de tab). Las que sobran quedan vacías."""
+        """Redibuja las tarjetas. Las que sobran quedan como fondo vacío."""
         old = self.used
         self._cards = list(cards)[:SLOTS]
         self.used = len(self._cards)
@@ -187,30 +211,29 @@ class Nextion:
 
     def _card(self, i, on):
         x, y = CARDS[i]
-        pic = PIC_MAIN_SEL if on else PAGES["main"]
+        pic = PIC_MAIN_SEL if on else PIC_MAIN_CARD
         self.cmd("picq %d,%d,%d,%d,%d" % (x, y, CARD_W, CARD_H, pic))
         c = self._cards[i]
-        for box, key, normal, sel in ((CARD_NAME, "name", NAVY, WHITE),
-                                      (CARD_DETAIL, "detail", SEC, SEL_SEC),
-                                      (CARD_MIN, "minutes", SEC, SEL_SEC),
-                                      (CARD_PRICE, "price", NAVY, WHITE)):
+        ix, iy = CARD_ICON
+        self.cmd("xpic %d,%d,%d,%d,%d,%d,%d"
+                 % (x + ix, y + iy, ICON, ICON, int(c.get("icon") or 0) * ICON, ICON if on else 0, PIC_ICONS))
+        for box, key, color in ((CARD_NAME, "name", INK), (CARD_PRICE, "price", PRICE),
+                                (CARD_DETAIL, "detail", DETAIL)):
             bx, by, w, h, font, xcen = box
-            self.text((x + bx, y + by, w, h, font, xcen), c[key], sel if on else normal, pic)
+            self.text((x + bx, y + by, w, h, font, xcen), c[key], color, pic)
 
-    def select(self, index, sel_text="", sel_price=""):
-        """Marca la tarjeta `index` (o ninguna con None) y llena el panel inferior.
-        Sólo repinta las tarjetas que cambian."""
-        if index != self.selected:
-            if self.selected is not None and self.selected < self.used:
-                self._card(self.selected, False)
-            if index is not None and index < self.used:
-                self._card(index, True)
-            self.selected = index
-        self.text(MAIN["sel"], sel_text)
-        self.text(MAIN["selp"], sel_price)
+    def select(self, index):
+        """Marca la tarjeta `index` (o ninguna con None). Sólo repinta lo que cambia."""
+        if index == self.selected:
+            return
+        if self.selected is not None and self.selected < self.used:
+            self._card(self.selected, False)
+        if index is not None and index < self.used:
+            self._card(index, True)
+        self.selected = index
 
-    def status(self, text, pco=NAVY):
-        """Texto chico del panel inferior derecho (2-3 renglones)."""
+    def status(self, text, pco=INK):
+        """Renglón de abajo de main, junto a la (i) (1-2 renglones)."""
         self.text(MAIN["status"], text, pco)
 
     # ---------- página confirm ----------
@@ -289,13 +312,13 @@ class Nextion:
             if zx <= x < zx + zw and zy <= y < zy + zh:
                 if ev.startswith("SEL") and int(ev[3:]) >= self.used:
                     return None
-                if ev.startswith("TAB") and int(ev[3:]) >= len(self.tabs):
+                if ev.startswith("TAB") and int(ev[3:]) >= self.tabs:
                     return None
                 return ev
         return None
 
     def poll(self):
-        """Devuelve 'SEL0'..'SEL3', 'TAB0'/'TAB1', 'OK', 'CANCEL', 'BACK' o None. No bloquea."""
+        """Devuelve 'SEL0'..'SEL3', 'TAB0'/'TAB1', 'STEP1', 'OK', 'CANCEL', 'BACK' o None. No bloquea."""
         if self.uart.any():
             self._buf += self.uart.read() or b""
         while self._buf:
