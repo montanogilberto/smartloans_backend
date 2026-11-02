@@ -24,7 +24,11 @@
 --   Client = the company's active clients whose cellphone ends in the same 10 digits
 --   (same match as sp_whatsappCustomerRewards); app user = users.clientId.
 -- A customer = last 10 digits of the phone. Days are Hermosillo days (UTC-7, no DST);
--- timestamps returned are UTC.
+-- timestamps returned are UTC. CLOCKS: this server's GETDATE() is US Eastern
+-- (CURRENT_TIMEZONE() = Eastern Time — see migrations/2026-10-18b). whatsappMessages.createdAt
+-- and pushNotifications.created_At come from GETDATE() defaults, so they are converted
+-- Eastern -> UTC here with AT TIME ZONE (DST-aware); filters use the window in Eastern.
+-- integrationLogs, reservations, notificationDispatches and whatsappConversations are UTC.
 --
 -- action "list"    { companyId, startDate?, endDate?, search? }   (default: last 30 days)
 --   → { result: [{ period, conversations: [{ phone10, customerName, turns, failures,
@@ -76,6 +80,9 @@ BEGIN
 
         DECLARE @fromUtc DATETIME2 = DATEADD(HOUR, 7, CAST(@startDate AS DATETIME2));
         DECLARE @toUtc   DATETIME2 = DATEADD(HOUR, 7, CAST(DATEADD(DAY, 1, @endDate) AS DATETIME2));
+        -- The same window on the server clock (US Eastern), for GETDATE()-stamped columns.
+        DECLARE @fromEt  DATETIME2 = CONVERT(DATETIME2, (@fromUtc AT TIME ZONE 'UTC') AT TIME ZONE 'Eastern Standard Time');
+        DECLARE @toEt    DATETIME2 = CONVERT(DATETIME2, (@toUtc AT TIME ZONE 'UTC') AT TIME ZONE 'Eastern Standard Time');
 
         -- ── channel: which of the company's numbers to reply from ──────────────
         IF @action = 'channel'
@@ -128,8 +135,9 @@ BEGIN
                              AND RIGHT(REPLACE(REPLACE(REPLACE(wc.customerPhone, '+', ''), ' ', ''), '-', ''), 10) = @phone10)
                 THEN 1 ELSE 0 END;
             DECLARE @lastMsgUtc DATETIME2 = CASE WHEN @otherCompany = 0 THEN (
-                SELECT MAX(createdAt) FROM [dbo].[whatsappMessages]
-                WHERE direction = 'inbound' AND createdAt >= DATEADD(DAY, -2, SYSUTCDATETIME())
+                SELECT CONVERT(DATETIME2, (MAX(createdAt) AT TIME ZONE 'Eastern Standard Time') AT TIME ZONE 'UTC')
+                FROM [dbo].[whatsappMessages]
+                WHERE direction = 'inbound' AND createdAt >= DATEADD(DAY, -2, GETDATE())
                   AND phoneNumber LIKE '%' + RIGHT(@phone10, 4)
                   AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(phoneNumber, 'whatsapp:', ''), '+', ''), ' ', ''), '-', ''), 10) = @phone10) END;
             DECLARE @lastInboundCh DATETIME2 =
@@ -235,14 +243,14 @@ BEGIN
             -- Every message of the period for the phones that are this company's alone.
             DECLARE @periodMsgs TABLE (phone10 NVARCHAR(10), atUtc DATETIME2, kind NVARCHAR(10), text NVARCHAR(MAX));
             INSERT INTO @periodMsgs
-            SELECT x.phone10, m.createdAt,
+            SELECT x.phone10, CONVERT(DATETIME2, (m.createdAt AT TIME ZONE 'Eastern Standard Time') AT TIME ZONE 'UTC'),
                    CASE WHEN m.direction = 'inbound' THEN 'client'
                         WHEN m.status IN ('staff_sent', 'staff_app') THEN 'staff' ELSE 'bot' END,
                    m.messageBody
             FROM [dbo].[whatsappMessages] m
             CROSS APPLY (SELECT RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(m.phoneNumber, 'whatsapp:', ''), '+', ''), ' ', ''), '-', ''), 10) AS phone10) x
             JOIN @phones p ON p.phone10 = x.phone10 AND p.exclusive = 1
-            WHERE m.createdAt >= @fromUtc AND m.createdAt < @toUtc;
+            WHERE m.createdAt >= @fromEt AND m.createdAt < @toEt;
             -- Phones shared with another business: only the agent turns.
             INSERT INTO @periodMsgs
             SELECT t.phone10, t.atUtc, 'client', t.message FROM @turns t
@@ -336,7 +344,7 @@ BEGIN
         IF @useMessages = 1
         BEGIN
             INSERT INTO @items (atUtc, ord, kind, text, detail, status)
-            SELECT m.createdAt,
+            SELECT CONVERT(DATETIME2, (m.createdAt AT TIME ZONE 'Eastern Standard Time') AT TIME ZONE 'UTC'),
                    CASE WHEN m.direction = 'inbound' THEN 0 ELSE 2 END,
                    CASE WHEN m.direction = 'inbound' THEN 'client'
                         WHEN m.status = 'staff_sent' THEN 'staff'
@@ -346,7 +354,7 @@ BEGIN
                    CASE WHEN m.status = 'staff_sent' THEN NULLIF(m.responseBody, '') END,
                    m.status
             FROM [dbo].[whatsappMessages] m
-            WHERE m.createdAt >= @fromUtc AND m.createdAt < @toUtc
+            WHERE m.createdAt >= @fromEt AND m.createdAt < @toEt
               AND m.phoneNumber LIKE '%' + RIGHT(@phone10, 4)
               AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(m.phoneNumber, 'whatsapp:', ''), '+', ''), ' ', ''), '-', ''), 10) = @phone10;
         END
@@ -394,13 +402,13 @@ BEGIN
             OR (d.recipientType = 'user'   AND d.recipientId IN (SELECT userId FROM @appUsers)));
 
         INSERT INTO @items (atUtc, ord, kind, text, detail, channel, status)
-        SELECT COALESCE(p.sentAt, p.created_At), 5, 'notification',
+        SELECT CONVERT(DATETIME2, (p.created_At AT TIME ZONE 'Eastern Standard Time') AT TIME ZONE 'UTC'), 5, 'notification',
                CONCAT(p.title, CASE WHEN p.message IS NOT NULL THEN ' — ' + p.message ELSE '' END),
                p.notificationType, 'push',
                CASE WHEN p.isSent = 1 THEN 'SENT' ELSE 'PENDING' END
         FROM [dbo].[pushNotifications] p
         WHERE p.companyId = @companyId AND p.targetUserId IN (SELECT userId FROM @appUsers)
-          AND p.created_At >= @fromUtc AND p.created_At < @toUtc;
+          AND p.created_At >= @fromEt AND p.created_At < @toEt;
 
         DECLARE @lastInbound DATETIME2 = CASE WHEN @useMessages = 1
             THEN (SELECT MAX(atUtc) FROM @items WHERE kind = 'client')

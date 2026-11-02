@@ -100,12 +100,12 @@ class ReplyToSendClientQrTest(unittest.TestCase):
         out, _ = self.reply()
         self.assertEqual(out, wr._QR_NOT_FOUND)
 
-    def test_staff_paused_chat_gets_no_qr(self):
+    def test_old_staff_pause_is_ignored_agent_always_answers(self):
+        # Support is automatic (2026-11-02): a stored staff pause never silences the agent.
         with mock.patch.object(wr.whatsappChannels, "get_state",
                                return_value={"staffPaused": True, "pending": None, "lastBooked": None}):
-            out, send_image = self.reply()
-        self.assertIsNone(out)
-        send_image.assert_not_called()
+            out, _ = self.reply()
+        self.assertIsNotNone(out)
 
 
 class SendImageTest(unittest.TestCase):

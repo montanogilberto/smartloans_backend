@@ -7,7 +7,8 @@
 --   1  upsert the row for (companyId, branchId); only keys sent change
 -- Table: sql/migrations/2026-10-16_whatsapp_assistant_catalogs.sql
 --        + sql/migrations/2026-11-01_businessInfo_pickup_delivery_address.sql
---        (run both before this file)
+--        + sql/migrations/2026-11-02_businessInfo_websiteUrl.sql
+--        (run all three before this file)
 -- ============================================================
 
 IF OBJECT_ID('dbo.sp_businessInfo', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_businessInfo;
@@ -34,6 +35,7 @@ BEGIN
         DECLARE @street    NVARCHAR(300)  = JSON_VALUE(@pjsonfile, '$.businessInfo[0].street');
         DECLARE @city      NVARCHAR(120)  = JSON_VALUE(@pjsonfile, '$.businessInfo[0].city');
         DECLARE @postal    NVARCHAR(10)   = JSON_VALUE(@pjsonfile, '$.businessInfo[0].postalCode');
+        DECLARE @website   NVARCHAR(500)  = JSON_VALUE(@pjsonfile, '$.businessInfo[0].websiteUrl');
 
         -- OPENJSON key list (JSON_PATH_EXISTS needs SQL Server 2022).
         DECLARE @keys TABLE ([key] NVARCHAR(100));
@@ -71,6 +73,7 @@ BEGIN
                 street         = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'street')         THEN @street   ELSE street END,
                 city           = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'city')           THEN @city     ELSE city END,
                 postalCode     = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'postalCode')     THEN @postal   ELSE postalCode END,
+                websiteUrl     = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'websiteUrl')     THEN @website  ELSE websiteUrl END,
                 updatedAt      = GETUTCDATE()
             WHERE companyId = @companyId AND ISNULL(branchId, -1) = ISNULL(@branchId, -1);
         END
@@ -88,6 +91,7 @@ BEGIN
                    COALESCE(b.pickupPolicy,   c.pickupPolicy)   AS pickupPolicy,
                    COALESCE(b.deliveryPolicy, c.deliveryPolicy) AS deliveryPolicy,
                    COALESCE(b.whatsappNumber, c.whatsappNumber) AS whatsappNumber,
+                   COALESCE(b.websiteUrl,     c.websiteUrl)     AS websiteUrl,
                    -- Address parts come as one set: a branch with its own street
                    -- must not be mixed with the company-wide city/postal code.
                    CASE WHEN COALESCE(b.street, b.city, b.postalCode) IS NOT NULL THEN b.street     ELSE c.street     END AS street,

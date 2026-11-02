@@ -11,9 +11,11 @@
 --             agents/whatsapp_topic TOPICS, in responseSummary.topic since it was deployed)
 --   hours     when: messages per Hermosillo weekday (0 = lunes) × hour
 --   branches  where: per business number / branch the customer wrote to
---   quality   did we answer well — signals, not a grade: conversations (customer×day)
---             resolved / handed off / with a failure / no closure, re-asked topics,
---             complaints, new customers
+--   quality   did each chat END correctly: per conversation (customer×day) an outcome —
+--             cerrada / le_sirvio (finalized) · no_le_sirvio / falla_agente / pidio_persona /
+--             sin_cierre — from the agent's closing flow ("¿Te funcionó la respuesta?",
+--             "¿Hay algo más…?", answered 1/2 or sí/no), plus the list of unfinished chats,
+--             re-asked topics, complaints and new customers
 --   dataSince first day each source has data — earlier days can't be measured
 -- Sources (nothing new is written):
 --   dbo.integrationLogs  service 'loanagents_smartloans', operation
@@ -58,7 +60,9 @@ BEGIN
         -- reservations and clients.
         DECLARE @calls TABLE (phone10 NVARCHAR(10), ok BIT, latencyMs INT, capability NVARCHAR(40),
                               localAt DATETIME2, day DATE, topic NVARCHAR(30),
-                              branchId INT, branchName NVARCHAR(100), logId BIGINT);
+                              branchId INT, branchName NVARCHAR(100), logId BIGINT,
+                              customerName NVARCHAR(120), message NVARCHAR(300),
+                              askedHelpful BIT, askedMore BIT, answer NVARCHAR(3));
         INSERT INTO @calls
         SELECT RIGHT(REPLACE(REPLACE(REPLACE(JSON_VALUE(q.j, '$.phone'), '+', ''), ' ', ''), '-', ''), 10),
                CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END,
@@ -69,10 +73,25 @@ BEGIN
                JSON_VALUE(r.j, '$.topic'),
                TRY_CONVERT(INT, JSON_VALUE(q.j, '$.branchId')),
                JSON_VALUE(q.j, '$.branchName'),
-               integrationLogId
+               integrationLogId,
+               LEFT(JSON_VALUE(q.j, '$.customerName'), 120),
+               LEFT(JSON_VALUE(q.j, '$.message'), 300),
+               -- The agent's closing flow (LoanAgents whatsapp_reservations prompt, "Closing"):
+               -- fixed questions answered with "1. Sí" / "2. No".
+               CASE WHEN JSON_VALUE(r.j, '$.reply') LIKE N'%¿Te funcionó la respuesta?%' THEN 1 ELSE 0 END,
+               CASE WHEN JSON_VALUE(r.j, '$.reply') LIKE N'%¿Hay algo más en lo que te pueda ayudar?%' THEN 1 ELSE 0 END,
+               -- The customer's short yes / no (or the menu number).
+               CASE WHEN n.t IN (N'1', N'si', N'sí', N'sii', N'sip', N'claro', N'ok', N'okay', N'va', N'gracias',
+                                 N'si gracias', N'sí gracias', N'muchas gracias', N'perfecto', N'listo', N'excelente')
+                         OR n.t LIKE N'si %' OR n.t LIKE N'sí %' OR n.t LIKE N'1 %' THEN 'yes'
+                    WHEN n.t IN (N'2', N'no', N'nop', N'nel', N'no gracias', N'ninguna', N'nada', N'es todo',
+                                 N'eso es todo', N'nada mas', N'nada más')
+                         OR n.t LIKE N'no %' OR n.t LIKE N'2 %' THEN 'no' END
         FROM [dbo].[integrationLogs]
         CROSS APPLY (SELECT CASE WHEN ISJSON(requestSummary) = 1 THEN requestSummary END AS j) q
         CROSS APPLY (SELECT CASE WHEN ISJSON(responseSummary) = 1 THEN responseSummary END AS j) r
+        CROSS APPLY (SELECT LOWER(LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                         ISNULL(JSON_VALUE(q.j, '$.message'), ''), '.', ''), '!', ''), N'¡', ''), ',', ''), '?', ''), N'¿', '')))) AS t) n
         WHERE service = 'loanagents_smartloans' AND operation = 'whatsapp_reservations'
           AND companyId = @companyId
           AND created_At >= @fromUtc AND created_At < @toUtc;
@@ -193,33 +212,66 @@ BEGIN
             FOR JSON PATH, INCLUDE_NULL_VALUES
         );
 
-        -- ── Did we answer well? Signals, not a grade ──
-        --   conversation = one customer on one Hermosillo day.
-        --   resolved     = it ended with "gracias/ok/sí" (topic confirmacion) or a booking,
-        --                  without a failure or a handoff.
-        --   reasked      = the customer asked the same topic again within 15 min of the
-        --                  agent's answer (the answer probably didn't help).
-        DECLARE @ordered TABLE (phone10 NVARCHAR(10), day DATE, localAt DATETIME2, topic NVARCHAR(30),
-                                prevTopic NVARCHAR(30), prevAt DATETIME2, lastInDay BIT);
+        -- ── Did each chat end correctly? ──
+        --   conversation = one customer on one Hermosillo day. outcome, first match wins:
+        --     cerrada       the customer said "no" to "¿Hay algo más…?" (the agent says goodbye) or booked
+        --     no_le_sirvio  their last answer to "¿Te funcionó la respuesta?" was no
+        --     falla_agente  an agent call failed (they got the generic fallback text)
+        --     pidio_persona handed off and nobody from the team wrote after (whatsappMessages staff rows)
+        --     le_sirvio     their last answer to "¿Te funcionó?" was yes (no formal goodbye)
+        --     sin_cierre    they left mid-conversation
+        --   Finalized correctly = cerrada + le_sirvio.
+        --   reasked = the same topic asked again within 15 min of the agent's answer.
+        DECLARE @ordered TABLE (phone10 NVARCHAR(10), day DATE, localAt DATETIME2, logId BIGINT, topic NVARCHAR(30),
+                                prevTopic NVARCHAR(30), prevAt DATETIME2,
+                                prevAskedHelpful BIT, prevAskedMore BIT, answer NVARCHAR(3));
         INSERT INTO @ordered
-        SELECT phone10, day, localAt, topic,
-               LAG(topic)   OVER (PARTITION BY phone10 ORDER BY localAt, logId),
-               LAG(localAt) OVER (PARTITION BY phone10 ORDER BY localAt, logId),
-               CASE WHEN ROW_NUMBER() OVER (PARTITION BY phone10, day ORDER BY localAt DESC, logId DESC) = 1 THEN 1 ELSE 0 END
+        SELECT phone10, day, localAt, logId, topic,
+               LAG(topic)        OVER (PARTITION BY phone10 ORDER BY localAt, logId),
+               LAG(localAt)      OVER (PARTITION BY phone10 ORDER BY localAt, logId),
+               LAG(askedHelpful) OVER (PARTITION BY phone10, day ORDER BY localAt, logId),
+               LAG(askedMore)    OVER (PARTITION BY phone10, day ORDER BY localAt, logId),
+               answer
         FROM @calls WHERE ISNULL(phone10, '') <> '';
 
-        DECLARE @convs TABLE (phone10 NVARCHAR(10), day DATE, failed BIT, handedOff BIT, booked BIT, closedOk BIT);
-        INSERT INTO @convs
+        DECLARE @convs TABLE (phone10 NVARCHAR(10), day DATE, failed BIT, handedOff BIT, firstHandoffAt DATETIME2,
+                              booked BIT, goodbye BIT, lastHelpful NVARCHAR(3), staffReplied BIT,
+                              lastAt DATETIME2, outcome NVARCHAR(20));
+        INSERT INTO @convs (phone10, day, failed, handedOff, firstHandoffAt, booked, goodbye, lastHelpful, lastAt)
         SELECT c.phone10, c.day,
                MAX(CASE WHEN c.ok = 0 THEN 1 ELSE 0 END),
                MAX(CASE WHEN c.capability = 'REQUEST_HUMAN' THEN 1 ELSE 0 END),
+               MIN(CASE WHEN c.capability = 'REQUEST_HUMAN' THEN c.localAt END),
                CASE WHEN EXISTS (SELECT 1 FROM @bookings b WHERE b.phone10 = c.phone10 AND b.day = c.day
                                    AND b.status <> 'cancelled') THEN 1 ELSE 0 END,
-               MAX(CASE WHEN o.lastInDay = 1 AND o.topic = 'confirmacion' THEN 1 ELSE 0 END)
+               CASE WHEN EXISTS (SELECT 1 FROM @ordered o WHERE o.phone10 = c.phone10 AND o.day = c.day
+                                   AND o.prevAskedMore = 1 AND o.answer = 'no') THEN 1 ELSE 0 END,
+               (SELECT TOP 1 o.answer FROM @ordered o
+                 WHERE o.phone10 = c.phone10 AND o.day = c.day AND o.prevAskedHelpful = 1 AND o.answer IS NOT NULL
+                 ORDER BY o.localAt DESC, o.logId DESC),
+               MAX(c.localAt)
         FROM @calls c
-        LEFT JOIN @ordered o ON o.phone10 = c.phone10 AND o.localAt = c.localAt
         WHERE ISNULL(c.phone10, '') <> ''
         GROUP BY c.phone10, c.day;
+
+        -- Did someone from the team write after the handoff? whatsappMessages is stamped on the
+        -- server clock (US Eastern, see sp_whatsappAgentConversations); localAt is Hermosillo.
+        UPDATE v SET staffReplied = CASE WHEN EXISTS (
+                SELECT 1 FROM [dbo].[whatsappMessages] m
+                WHERE m.status IN ('staff_sent', 'staff_app')
+                  AND m.phoneNumber LIKE '%' + RIGHT(v.phone10, 4)
+                  AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(m.phoneNumber, 'whatsapp:', ''), '+', ''), ' ', ''), '-', ''), 10) = v.phone10
+                  AND CONVERT(DATETIME2, (m.createdAt AT TIME ZONE 'Eastern Standard Time') AT TIME ZONE 'UTC')
+                      >= DATEADD(HOUR, 7, v.firstHandoffAt)) THEN 1 ELSE 0 END
+        FROM @convs v WHERE v.handedOff = 1;
+
+        UPDATE @convs SET outcome = CASE
+            WHEN goodbye = 1 OR booked = 1                 THEN 'cerrada'
+            WHEN lastHelpful = 'no'                        THEN 'no_le_sirvio'
+            WHEN failed = 1                                THEN 'falla_agente'
+            WHEN handedOff = 1 AND ISNULL(staffReplied, 0) = 0 THEN 'pidio_persona'
+            WHEN lastHelpful = 'yes'                       THEN 'le_sirvio'
+            ELSE 'sin_cierre' END;
 
         DECLARE @nTagged INT = (SELECT COUNT(*) FROM @ordered WHERE topic IS NOT NULL);
         DECLARE @nReasked INT = (
@@ -227,16 +279,39 @@ BEGIN
             WHERE topic IS NOT NULL AND topic = prevTopic
               AND topic NOT IN ('confirmacion', 'saludo', 'otro', 'baja_alta')
               AND DATEDIFF(MINUTE, prevAt, localAt) <= 15);
+        DECLARE @nConvs INT = (SELECT COUNT(*) FROM @convs);
+        DECLARE @nFinal INT = (SELECT COUNT(*) FROM @convs WHERE outcome IN ('cerrada', 'le_sirvio'));
+
+        -- The chats that did NOT end correctly, newest first, to open and fix.
+        DECLARE @unfinished NVARCHAR(MAX) = (
+            SELECT TOP (30) v.phone10,
+                   (SELECT TOP 1 c.customerName FROM @calls c WHERE c.phone10 = v.phone10
+                      AND ISNULL(c.customerName, '') <> '' ORDER BY c.localAt DESC)            AS customerName,
+                   CONVERT(NVARCHAR(10), v.day, 23)                                             AS date,
+                   CONVERT(NVARCHAR(19), DATEADD(HOUR, 7, v.lastAt), 126)                       AS lastAtUtc,
+                   v.outcome,
+                   (SELECT TOP 1 c.message FROM @calls c WHERE c.phone10 = v.phone10 AND c.day = v.day
+                      ORDER BY c.localAt DESC, c.logId DESC)                                    AS lastMessage
+            FROM @convs v
+            WHERE v.outcome NOT IN ('cerrada', 'le_sirvio')
+            ORDER BY v.lastAt DESC
+            FOR JSON PATH, INCLUDE_NULL_VALUES
+        );
 
         DECLARE @quality NVARCHAR(MAX) = (
             SELECT
-                (SELECT COUNT(*) FROM @convs)                                                        AS conversations,
-                (SELECT COUNT(*) FROM @convs WHERE failed = 0 AND handedOff = 0
-                                                 AND (closedOk = 1 OR booked = 1))                   AS resolved,
-                (SELECT COUNT(*) FROM @convs WHERE handedOff = 1)                                    AS handedOff,
-                (SELECT COUNT(*) FROM @convs WHERE failed = 1)                                       AS withFailure,
-                (SELECT COUNT(*) FROM @convs WHERE failed = 0 AND handedOff = 0
-                                                 AND closedOk = 0 AND booked = 0)                    AS noClosure,
+                @nConvs                                                                              AS conversations,
+                @nFinal                                                                              AS finalized,
+                CASE WHEN @nConvs > 0 THEN CAST(100.0 * @nFinal / @nConvs AS DECIMAL(5,1)) END       AS finalizedRatePct,
+                (SELECT COUNT(*) FROM @convs WHERE outcome = 'cerrada')                              AS closed,
+                (SELECT COUNT(*) FROM @convs WHERE outcome = 'le_sirvio')                            AS helped,
+                (SELECT COUNT(*) FROM @convs WHERE outcome = 'no_le_sirvio')                         AS notHelped,
+                (SELECT COUNT(*) FROM @convs WHERE outcome = 'falla_agente')                         AS withFailure,
+                (SELECT COUNT(*) FROM @convs WHERE outcome = 'pidio_persona')                        AS handedOff,
+                (SELECT COUNT(*) FROM @convs WHERE outcome = 'sin_cierre')                           AS noClosure,
+                (SELECT COUNT(*) FROM @ordered WHERE prevAskedHelpful = 1 AND answer = 'yes')        AS helpfulYes,
+                (SELECT COUNT(*) FROM @ordered WHERE prevAskedHelpful = 1 AND answer = 'no')         AS helpfulNo,
+                @nFinal                                                                              AS resolved,
                 @nReasked                                                                            AS reasked,
                 CASE WHEN @nTagged > 0 THEN CAST(100.0 * @nReasked / @nTagged AS DECIMAL(5,1)) END   AS reaskedRatePct,
                 (SELECT COUNT(DISTINCT phone10) FROM @calls WHERE topic = 'queja')                   AS complaints,
@@ -244,7 +319,8 @@ BEGIN
                   WHERE NOT EXISTS (SELECT 1 FROM [dbo].[integrationLogs] l
                                     WHERE l.service = 'loanagents_smartloans' AND l.operation = 'whatsapp_reservations'
                                       AND l.companyId = @companyId AND l.created_At < @fromUtc
-                                      AND l.requestSummary LIKE '%' + cu.phone10 + '%'))             AS newCustomers
+                                      AND l.requestSummary LIKE '%' + cu.phone10 + '%'))             AS newCustomers,
+                JSON_QUERY(ISNULL(@unfinished, '[]'))                                                AS unfinished
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
         );
 

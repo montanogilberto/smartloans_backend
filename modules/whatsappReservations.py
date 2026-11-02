@@ -13,19 +13,19 @@ Same propose → confirm → execute split as modules/posSupportChat.py:
   WhatsApp number per branch, dbo.whatsappChannels) and phone from the
   WhatsApp sender — always set here, never taken from the agent's fields.
 
-Coexistence: the number is also used from the WhatsApp Business app. When
-staff answer a chat from the app, Meta sends an smb_message_echoes webhook;
-the bot then stays quiet in that chat for STAFF_PAUSE_SECONDS so the
-customer doesn't get answers from both.
+Always on: the agent answers EVERY customer message — support is automatic.
+Staff can also write (from the POS or the WhatsApp Business app); that never
+silences the agent (decided 2026-11-02 — a staff "hola" used to pause it for
+2 h and the customer was left without answers). Pauses already stored in
+whatsappConversations.staffPausedUntil are ignored.
 
-State (pending proposal, staff pause, last booking) lives in
+State (pending proposal, last booking) lives in
 dbo.whatsappConversations per (channel, customer), so it is shared by every
 App Service instance and survives restarts.
 
 Handoff: when the customer asks for a person (or the agent can't help), the
-agent proposes REQUEST_HUMAN. That needs no "sí": the bot goes quiet in the
-chat for STAFF_PAUSE_SECONDS and the branch's POS users get a push, so staff
-answer from the WhatsApp Business app.
+agent proposes REQUEST_HUMAN. That needs no "sí": the branch's POS users get
+a push so someone from the team follows up, and the agent keeps answering.
 
 Client QR: "mi QR" (menu option 7) makes the agent propose SEND_CLIENT_QR,
 also without "sí". This module finds the sender's client by phone (the same
@@ -57,7 +57,6 @@ logger = logging.getLogger(__name__)
 
 AGENT_URL = os.environ.get("NEGOTIATION_AGENT_URL", "").rstrip("/")
 PENDING_TTL_SECONDS = 600
-STAFF_PAUSE_SECONDS = 2 * 60 * 60
 
 # Sent when the agent service fails. It must not promise a person: nobody is
 # notified on this path.
@@ -65,14 +64,9 @@ _FALLBACK_REPLY = ("Perdón, tuve un problema para responderte. "
                    "¿Me lo puedes escribir de nuevo en un momento?")
 
 
-def pause_for_staff(channel: dict, phone: str) -> None:
-    whatsappChannels.pause_for_staff(channel["channelId"], phone, STAFF_PAUSE_SECONDS)
-
-
 def _hand_off_to_staff(channel: dict, phone: str, profile_name: str | None,
                       reason: str | None) -> None:
-    """Bot steps aside in this chat and the company's POS users get a push."""
-    whatsappChannels.pause_for_staff(channel["channelId"], phone, STAFF_PAUSE_SECONDS)
+    """The company's POS users get a push; the agent keeps answering the chat."""
     who = profile_name or phone
     branch = f" ({channel['branchName']})" if channel.get("branchName") else ""
     try:
@@ -298,10 +292,6 @@ def reply_to(channel: dict, phone: str, profile_name: str | None, text: str,
         return None
     channel_id = channel["channelId"]
     state = whatsappChannels.get_state(channel_id, phone)
-    if state["staffPaused"]:
-        logger.info("[whatsappReservations] staff is handling %s on channel %s — bot silent",
-                    phone, channel_id)
-        return None
     if on_answering:
         on_answering()
 
