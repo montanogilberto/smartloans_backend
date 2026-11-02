@@ -314,6 +314,28 @@ class QuoteTest(Base):
         self.assertEqual((r.status_code, r.json()["reason"]), (404, "client_not_found"))
 
 
+class BalanceTest(Base):
+    def balance(self, qr, key=DEVICE_KEY):
+        return self.client.post("/laundryDevices/balance",
+                                headers={"X-Device-Id": "7", "X-Device-Key": key}, json={"clientQr": qr})
+
+    def test_first_name_and_balance_without_a_cycle(self):
+        r = self.balance(self.qr())
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"firstName": "Juan", "availableBalance": 100.0})
+
+    def test_never_charges_or_opens_a_use(self):
+        self.balance(self.qr())
+        self.assertEqual((self.db.ledger, self.db.uses, self.db.balance), ({}, {}, 100.0))
+
+    def test_same_qr_and_device_checks(self):
+        self.assertEqual(self.balance("2260").json()["reason"], "qr_malformed")
+        self.assertEqual(self.balance(self.qr(company_id=2)).json()["reason"], "qr_wrong_company")
+        self.assertEqual(self.balance(self.qr(), key="nope").status_code, 401)
+        r = self.balance(self.qr(client_id=999))
+        self.assertEqual((r.status_code, r.json()["reason"]), (404, "client_not_found"))
+
+
 class DeviceAdminTest(Base):
     def test_heartbeat_lists_the_screen_cycles(self):
         r = self.client.post("/laundryDevices/heartbeat", headers={"X-Device-Id": "7", "X-Device-Key": DEVICE_KEY},

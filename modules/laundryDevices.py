@@ -294,6 +294,37 @@ def quote(device_id, device_key, payload: dict):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def balance(device_id, device_key, payload: dict):
+    """Balance check at the machine: the client scans without choosing a cycle.
+    Same device + QR checks as quote; never debits. Only the first name goes
+    back (the screen is in a public place)."""
+    try:
+        device = _authenticate(device_id, device_key)
+        if isinstance(device, JSONResponse):
+            return device
+        try:
+            client = verify_client_qr(payload.get("clientQr"))
+        except ValueError as e:
+            return JSONResponse({"authorized": False, "reason": str(e)}, status_code=401)
+        if client["companyId"] != device["companyId"]:
+            return JSONResponse({"authorized": False, "reason": "qr_wrong_company"}, status_code=401)
+
+        person = _sp("sp_laundryDevices", {"laundryDevices": [{
+            "action": 8, "deviceId": device["deviceId"], "clientId": client["clientId"],
+        }]})
+        if person.get("error") == "client_not_found":
+            return JSONResponse({"authorized": False, "reason": "client_not_found"}, status_code=404)
+        if person.get("error"):
+            return JSONResponse(person, status_code=500)
+
+        return JSONResponse({
+            "firstName": person.get("firstName"),
+            "availableBalance": _available(device, client["clientId"]),
+        }, status_code=200)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 def authorize(device_id, device_key, payload: dict):
     try:
         device = _authenticate(device_id, device_key)
