@@ -38,18 +38,16 @@ class StaffReplyTest(unittest.TestCase):
             "sp": mock.patch.object(wc, "assistant_sp", side_effect=lambda *_: self.lookup),
             "get_channel": mock.patch.object(wc.whatsappChannels, "get_channel", return_value=dict(CHANNEL)),
             "send": mock.patch.object(wc, "send_text", return_value={"messageId": "wamid.X"}),
-            "pause": mock.patch.object(wc.whatsappReservations, "pause_for_staff"),
             "log_msg": mock.patch.object(wc, "log_message_to_database"),
             "log_step": mock.patch.object(wc, "log_workflow_step"),
         }
         self.m = {k: p.start() for k, p in patches.items()}
         self.addCleanup(mock.patch.stopall)
 
-    def test_sends_from_the_customers_number_pauses_bot_and_logs(self):
+    def test_sends_from_the_customers_number_and_logs(self):
         res = wc.staff_reply(_req())
         self.assertEqual(res.status_code, 200)
         self.m["send"].assert_called_once_with(CHANNEL, "+5216621234567", "Hola, ya está lista tu ropa")
-        self.m["pause"].assert_called_once_with(CHANNEL, "+5216621234567")
         kw = self.m["log_msg"].call_args.kwargs
         self.assertEqual((kw["direction"], kw["status"], kw["response_body"]), ("outbound", "staff_sent", "userId=9"))
         # The workflow log carries no message text or phone.
@@ -62,7 +60,6 @@ class StaffReplyTest(unittest.TestCase):
         res = wc.staff_reply(_req())
         self.assertEqual(res.status_code, 409)
         self.m["send"].assert_not_called()
-        self.m["pause"].assert_not_called()
 
     def test_never_wrote_is_outside_window(self):
         self.lookup["result"][0]["lastInboundUtc"] = None
@@ -83,12 +80,34 @@ class StaffReplyTest(unittest.TestCase):
             self.assertEqual(wc.staff_reply(bad).status_code, 400)
         self.m["send"].assert_not_called()
 
-    def test_meta_failure_is_502_and_bot_not_paused(self):
+    def test_meta_failure_is_502_and_not_logged(self):
         self.m["send"].side_effect = RuntimeError("WhatsApp Cloud send failed (400)")
         self.assertEqual(wc.staff_reply(_req()).status_code, 502)
-        self.m["pause"].assert_not_called()
         self.m["log_msg"].assert_not_called()
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NeverPauseTest(unittest.TestCase):
+    """Support is automatic (2026-11-02): nothing silences the agent in a chat."""
+
+    def test_handoff_notifies_staff_without_pausing_the_agent(self):
+        import modules.whatsappReservations as wr
+        with mock.patch.object(wr.whatsappChannels, "pause_for_staff") as pause, \
+             mock.patch.object(wr, "pushNotifications_sp", new=mock.AsyncMock()) as push:
+            wr._hand_off_to_staff(dict(CHANNEL), "+5216621234567", "Ana", "quiere hablar con alguien")
+        pause.assert_not_called()
+        push.assert_called_once()
+
+    def test_staff_echo_from_the_app_is_logged_not_paused(self):
+        payload = {"entry": [{"changes": [{"field": "smb_message_echoes", "value": {
+            "metadata": {"phone_number_id": "PNID"},
+            "message_echoes": [{"to": "5216621234567", "text": {"body": "Ya está tu ropa"}}]}}]}]}
+        with mock.patch.object(wc.whatsappChannels, "get_channel", return_value=dict(CHANNEL)), \
+             mock.patch.object(wc.whatsappChannels, "pause_for_staff") as pause, \
+             mock.patch.object(wc, "log_message_to_database") as log_msg:
+            wc._log_staff_echoes(payload)
+        pause.assert_not_called()
+        self.assertEqual(log_msg.call_args.kwargs["status"], "staff_app")

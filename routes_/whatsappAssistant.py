@@ -123,14 +123,14 @@ def whatsapp_agent_conversations_route(json: dict):
 
 @router.post(
     "/whatsapp/staffReply",
-    summary="A POS user replies to a WhatsApp customer from the business number (bot pauses in that chat)",
+    summary="A POS user replies to a WhatsApp customer from the business number (the agent keeps answering)",
     description="""
 { "whatsappStaffReply": [{ "companyId": int, "userId": int, "phone10": str, "body": str (≤ 4096) }] }
 → 200 { sent: true, messageId, atUtc }
 400 bad input · 404 no_channel · 409 outside_24h (no customer message in the last 24 h:
 Meta only delivers templates) · 502 send_failed
 Sent from the number the customer wrote to; logged in whatsappMessages (status 'staff_sent');
-the bot stays silent in that chat for 2 h, same as a reply from the WhatsApp Business app.""",
+the agent is never paused: it keeps answering the customer's next messages.""",
 )
 def whatsapp_staff_reply_route(json: dict):
     return staff_reply(json)

@@ -312,9 +312,10 @@ def _update_dispatch(wamid: str | None, status: str | None,
         logger.exception("[whatsappCloud] dispatch status update failed | id=%s", wamid)
 
 
-def _pause_bot_on_staff_replies(payload: dict) -> None:
+def _log_staff_echoes(payload: dict) -> None:
     """Coexistence: a message staff send from the WhatsApp Business app comes
-    back as field "smb_message_echoes". The bot steps aside in that chat."""
+    back as field "smb_message_echoes". It is logged so the POS inbox shows it;
+    the agent keeps answering the chat (it is never paused)."""
     for entry in payload.get("entry") or []:
         for change in entry.get("changes") or []:
             if change.get("field") != "smb_message_echoes":
@@ -327,7 +328,6 @@ def _pause_bot_on_staff_replies(payload: dict) -> None:
                 customer = "+" + normalize_mx_number(echo.get("to", ""))
                 logger.info("[whatsappCloud] staff replied from app | channel=%s to=%s",
                             channel["channelId"], customer)
-                whatsappReservations.pause_for_staff(channel, customer)
                 text = (echo.get("text") or {}).get("body")
                 if text:
                     # So POS › Conversaciones shows what staff answered from the app too.
@@ -378,7 +378,7 @@ def handle_webhook(payload: dict) -> None:
     One bad message (DB down, agent error) must not drop the rest."""
     _log_statuses(payload)
     try:
-        _pause_bot_on_staff_replies(payload)
+        _log_staff_echoes(payload)
     except Exception:
         logger.exception("[whatsappCloud] failed to process staff echoes")
     for msg in _extract_inbound(payload):
@@ -398,8 +398,8 @@ _SERVICE_WINDOW = timedelta(hours=24)
 def staff_reply(json_file: dict) -> JSONResponse:
     """POST /whatsapp/staffReply — a POS user answers a WhatsApp customer from the
     business number the customer wrote to. Logged to whatsappMessages as
-    'staff_sent' (responseBody = "userId=<id>") and the bot steps aside in that
-    chat (same pause as a reply from the WhatsApp Business app).
+    'staff_sent' (responseBody = "userId=<id>"). The agent keeps answering the
+    chat — it is never paused.
 
     Body: { "whatsappStaffReply": [{ "companyId": int, "userId": int, "phone10": str, "body": str }] }
     200 { sent: true, messageId, atUtc }
@@ -445,7 +445,6 @@ def staff_reply(json_file: dict) -> JSONResponse:
                           entity="whatsappChannel", entity_id=channel["channelId"], message=str(e)[:300])
         return JSONResponse({"error": "send_failed"}, status_code=502)
 
-    whatsappReservations.pause_for_staff(channel, customer)
     try:
         log_message_to_database(phone_number=customer, message_body=body, response_body=f"userId={user_id}",
                                 direction="outbound", status="staff_sent", action=1)
