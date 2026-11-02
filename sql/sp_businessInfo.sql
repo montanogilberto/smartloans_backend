@@ -6,6 +6,8 @@
 --      the company-wide row when the branch leaves it empty
 --   1  upsert the row for (companyId, branchId); only keys sent change
 -- Table: sql/migrations/2026-10-16_whatsapp_assistant_catalogs.sql
+--        + sql/migrations/2026-11-01_businessInfo_pickup_delivery_address.sql
+--        (run both before this file)
 -- ============================================================
 
 IF OBJECT_ID('dbo.sp_businessInfo', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_businessInfo;
@@ -26,6 +28,12 @@ BEGIN
         DECLARE @payments  NVARCHAR(300)  = JSON_VALUE(@pjsonfile, '$.businessInfo[0].paymentMethods');
         DECLARE @services  NVARCHAR(2000) = JSON_VALUE(@pjsonfile, '$.businessInfo[0].servicesInfo');
         DECLARE @extra     NVARCHAR(2000) = JSON_VALUE(@pjsonfile, '$.businessInfo[0].extraInfo');
+        DECLARE @pickup    NVARCHAR(1000) = JSON_VALUE(@pjsonfile, '$.businessInfo[0].pickupPolicy');
+        DECLARE @delivery  NVARCHAR(1000) = JSON_VALUE(@pjsonfile, '$.businessInfo[0].deliveryPolicy');
+        DECLARE @whatsapp  NVARCHAR(30)   = JSON_VALUE(@pjsonfile, '$.businessInfo[0].whatsappNumber');
+        DECLARE @street    NVARCHAR(300)  = JSON_VALUE(@pjsonfile, '$.businessInfo[0].street');
+        DECLARE @city      NVARCHAR(120)  = JSON_VALUE(@pjsonfile, '$.businessInfo[0].city');
+        DECLARE @postal    NVARCHAR(10)   = JSON_VALUE(@pjsonfile, '$.businessInfo[0].postalCode');
 
         -- OPENJSON key list (JSON_PATH_EXISTS needs SQL Server 2022).
         DECLARE @keys TABLE ([key] NVARCHAR(100));
@@ -57,6 +65,12 @@ BEGIN
                 paymentMethods = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'paymentMethods') THEN @payments ELSE paymentMethods END,
                 servicesInfo   = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'servicesInfo')   THEN @services ELSE servicesInfo END,
                 extraInfo      = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'extraInfo')      THEN @extra    ELSE extraInfo END,
+                pickupPolicy   = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'pickupPolicy')   THEN @pickup   ELSE pickupPolicy END,
+                deliveryPolicy = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'deliveryPolicy') THEN @delivery ELSE deliveryPolicy END,
+                whatsappNumber = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'whatsappNumber') THEN @whatsapp ELSE whatsappNumber END,
+                street         = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'street')         THEN @street   ELSE street END,
+                city           = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'city')           THEN @city     ELSE city END,
+                postalCode     = CASE WHEN EXISTS (SELECT 1 FROM @keys WHERE [key] = 'postalCode')     THEN @postal   ELSE postalCode END,
                 updatedAt      = GETUTCDATE()
             WHERE companyId = @companyId AND ISNULL(branchId, -1) = ISNULL(@branchId, -1);
         END
@@ -70,7 +84,15 @@ BEGIN
                    COALESCE(b.email,          c.email)          AS email,
                    COALESCE(b.paymentMethods, c.paymentMethods) AS paymentMethods,
                    COALESCE(b.servicesInfo,   c.servicesInfo)   AS servicesInfo,
-                   COALESCE(b.extraInfo,      c.extraInfo)      AS extraInfo
+                   COALESCE(b.extraInfo,      c.extraInfo)      AS extraInfo,
+                   COALESCE(b.pickupPolicy,   c.pickupPolicy)   AS pickupPolicy,
+                   COALESCE(b.deliveryPolicy, c.deliveryPolicy) AS deliveryPolicy,
+                   COALESCE(b.whatsappNumber, c.whatsappNumber) AS whatsappNumber,
+                   -- Address parts come as one set: a branch with its own street
+                   -- must not be mixed with the company-wide city/postal code.
+                   CASE WHEN COALESCE(b.street, b.city, b.postalCode) IS NOT NULL THEN b.street     ELSE c.street     END AS street,
+                   CASE WHEN COALESCE(b.street, b.city, b.postalCode) IS NOT NULL THEN b.city       ELSE c.city       END AS city,
+                   CASE WHEN COALESCE(b.street, b.city, b.postalCode) IS NOT NULL THEN b.postalCode ELSE c.postalCode END AS postalCode
             FROM [dbo].[companies] co
             LEFT JOIN [dbo].[companiesBranch] br ON br.branchId = @branchId AND br.companyId = co.companyId
             LEFT JOIN [dbo].[businessInfo] c ON c.companyId = co.companyId AND c.branchId IS NULL

@@ -80,11 +80,14 @@ def _hand_off_to_staff(channel: dict, phone: str, profile_name: str | None,
             "action": 1,
             "companyId": channel["companyId"],
             "title": f"💬 Cliente pide atención por WhatsApp{branch}",
-            "message": f"{who} ({phone}): {reason or 'quiere hablar con alguien'}. Responde desde WhatsApp Business.",
+            "message": f"{who} ({phone}): {reason or 'quiere hablar con alguien'}. "
+                       "Respóndele en el POS › Conversaciones o desde WhatsApp Business.",
             "notificationType": "Info",
             "priority": "High",
             "targetType": "Company",
             "targetCompanyId": channel["companyId"],
+            # Opens the POS inbox ("Sin responder"); the phone stays out of the route (no PII in URLs).
+            "navigationRoute": "/whatsapp-agent/conversations",
             "payloadJson": json.dumps({"type": "WhatsAppHandoff", "phone": phone,
                                        "channelId": channel["channelId"]}),
         }]}))
@@ -205,6 +208,7 @@ def _push_agent_failure_to_staff(channel: dict, phone: str, profile_name: str | 
             "priority": "High",
             "targetType": "Company",
             "targetCompanyId": channel["companyId"],
+            "navigationRoute": "/whatsapp-agent/conversations",
             "payloadJson": json.dumps({"type": "WhatsAppAgentFailed", "phone": phone}),
         }]}))
     except Exception:
