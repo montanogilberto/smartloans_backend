@@ -9,8 +9,9 @@ Every script is safe to re-run.
 | # | Script | What it does |
 |---|---|---|
 | 1 | `sql/migrations/2026-10-16_whatsapp_assistant_catalogs.sql` | `businessInfo` and `businessFaqs` tables; `promotions.description` |
-| 2 | `sql/sp_businessInfo.sql` | `POST /businessInfo` |
-| 3 | `sql/sp_businessFaqs.sql` | `POST /businessFaqs` |
+| 2 | `sql/migrations/2026-11-01_businessInfo_pickup_delivery_address.sql` | `businessInfo` pickup/delivery policy, WhatsApp number, street/city/postal code |
+| 3 | `sql/sp_businessInfo.sql` | `POST /businessInfo` |
+| 4 | `sql/sp_businessFaqs.sql` | `POST /businessFaqs` |
 
 The other two SPs the assistant uses read the POS rewards catalog, so they
 are deployed with it (`sql/migrations/README_pos_rewards.md`, steps 6–7):

@@ -28,8 +28,12 @@
 --
 -- action "list"    { companyId, startDate?, endDate?, search? }   (default: last 30 days)
 --   → { result: [{ period, conversations: [{ phone10, customerName, turns, failures,
---        firstAtUtc, lastAtUtc, lastMessage, lastReply, handedOff, proposed, bookings }] }] }
---   Customers who talked to the agent in the period; newest first, max 200.
+--        firstAtUtc, lastAtUtc, lastInboundUtc, lastKind (client|bot|staff), lastText,
+--        lastMessage, lastReply, handedOff, proposed, bookings, staffPausedUntilUtc,
+--        needsReply, source }] }] }
+--   The inbox: every chat with activity in the period (agent turns + chats on the company's
+--   numbers), newest activity first, max 200. needsReply = the customer wrote last, or the
+--   agent handed off / failed and nobody from the team wrote after.
 -- action "thread"  { companyId, phone10, startDate?, endDate? }   (default: last 90 days)
 --   → { result: [{ phone10, customerName, source: "messages"|"agent_log",
 --        lastInboundUtc, staffPausedUntilUtc,
@@ -194,35 +198,108 @@ BEGIN
         WHERE companyId = @companyId AND source = 'whatsapp'
           AND created_At >= @fromUtc AND created_At < @toUtc;
 
-        -- ── list ───────────────────────────────────────────────────────────────
+        -- ── list (the inbox) ───────────────────────────────────────────────────
+        -- Every chat with activity in the period: customers who reached the agent, plus chats
+        -- on the company's numbers (e.g. someone wrote while staff had the chat). The last
+        -- message comes from whatsappMessages when the phone is this company's alone.
         IF @action = 'list'
         BEGIN
+            DECLARE @phones TABLE (phone10 NVARCHAR(10) PRIMARY KEY, exclusive BIT,
+                                   pausedUntil DATETIME2, convUpdated DATETIME2);
+            INSERT INTO @phones (phone10, exclusive)
+            SELECT DISTINCT phone10, 1 FROM @turns;
+            INSERT INTO @phones (phone10, exclusive)
+            SELECT DISTINCT RIGHT(REPLACE(REPLACE(REPLACE(wc.customerPhone, '+', ''), ' ', ''), '-', ''), 10), 1
+            FROM [dbo].[whatsappConversations] wc
+            JOIN [dbo].[whatsappChannels] ch ON ch.channelId = wc.channelId
+            WHERE ch.companyId = @companyId AND wc.updatedAt >= @fromUtc AND wc.updatedAt < @toUtc
+              AND RIGHT(REPLACE(REPLACE(REPLACE(wc.customerPhone, '+', ''), ' ', ''), '-', ''), 10)
+                  NOT IN (SELECT phone10 FROM @phones);
+
+            UPDATE p SET
+                pausedUntil = (SELECT MAX(wc.staffPausedUntil) FROM [dbo].[whatsappConversations] wc
+                               JOIN [dbo].[whatsappChannels] ch ON ch.channelId = wc.channelId
+                               WHERE ch.companyId = @companyId AND wc.staffPausedUntil > SYSUTCDATETIME()
+                                 AND RIGHT(REPLACE(REPLACE(REPLACE(wc.customerPhone, '+', ''), ' ', ''), '-', ''), 10) = p.phone10),
+                exclusive = CASE WHEN EXISTS (
+                        SELECT 1 FROM [dbo].[integrationLogs] l
+                        WHERE l.service = 'loanagents_smartloans' AND l.operation = 'whatsapp_reservations'
+                          AND l.companyId <> @companyId AND l.requestSummary LIKE '%' + p.phone10 + '%')
+                    OR EXISTS (SELECT 1 FROM [dbo].[whatsappConversations] wc
+                               JOIN [dbo].[whatsappChannels] ch ON ch.channelId = wc.channelId
+                               WHERE ch.companyId <> @companyId
+                                 AND RIGHT(REPLACE(REPLACE(REPLACE(wc.customerPhone, '+', ''), ' ', ''), '-', ''), 10) = p.phone10)
+                    THEN 0 ELSE 1 END
+            FROM @phones p;
+
+            -- Every message of the period for the phones that are this company's alone.
+            DECLARE @periodMsgs TABLE (phone10 NVARCHAR(10), atUtc DATETIME2, kind NVARCHAR(10), text NVARCHAR(MAX));
+            INSERT INTO @periodMsgs
+            SELECT x.phone10, m.createdAt,
+                   CASE WHEN m.direction = 'inbound' THEN 'client'
+                        WHEN m.status IN ('staff_sent', 'staff_app') THEN 'staff' ELSE 'bot' END,
+                   m.messageBody
+            FROM [dbo].[whatsappMessages] m
+            CROSS APPLY (SELECT RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(m.phoneNumber, 'whatsapp:', ''), '+', ''), ' ', ''), '-', ''), 10) AS phone10) x
+            JOIN @phones p ON p.phone10 = x.phone10 AND p.exclusive = 1
+            WHERE m.createdAt >= @fromUtc AND m.createdAt < @toUtc;
+            -- Phones shared with another business: only the agent turns.
+            INSERT INTO @periodMsgs
+            SELECT t.phone10, t.atUtc, 'client', t.message FROM @turns t
+            JOIN @phones p ON p.phone10 = t.phone10 AND p.exclusive = 0;
+            INSERT INTO @periodMsgs
+            SELECT t.phone10, DATEADD(SECOND, 1, t.atUtc), 'bot', t.reply FROM @turns t
+            JOIN @phones p ON p.phone10 = t.phone10 AND p.exclusive = 0
+            WHERE t.ok = 1 AND t.reply IS NOT NULL;
+
             DECLARE @list NVARCHAR(MAX) = (
                 SELECT TOP (200)
-                       c.phone10,
+                       p.phone10,
                        (SELECT TOP 1 t.customerName FROM @turns t
-                         WHERE t.phone10 = c.phone10 AND ISNULL(t.customerName, '') <> ''
+                         WHERE t.phone10 = p.phone10 AND ISNULL(t.customerName, '') <> ''
                          ORDER BY t.atUtc DESC)                                            AS customerName,
-                       c.turns, c.failures,
-                       CONVERT(NVARCHAR(19), c.firstAtUtc, 126)                            AS firstAtUtc,
-                       CONVERT(NVARCHAR(19), c.lastAtUtc, 126)                             AS lastAtUtc,
+                       (SELECT COUNT(*) FROM @turns t WHERE t.phone10 = p.phone10)        AS turns,
+                       (SELECT COUNT(*) FROM @turns t WHERE t.phone10 = p.phone10 AND t.ok = 0) AS failures,
+                       CONVERT(NVARCHAR(19), a.firstAtUtc, 126)                            AS firstAtUtc,
+                       CONVERT(NVARCHAR(19), a.lastAtUtc, 126)                             AS lastAtUtc,
+                       CONVERT(NVARCHAR(19), a.lastInUtc, 126)                             AS lastInboundUtc,
+                       lm.kind                                                             AS lastKind,
+                       LEFT(lm.text, 160)                                                  AS lastText,
                        (SELECT TOP 1 LEFT(t.message, 160) FROM @turns t
-                         WHERE t.phone10 = c.phone10 ORDER BY t.atUtc DESC)                AS lastMessage,
+                         WHERE t.phone10 = p.phone10 ORDER BY t.atUtc DESC)                AS lastMessage,
                        (SELECT TOP 1 LEFT(t.reply, 160) FROM @turns t
-                         WHERE t.phone10 = c.phone10 ORDER BY t.atUtc DESC)                AS lastReply,
-                       c.handedOff, c.proposed,
+                         WHERE t.phone10 = p.phone10 ORDER BY t.atUtc DESC)                AS lastReply,
+                       CASE WHEN EXISTS (SELECT 1 FROM @turns t WHERE t.phone10 = p.phone10
+                                           AND t.capability = 'REQUEST_HUMAN') THEN 1 ELSE 0 END AS handedOff,
+                       CASE WHEN EXISTS (SELECT 1 FROM @turns t WHERE t.phone10 = p.phone10
+                                           AND t.capability = 'CREATE_RESERVATION') THEN 1 ELSE 0 END AS proposed,
                        (SELECT COUNT(*) FROM @bookings b
-                         WHERE b.phone10 = c.phone10 AND b.status <> 'cancelled')          AS bookings
-                FROM (SELECT phone10, COUNT(*) AS turns, SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failures,
-                             MIN(atUtc) AS firstAtUtc, MAX(atUtc) AS lastAtUtc,
-                             MAX(CASE WHEN capability = 'REQUEST_HUMAN' THEN 1 ELSE 0 END) AS handedOff,
-                             MAX(CASE WHEN capability = 'CREATE_RESERVATION' THEN 1 ELSE 0 END) AS proposed
-                      FROM @turns GROUP BY phone10) c
-                WHERE @search IS NULL
-                   OR c.phone10 LIKE '%' + @search + '%'
-                   OR EXISTS (SELECT 1 FROM @turns t WHERE t.phone10 = c.phone10
-                                AND (t.customerName LIKE '%' + @search + '%' OR t.message LIKE '%' + @search + '%'))
-                ORDER BY c.lastAtUtc DESC
+                         WHERE b.phone10 = p.phone10 AND b.status <> 'cancelled')          AS bookings,
+                       CONVERT(NVARCHAR(19), p.pausedUntil, 126)                           AS staffPausedUntilUtc,
+                       -- Waiting for a person: the customer wrote last, or the agent handed off / failed
+                       -- and nobody from the team wrote after that.
+                       CASE WHEN a.lastInUtc > ISNULL(a.lastOutUtc, '19000101') THEN 1
+                            WHEN EXISTS (SELECT 1 FROM @turns t WHERE t.phone10 = p.phone10
+                                           AND (t.capability = 'REQUEST_HUMAN' OR t.ok = 0)
+                                           AND t.atUtc > ISNULL(a.lastStaffUtc, '19000101')) THEN 1
+                            ELSE 0 END                                                     AS needsReply,
+                       CASE WHEN p.exclusive = 1 THEN 'messages' ELSE 'agent_log' END      AS source
+                FROM @phones p
+                CROSS APPLY (
+                    SELECT MIN(atUtc) AS firstAtUtc, MAX(atUtc) AS lastAtUtc,
+                           MAX(CASE WHEN kind = 'client' THEN atUtc END) AS lastInUtc,
+                           MAX(CASE WHEN kind <> 'client' THEN atUtc END) AS lastOutUtc,
+                           MAX(CASE WHEN kind = 'staff' THEN atUtc END) AS lastStaffUtc
+                    FROM @periodMsgs m WHERE m.phone10 = p.phone10) a
+                OUTER APPLY (SELECT TOP 1 kind, text FROM @periodMsgs m
+                             WHERE m.phone10 = p.phone10 ORDER BY atUtc DESC) lm
+                WHERE a.lastAtUtc IS NOT NULL
+                  AND (@search IS NULL
+                       OR p.phone10 LIKE '%' + @search + '%'
+                       OR EXISTS (SELECT 1 FROM @turns t WHERE t.phone10 = p.phone10
+                                    AND (t.customerName LIKE '%' + @search + '%' OR t.message LIKE '%' + @search + '%'))
+                       OR EXISTS (SELECT 1 FROM @periodMsgs m WHERE m.phone10 = p.phone10 AND m.text LIKE '%' + @search + '%'))
+                ORDER BY a.lastAtUtc DESC
                 FOR JSON PATH, INCLUDE_NULL_VALUES
             );
             SELECT ('{"result":[{'
