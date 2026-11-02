@@ -40,7 +40,7 @@ action 0 (or omit) — get: { "businessInfo": [{ "companyId": int, "branchId"?: 
 action 1 — upsert (only keys sent change): { "businessInfo": [{ "action": 1, "companyId": int,
   "branchId"?: int (null = company-wide), "address"?, "mapsUrl"?, "phone"?, "email"?,
   "paymentMethods"?, "servicesInfo"?, "extraInfo"?, "pickupPolicy"?, "deliveryPolicy"?,
-  "whatsappNumber"?, "street"?, "city"?, "postalCode"? }] }
+  "whatsappNumber"?, "websiteUrl"?, "street"?, "city"?, "postalCode"? }] }
   (send a key as null to clear it; street/city/postalCode fall back to the
   company-wide row together, never one by one)
 → { "result": [{ "businessInfo": [{ companyName, branchName, address, ... }] }] }
