@@ -73,3 +73,16 @@ def whatsapp_agent_dashboard(json_file: dict) -> JSONResponse:
     except Exception as e:
         logger.exception("[whatsappAssistant] agent dashboard failed")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def whatsapp_agent_conversations(json_file: dict) -> JSONResponse:
+    """POST /whatsapp/agentConversations — what each customer wrote to the
+    WhatsApp agent and its replies, for a company, read-only
+    (sql/sp_whatsappAgentConversations.sql)."""
+    try:
+        result = _sp("sp_whatsappAgentConversations", json_file)
+        status = 400 if isinstance(result, dict) and result.get("error") else 200
+        return JSONResponse(result, status_code=status)
+    except Exception as e:
+        logger.exception("[whatsappAssistant] agent conversations failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
