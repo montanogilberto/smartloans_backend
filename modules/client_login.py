@@ -60,7 +60,10 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
         # no SMS this time. Frontend shows the password field directly
         # instead of an OTP screen. See dbo.users.firstLoginCompleted,
         # set by set_client_password below.
-        if status_client.get("firstLoginCompleted"):
+        # resetPin ("Olvidé mi PIN") sends the SMS anyway: the verified code
+        # leads to set_client_password, which overwrites the old PIN.
+        reset_pin = bool(payload.get("resetPin"))
+        if status_client.get("firstLoginCompleted") and not reset_pin:
             return JSONResponse(content={"found": True, "firstLoginCompleted": True}, status_code=200)
 
         code = "".join(random.choices(string.digits, k=6))
@@ -79,13 +82,20 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
         # ClientLogin.tsx) is the fallback if companies.name is ever missing,
         # not "SmartLoans" -- equally wrong for this audience.
         brand = status_client.get("companyName") or "GMO"
-        _send_sms_otp(phone, code, brand=brand)
+        # channel "whatsapp" is the client's choice; _send_sms_otp falls back to
+        # SMS on its own when Meta isn't set up, and says which one went out.
+        via_whatsapp = str(payload.get("channel") or "").lower() == "whatsapp"
+        sent_by = _send_sms_otp(phone, code, via_whatsapp=via_whatsapp, brand=brand)
 
         log_workflow_step(
             "Client Login Code Sent", workflow_name="client_login",
-            action="SEND", status="SUCCESS", entity="clientLoginCodes",
+            action="RESET_PIN" if reset_pin else "SEND", status="SUCCESS", entity="clientLoginCodes",
+            message=f"channel={sent_by}",
         )
-        return JSONResponse(content={"found": True, "firstLoginCompleted": False, "message": "Código enviado"}, status_code=200)
+        return JSONResponse(
+            content={"found": True, "firstLoginCompleted": False, "message": "Código enviado", "channel": sent_by},
+            status_code=200,
+        )
     except Exception as e:
         log_workflow_step(
             "Client Login Code Send Error", workflow_name="client_login",
@@ -213,9 +223,11 @@ def set_client_password(json_file: dict) -> JSONResponse:
         password = str(payload.get("password") or "").strip()
         if not user_id:
             return JSONResponse(content={"success": False, "error": "userId es requerido"}, status_code=400)
-        if len(password) < 6 or len(password) > 50:
+        # 4 = the client app's PIN length (POSVending src/utils/pin.ts); PINs made before
+        # the switch are 6 long and keep working since login compares the stored value.
+        if len(password) < 4 or len(password) > 50:
             return JSONResponse(
-                content={"success": False, "error": "La contraseña debe tener entre 6 y 50 caracteres"},
+                content={"success": False, "error": "El PIN debe tener al menos 4 dígitos"},
                 status_code=400,
             )
 

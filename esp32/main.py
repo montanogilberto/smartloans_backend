@@ -1,4 +1,4 @@
-# Controlador de lavadora/secadora: ESP32 + MicroPython 1.29 + Nextion (diseño v2).
+# Controlador de lavadora/secadora: ESP32 + MicroPython 1.29 + Nextion (main v3, resto v2).
 #
 # Flujo:
 #   main     el cliente elige ciclo y escanea su QR  -> POST /laundryDevices/quote
@@ -26,6 +26,7 @@ from nextion import money, RED_D, NAVY
 lcd = screen.lcd
 CONFIRM_SECONDS = 30
 NOFUNDS_SECONDS = 20
+BALANCE_SECONDS = 8      # pantalla de saldo (escaneo sin ciclo)
 DONE_SECONDS = 15
 START_WARNING_SECONDS = 5 * 60
 OFFLINE_SETUP_SECONDS = 120     # sin internet tanto tiempo en main -> pantalla de Wi-Fi
@@ -96,15 +97,37 @@ def describe_qr(text):
     return "formato desconocido: %d partes, largo %d, empieza con %r" % (len(parts), len(text), text[:4])
 
 
+def show_balance(client_qr):
+    """El cliente escaneó sin tocar un ciclo: se le muestra su saldo unos
+    segundos y la pantalla vuelve sola a main. Nunca cobra."""
+    global state, deadline
+    screen.busy("Consultando tu saldo...")
+    hw.led.on()
+    status, data = api.balance(client_qr)
+    hw.led.off()
+    lcd.flush_touches()
+    if status != 200:
+        reason = data.get("reason") or data.get("error") or ""
+        text = QR_ERRORS.get(reason) or ("Sin conexión.\nIntenta de nuevo" if status is None else "Error: %s" % reason)
+        screen.error(2, text)
+        hw.blink(3, 200)
+        return
+    name = data.get("firstName")
+    state = "done"
+    deadline = time.ticks_add(time.ticks_ms(), BALANCE_SECONDS * 1000)
+    lcd.show_msg(screen.title, ("Hola, %s" % name) if name else "Tu saldo",
+                 "Saldo disponible: %s" % money(data.get("availableBalance") or 0),
+                 "Elige tu ciclo y escanea tu QR para usarlo")
+
+
 def on_qr(client_qr):
     global state, deadline, pending
     print("[qr]", describe_qr(client_qr))
     cycle = screen.selected()
     if not cycle:
-        screen.message("Primero toca tu ciclo" if screen.has_cycles() else "Sin ciclos disponibles", RED_D)
-        hw.blink(2)
+        show_balance(client_qr)   # escanear sin ciclo = consultar el saldo
         return
-    screen.message("Consultando tu saldo...")
+    screen.busy("Consultando tu saldo...")
     hw.led.on()
     status, data = api.quote(client_qr, cycle["productOptionChoiceId"])
     hw.led.off()
@@ -114,7 +137,7 @@ def on_qr(client_qr):
         reason = data.get("reason") or data.get("error") or ""
         print("[qr] rechazado:", status, reason)
         text = QR_ERRORS.get(reason) or ("Sin conexión.\nIntenta de nuevo" if status is None else "Error: %s" % reason)
-        screen.message(text, RED_D)
+        screen.error(2, text)
         hw.blink(3, 200)
         return
 

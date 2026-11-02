@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Header, Request
 
 from modules.laundryDevices import (
-    heartbeat, authorize, quote, client_qr, laundry_devices_sp,
+    heartbeat, authorize, quote, balance, client_qr, laundry_devices_sp,
     all_laundry_devices_sp, all_laundry_device_uses_sp, regenerate_client_qrs,
 )
 from security.worker_key import require_worker_key
@@ -100,6 +100,30 @@ def laundry_device_quote(
     x_device_key: str | None = Header(default=None),
 ):
     return quote(x_device_id, x_device_key, json)
+
+
+@router.post(
+    "/laundryDevices/balance",
+    summary="ESP32: consultar el saldo del cliente (escanea sin elegir ciclo)",
+    description="""
+El cliente escanea su QR en la máquina sin tocar un ciclo y la pantalla le
+muestra su saldo. Mismas validaciones de llave y QR que quote; NO cobra.
+Sólo devuelve el nombre de pila: la pantalla está en un lugar público.
+
+Headers: X-Device-Id: int, X-Device-Key: str
+Body: { "clientQr": str }
+Returns: { firstName, availableBalance }
+
+401 device_unauthorized / qr_*   403 device_inactive
+404 client_not_found (cliente inactivo o de otra compañía)
+""",
+)
+def laundry_device_balance(
+    json: dict,
+    x_device_id: str | None = Header(default=None),
+    x_device_key: str | None = Header(default=None),
+):
+    return balance(x_device_id, x_device_key, json)
 
 
 @router.post(

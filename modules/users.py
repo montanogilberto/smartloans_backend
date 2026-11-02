@@ -201,7 +201,8 @@ def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str 
     """Send OTP via Twilio SMS or WhatsApp, reusing the same Twilio module
     that sends ticket/income receipts (modules/ticket_notifications.py).
     `brand` lets callers with a known companyId (e.g. client_login.py) show
-    that company's name instead of always saying SmartLoans."""
+    that company's name instead of always saying SmartLoans.
+    Returns the channel that actually carried the code: "whatsapp" or "sms"."""
     from modules.ticket_notifications import send_sms, send_whatsapp
     normalized = _normalize_phone(phone)
     message = f"Tu código {brand} es: {code}. Expira en 10 min."
@@ -212,10 +213,11 @@ def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str 
         # verified business — a code must still arrive, so fall back to SMS.
         try:
             send_whatsapp(normalized, message, "codigo_verificacion", [code], button_param=code)
-            return
+            return "whatsapp"
         except Exception as e:
             logger.warning("[_send_sms_otp] WhatsApp code failed, sending by SMS: %s", e)
     send_sms(normalized, message)
+    return "sms"
 
 
 def send_verification_code(json_file: dict):

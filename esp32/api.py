@@ -36,6 +36,15 @@ def quote(client_qr, choice_id):
     return None, {}
 
 
+def balance(client_qr):
+    """Nombre y saldo del cliente que escaneó SIN elegir ciclo. No cobra.
+    Devuelve (status, data); status None = sin conexión."""
+    net.ensure_wifi()
+    status, data = net.post("/laundryDevices/balance", {"clientQr": client_qr})
+    print("balance ->", status)
+    return status, data
+
+
 def _new_request_id():
     return binascii.hexlify(os.urandom(16)).decode()
 
