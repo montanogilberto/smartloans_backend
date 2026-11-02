@@ -32,13 +32,18 @@ import hmac
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 import httpx
 
+from fastapi.responses import JSONResponse
+
 from modules import clientContactPreferences, whatsappChannels, whatsappReservations
 from modules.whatsapp import log_message_to_database
+from modules.whatsappAssistant import _sp as assistant_sp
 from observability.integrations import timed_integration
+from observability.logger import log_workflow_step
 
 logger = logging.getLogger(__name__)
 
@@ -323,6 +328,14 @@ def _pause_bot_on_staff_replies(payload: dict) -> None:
                 logger.info("[whatsappCloud] staff replied from app | channel=%s to=%s",
                             channel["channelId"], customer)
                 whatsappReservations.pause_for_staff(channel, customer)
+                text = (echo.get("text") or {}).get("body")
+                if text:
+                    # So POS › Conversaciones shows what staff answered from the app too.
+                    try:
+                        log_message_to_database(phone_number=customer, message_body=text, response_body="",
+                                                direction="outbound", status="staff_app", action=1)
+                    except Exception:
+                        logger.exception("[whatsappCloud] failed to log staff echo")
 
 
 def _handle_message(msg: dict) -> None:
@@ -373,3 +386,73 @@ def handle_webhook(payload: dict) -> None:
             _handle_message(msg)
         except Exception:
             logger.exception("[whatsappCloud] failed to handle message | id=%s", msg.get("messageId"))
+
+
+# ── Staff replies from the POS (Agente WhatsApp › Conversaciones) ───────────
+STAFF_REPLY_MAX_CHARS = 4096  # Meta's text body limit
+# Meta's customer-service window. Free-form text outside it is ACCEPTED by the
+# API and only fails later (status 131047), so it is checked here, before sending.
+_SERVICE_WINDOW = timedelta(hours=24)
+
+
+def staff_reply(json_file: dict) -> JSONResponse:
+    """POST /whatsapp/staffReply — a POS user answers a WhatsApp customer from the
+    business number the customer wrote to. Logged to whatsappMessages as
+    'staff_sent' (responseBody = "userId=<id>") and the bot steps aside in that
+    chat (same pause as a reply from the WhatsApp Business app).
+
+    Body: { "whatsappStaffReply": [{ "companyId": int, "userId": int, "phone10": str, "body": str }] }
+    200 { sent: true, messageId, atUtc }
+    400 bad input   404 no_channel (no number of this company has talked to the phone)
+    409 outside_24h (the customer hasn't written in 24 h: Meta only allows templates)
+    502 the send to Meta failed"""
+    row = (json_file.get("whatsappStaffReply") or [{}])[0]
+    try:
+        company_id = int(row.get("companyId"))
+        user_id = int(row.get("userId"))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "companyId and userId are required"}, status_code=400)
+    phone10 = re.sub(r"\D", "", str(row.get("phone10") or ""))[-10:]
+    body = (row.get("body") or "").strip()
+    if len(phone10) != 10 or not body:
+        return JSONResponse({"error": "phone10 (10 digits) and body are required"}, status_code=400)
+    if len(body) > STAFF_REPLY_MAX_CHARS:
+        return JSONResponse({"error": f"body is longer than {STAFF_REPLY_MAX_CHARS} characters"}, status_code=400)
+
+    try:
+        found = assistant_sp("sp_whatsappAgentConversations", {"whatsappAgentConversations": [
+            {"action": "channel", "companyId": company_id, "phone10": phone10}]})
+    except Exception as e:
+        logger.exception("[whatsappCloud] staff reply: channel lookup failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    if found.get("error"):
+        return JSONResponse({"error": found["error"]}, status_code=500)
+    target = (found.get("result") or [None])[0]
+    channel = whatsappChannels.get_channel(target["phoneNumberId"]) if target else None
+    if not channel or channel.get("companyId") != company_id:
+        return JSONResponse({"error": "no_channel"}, status_code=404)
+
+    last_in = target.get("lastInboundUtc")
+    if not last_in or datetime.now(timezone.utc) - datetime.fromisoformat(last_in).replace(tzinfo=timezone.utc) > _SERVICE_WINDOW:
+        return JSONResponse({"error": "outside_24h", "lastInboundUtc": last_in}, status_code=409)
+
+    customer = target["customerPhone"]
+    try:
+        sent = send_text(channel, customer, body)
+    except Exception as e:
+        logger.exception("[whatsappCloud] staff reply send failed | channel=%s", channel["channelId"])
+        log_workflow_step("staff_reply", workflow_name="whatsapp_chat", status="FAILED",
+                          entity="whatsappChannel", entity_id=channel["channelId"], message=str(e)[:300])
+        return JSONResponse({"error": "send_failed"}, status_code=502)
+
+    whatsappReservations.pause_for_staff(channel, customer)
+    try:
+        log_message_to_database(phone_number=customer, message_body=body, response_body=f"userId={user_id}",
+                                direction="outbound", status="staff_sent", action=1)
+    except Exception:
+        logger.exception("[whatsappCloud] failed to log staff reply")
+    # No message text or phone here: the logs stay free of PII.
+    log_workflow_step("staff_reply", workflow_name="whatsapp_chat", entity="whatsappChannel",
+                      entity_id=channel["channelId"], message=f"userId={user_id} company={company_id}")
+    return JSONResponse({"sent": True, "messageId": sent.get("messageId"),
+                         "atUtc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}, status_code=200)

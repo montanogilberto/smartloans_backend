@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from modules.whatsappAssistant import (
     assistant_catalog_sp, customer_rewards, whatsapp_agent_conversations, whatsapp_agent_dashboard,
 )
+from modules.whatsappCloud import staff_reply
 from security.worker_key import require_worker_key
 
 router = APIRouter()
@@ -114,3 +115,18 @@ Source: the agent calls in integrationLogs + WhatsApp reservations. The customer
 )
 def whatsapp_agent_conversations_route(json: dict):
     return whatsapp_agent_conversations(json)
+
+
+@router.post(
+    "/whatsapp/staffReply",
+    summary="A POS user replies to a WhatsApp customer from the business number (bot pauses in that chat)",
+    description="""
+{ "whatsappStaffReply": [{ "companyId": int, "userId": int, "phone10": str, "body": str (≤ 4096) }] }
+→ 200 { sent: true, messageId, atUtc }
+400 bad input · 404 no_channel · 409 outside_24h (no customer message in the last 24 h:
+Meta only delivers templates) · 502 send_failed
+Sent from the number the customer wrote to; logged in whatsappMessages (status 'staff_sent');
+the bot stays silent in that chat for 2 h, same as a reply from the WhatsApp Business app.""",
+)
+def whatsapp_staff_reply_route(json: dict):
+    return staff_reply(json)
