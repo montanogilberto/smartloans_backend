@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 
 from modules.whatsappAssistant import (
     assistant_catalog_sp, customer_rewards, whatsapp_agent_conversations, whatsapp_agent_dashboard,
+    whatsapp_agent_insights,
 )
 from modules.whatsappCloud import staff_reply
 from security.worker_key import require_worker_key
@@ -130,3 +131,17 @@ the bot stays silent in that chat for 2 h, same as a reply from the WhatsApp Bus
 )
 def whatsapp_staff_reply_route(json: dict):
     return staff_reply(json)
+
+
+@router.post(
+    "/whatsapp/agentInsights",
+    summary="¿Qué quieren mis clientes? — AI summary of a period's WhatsApp customer messages (read-only)",
+    description="""
+{ "whatsappAgentInsights": [{ "companyId": int, "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD" }] }
+→ { "result": [{ summary, commonDoubts: [{question, count, suggestion}], unmetNeeds: [str],
+  messagesAnalyzed }] }
+Newest 500 customer messages of the period (no greetings/confirmations), phones and emails
+removed, summarized by LoanAgents /support/whatsapp-insights. One LLM call; nothing stored.""",
+)
+def whatsapp_agent_insights_route(json: dict):
+    return whatsapp_agent_insights(json)

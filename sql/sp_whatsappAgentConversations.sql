@@ -40,6 +40,10 @@
 --   → { result: [{ channelId, phoneNumberId, customerPhone, lastInboundUtc }] } — the number to reply
 --   from: the latest chat on one of the company's numbers, else the branch of the last
 --   agent turn, else the company's only active number. Empty result = none.
+-- action "messages" { companyId, startDate?, endDate? }   (default: last 90 days)
+--   → { result: [{ messages: [{ message, topic }] }] } — newest 500 customer texts (≤ 300 chars),
+--   without greetings/confirmations, for the insights summary. Contains PII: the backend
+--   strips phones/emails before sending them anywhere.
 -- Input envelope: { "whatsappAgentConversations": [{ "action": ..., ... }] }
 -- ─────────────────────────────────────────────────────────────────────────────
 IF OBJECT_ID('dbo.sp_whatsappAgentConversations', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_whatsappAgentConversations;
@@ -59,10 +63,10 @@ BEGIN
         DECLARE @startDate DATE = ISNULL(TRY_CONVERT(DATE, JSON_VALUE(@pjsonfile, '$.whatsappAgentConversations[0].startDate')),
                                          DATEADD(DAY, CASE WHEN @action = 'list' THEN -29 ELSE -89 END, @endDate));
 
-        IF @companyId IS NULL OR @action NOT IN ('list', 'thread', 'channel')
+        IF @companyId IS NULL OR @action NOT IN ('list', 'thread', 'channel', 'messages')
            OR (@action IN ('thread', 'channel') AND (ISNULL(@phone10, '') = '' OR @phone10 LIKE '%[^0-9]%'))
         BEGIN
-            SELECT '{"error":"companyId and action (list|thread|channel) are required; thread/channel need phone10 (digits)"}' AS jsonResult;
+            SELECT '{"error":"companyId and action (list|thread|channel|messages) are required; thread/channel need phone10 (digits)"}' AS jsonResult;
             RETURN;
         END
 
@@ -130,6 +134,26 @@ BEGIN
             SELECT ('{"result":' + ISNULL((SELECT channelId, phoneNumberId, customerPhone,
                                                   CONVERT(NVARCHAR(19), @lastInboundCh, 126) AS lastInboundUtc
                                            FROM @ch FOR JSON PATH, INCLUDE_NULL_VALUES), '[]') + '}') AS jsonResult;
+            RETURN;
+        END
+
+        -- ── messages: the period's customer texts for the insights summary ──────
+        IF @action = 'messages'
+        BEGIN
+            DECLARE @msgs NVARCHAR(MAX) = (
+                SELECT TOP (500) LEFT(JSON_VALUE(requestSummary, '$.message'), 300) AS message,
+                       JSON_VALUE(responseSummary, '$.topic') AS topic
+                FROM [dbo].[integrationLogs]
+                WHERE service = 'loanagents_smartloans' AND operation = 'whatsapp_reservations'
+                  AND companyId = @companyId AND ISJSON(requestSummary) = 1
+                  AND created_At >= @fromUtc AND created_At < @toUtc
+                  AND ISNULL(JSON_VALUE(requestSummary, '$.message'), '') <> ''
+                  AND (ISJSON(responseSummary) = 0
+                       OR ISNULL(JSON_VALUE(responseSummary, '$.topic'), '') NOT IN ('confirmacion', 'saludo'))
+                ORDER BY created_At DESC
+                FOR JSON PATH, INCLUDE_NULL_VALUES
+            );
+            SELECT ('{"result":[{"messages":' + ISNULL(@msgs, '[]') + '}]}') AS jsonResult;
             RETURN;
         END
 

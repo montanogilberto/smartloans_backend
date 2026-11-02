@@ -14,10 +14,15 @@ database: run order in sql/migrations/README_whatsapp_assistant.md.
 
 import json
 import logging
+import os
+import re
+
+import httpx
 
 from fastapi.responses import JSONResponse
 
 from databases import connection
+from observability.integrations import timed_integration
 
 logger = logging.getLogger(__name__)
 
@@ -86,3 +91,56 @@ def whatsapp_agent_conversations(json_file: dict) -> JSONResponse:
     except Exception as e:
         logger.exception("[whatsappAssistant] agent conversations failed")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# LoanAgents_SmartLoans — the same service the WhatsApp agent runs on.
+_AGENT_URL = os.environ.get("NEGOTIATION_AGENT_URL", "").rstrip("/")
+_PHONE_RE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+def _strip_contact(text: str) -> str:
+    return _EMAIL_RE.sub("[correo]", _PHONE_RE.sub("[teléfono]", text))
+
+
+def whatsapp_agent_insights(json_file: dict) -> JSONResponse:
+    """POST /whatsapp/agentInsights — "¿Qué quieren mis clientes?": the period's
+    customer messages (sp_whatsappAgentConversations "messages", phones/emails
+    stripped here) + topic counts go to LoanAgents /support/whatsapp-insights,
+    which returns a summary, the common doubts with a suggestion, and unmet needs.
+    Advisory and read-only: nothing is stored. Costs one LLM call per request."""
+    row = (json_file.get("whatsappAgentInsights") or [{}])[0]
+    company_id = row.get("companyId")
+    start, end = row.get("startDate"), row.get("endDate")
+    if not company_id or not start or not end:
+        return JSONResponse({"error": "companyId, startDate and endDate are required"}, status_code=400)
+    if not _AGENT_URL:
+        return JSONResponse({"error": "NEGOTIATION_AGENT_URL is not set"}, status_code=503)
+    try:
+        found = _sp("sp_whatsappAgentConversations", {"whatsappAgentConversations": [
+            {"action": "messages", "companyId": company_id, "startDate": start, "endDate": end}]})
+        if found.get("error"):
+            return JSONResponse({"error": found["error"]}, status_code=400)
+        rows = (found.get("result") or [{}])[0].get("messages") or []
+        counts: dict[str, int] = {}
+        for r in rows:
+            if r.get("topic"):
+                counts[r["topic"]] = counts.get(r["topic"], 0) + 1
+        body = {
+            "companyId": company_id, "startDate": start, "endDate": end,
+            "topicCounts": [{"topic": t, "count": n} for t, n in sorted(counts.items(), key=lambda x: -x[1])],
+            "messages": [_strip_contact(r["message"]) for r in rows if r.get("message")],
+        }
+        # Request summary without the messages: the logs stay free of customer text.
+        with timed_integration("loanagents_smartloans", "whatsapp_insights",
+                               request={"companyId": company_id, "startDate": start, "endDate": end,
+                                        "messages": len(body["messages"])},
+                               company_id=company_id) as span:
+            resp = httpx.post(f"{_AGENT_URL}/support/whatsapp-insights", json=body, timeout=60.0)
+            span.http_status = resp.status_code
+            resp.raise_for_status()
+            data = resp.json()
+        return JSONResponse({"result": [data]}, status_code=200)
+    except Exception as e:
+        logger.exception("[whatsappAssistant] agent insights failed")
+        return JSONResponse({"error": str(e)}, status_code=502)
