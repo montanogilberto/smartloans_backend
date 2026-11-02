@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends
 
-from modules.whatsappAssistant import assistant_catalog_sp, customer_rewards, whatsapp_agent_dashboard
+from modules.whatsappAssistant import (
+    assistant_catalog_sp, customer_rewards, whatsapp_agent_conversations, whatsapp_agent_dashboard,
+)
 from security.worker_key import require_worker_key
 
 router = APIRouter()
@@ -91,3 +93,24 @@ first message — they happened after the chat, the agent didn't necessarily cau
 )
 def whatsapp_agent_dashboard_route(json: dict):
     return whatsapp_agent_dashboard(json)
+
+
+@router.post(
+    "/whatsapp/agentConversations",
+    summary="WhatsApp agent conversations: what each customer wrote and what the agent answered (read-only)",
+    description="""
+action "list": { "whatsappAgentConversations": [{ "action": "list", "companyId": int,
+  "startDate"?: "YYYY-MM-DD", "endDate"?: "YYYY-MM-DD", "search"?: str }] }   (default the last 30 days)
+→ { "result": [{ "period": {startDate, endDate},
+  "conversations": [{ phone10, customerName, turns, failures, firstAtUtc, lastAtUtc,
+                      lastMessage, lastReply, handedOff, proposed, bookings }] }] }
+action "thread": { "whatsappAgentConversations": [{ "action": "thread", "companyId": int,
+  "phone10": str, "startDate"?, "endDate"? }]   (default the last 90 days)
+→ { "result": [{ phone10, customerName,
+  "turns": [{ atUtc, message, reply, ok, latencyMs, capability, actionNote }],
+  "bookings": [{ reservationId, atUtc, status, reservationDate, timeSlot, serviceType }] }] }
+Source: the agent calls in integrationLogs + WhatsApp reservations. The customer's plain
+"sí"/"no" to a proposal and messages while a person has the chat are not included.""",
+)
+def whatsapp_agent_conversations_route(json: dict):
+    return whatsapp_agent_conversations(json)
