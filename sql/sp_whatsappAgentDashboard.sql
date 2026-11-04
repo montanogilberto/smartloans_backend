@@ -62,7 +62,8 @@ BEGIN
                               localAt DATETIME2, day DATE, topic NVARCHAR(30),
                               branchId INT, branchName NVARCHAR(100), logId BIGINT,
                               customerName NVARCHAR(120), message NVARCHAR(300),
-                              askedHelpful BIT, askedMore BIT, answer NVARCHAR(3));
+                              askedHelpful BIT, askedMore BIT, answer NVARCHAR(3),
+                              stage NVARCHAR(30), feedback NVARCHAR(3));
         INSERT INTO @calls
         SELECT RIGHT(REPLACE(REPLACE(REPLACE(JSON_VALUE(q.j, '$.phone'), '+', ''), ' ', ''), '-', ''), 10),
                CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END,
@@ -76,17 +77,22 @@ BEGIN
                integrationLogId,
                LEFT(JSON_VALUE(q.j, '$.customerName'), 120),
                LEFT(JSON_VALUE(q.j, '$.message'), 300),
-               -- The agent's closing flow (LoanAgents whatsapp_reservations prompt, "Closing"):
-               -- fixed questions answered with "1. Sí" / "2. No".
-               CASE WHEN JSON_VALUE(r.j, '$.reply') LIKE N'%¿Te funcionó la respuesta?%' THEN 1 ELSE 0 END,
-               CASE WHEN JSON_VALUE(r.j, '$.reply') LIKE N'%¿Hay algo más en lo que te pueda ayudar?%' THEN 1 ELSE 0 END,
+               -- The agent's closing flow. Since LoanAgents#14 the route returns conversationStage
+               -- (computed by code, not the model); older rows fall back to its fixed questions.
+               CASE WHEN JSON_VALUE(r.j, '$.conversationStage') = 'feedback_asked'
+                      OR JSON_VALUE(r.j, '$.reply') LIKE N'%¿Te funcionó la respuesta?%' THEN 1 ELSE 0 END,
+               CASE WHEN JSON_VALUE(r.j, '$.conversationStage') = 'more_asked'
+                      OR JSON_VALUE(r.j, '$.reply') LIKE N'%¿Hay algo más en lo que te pueda ayudar?%' THEN 1 ELSE 0 END,
                -- The customer's short yes / no (or the menu number).
                CASE WHEN n.t IN (N'1', N'si', N'sí', N'sii', N'sip', N'claro', N'ok', N'okay', N'va', N'gracias',
                                  N'si gracias', N'sí gracias', N'muchas gracias', N'perfecto', N'listo', N'excelente')
                          OR n.t LIKE N'si %' OR n.t LIKE N'sí %' OR n.t LIKE N'1 %' THEN 'yes'
                     WHEN n.t IN (N'2', N'no', N'nop', N'nel', N'no gracias', N'ninguna', N'nada', N'es todo',
                                  N'eso es todo', N'nada mas', N'nada más')
-                         OR n.t LIKE N'no %' OR n.t LIKE N'2 %' THEN 'no' END
+                         OR n.t LIKE N'no %' OR n.t LIKE N'2 %' THEN 'no' END,
+               JSON_VALUE(r.j, '$.conversationStage'),
+               -- The customer's answer to "¿Te funcionó?", set by the route on the answering turn.
+               JSON_VALUE(r.j, '$.feedback')
         FROM [dbo].[integrationLogs]
         CROSS APPLY (SELECT CASE WHEN ISJSON(requestSummary) = 1 THEN requestSummary END AS j) q
         CROSS APPLY (SELECT CASE WHEN ISJSON(responseSummary) = 1 THEN responseSummary END AS j) r
@@ -214,9 +220,10 @@ BEGIN
 
         -- ── Did each chat end correctly? ──
         --   conversation = one customer on one Hermosillo day. outcome, first match wins:
-        --     cerrada       the customer said "no" to "¿Hay algo más…?" (the agent says goodbye) or booked
+        --     cerrada       conversationStage 'closed' (goodbye after "no" to "¿Hay algo más…?") or booked;
+        --                   rows before LoanAgents#14: "no" answered to that question
         --     no_le_sirvio  their last answer to "¿Te funcionó la respuesta?" was no
-        --     falla_agente  an agent call failed (they got the generic fallback text)
+        --     falla_agente  an agent call failed, or conversationStage 'error' (the agent's own fallback)
         --     pidio_persona handed off and nobody from the team wrote after (whatsappMessages staff rows)
         --     le_sirvio     their last answer to "¿Te funcionó?" was yes (no formal goodbye)
         --     sin_cierre    they left mid-conversation
@@ -224,14 +231,18 @@ BEGIN
         --   reasked = the same topic asked again within 15 min of the agent's answer.
         DECLARE @ordered TABLE (phone10 NVARCHAR(10), day DATE, localAt DATETIME2, logId BIGINT, topic NVARCHAR(30),
                                 prevTopic NVARCHAR(30), prevAt DATETIME2,
-                                prevAskedHelpful BIT, prevAskedMore BIT, answer NVARCHAR(3));
+                                prevAskedHelpful BIT, prevAskedMore BIT, answer NVARCHAR(3),
+                                stage NVARCHAR(30), helpfulAnswer NVARCHAR(3));
         INSERT INTO @ordered
         SELECT phone10, day, localAt, logId, topic,
                LAG(topic)        OVER (PARTITION BY phone10 ORDER BY localAt, logId),
                LAG(localAt)      OVER (PARTITION BY phone10 ORDER BY localAt, logId),
                LAG(askedHelpful) OVER (PARTITION BY phone10, day ORDER BY localAt, logId),
                LAG(askedMore)    OVER (PARTITION BY phone10, day ORDER BY localAt, logId),
-               answer
+               answer, stage,
+               -- yes/no to "¿Te funcionó?": the route's feedback field, else our own classification.
+               COALESCE(feedback, CASE WHEN LAG(askedHelpful) OVER (PARTITION BY phone10, day
+                                                                    ORDER BY localAt, logId) = 1 THEN answer END)
         FROM @calls WHERE ISNULL(phone10, '') <> '';
 
         DECLARE @convs TABLE (phone10 NVARCHAR(10), day DATE, failed BIT, handedOff BIT, firstHandoffAt DATETIME2,
@@ -239,15 +250,17 @@ BEGIN
                               lastAt DATETIME2, outcome NVARCHAR(20));
         INSERT INTO @convs (phone10, day, failed, handedOff, firstHandoffAt, booked, goodbye, lastHelpful, lastAt)
         SELECT c.phone10, c.day,
-               MAX(CASE WHEN c.ok = 0 THEN 1 ELSE 0 END),
+               -- A failed call, or the agent's own "se me complicó responderte" fallback (stage error).
+               MAX(CASE WHEN c.ok = 0 OR c.stage = 'error' THEN 1 ELSE 0 END),
                MAX(CASE WHEN c.capability = 'REQUEST_HUMAN' THEN 1 ELSE 0 END),
                MIN(CASE WHEN c.capability = 'REQUEST_HUMAN' THEN c.localAt END),
                CASE WHEN EXISTS (SELECT 1 FROM @bookings b WHERE b.phone10 = c.phone10 AND b.day = c.day
                                    AND b.status <> 'cancelled') THEN 1 ELSE 0 END,
+               -- Goodbye: the route says closed, or (older rows) "no" to "¿Hay algo más…?".
                CASE WHEN EXISTS (SELECT 1 FROM @ordered o WHERE o.phone10 = c.phone10 AND o.day = c.day
-                                   AND o.prevAskedMore = 1 AND o.answer = 'no') THEN 1 ELSE 0 END,
-               (SELECT TOP 1 o.answer FROM @ordered o
-                 WHERE o.phone10 = c.phone10 AND o.day = c.day AND o.prevAskedHelpful = 1 AND o.answer IS NOT NULL
+                                   AND (o.stage = 'closed' OR (o.prevAskedMore = 1 AND o.answer = 'no'))) THEN 1 ELSE 0 END,
+               (SELECT TOP 1 o.helpfulAnswer FROM @ordered o
+                 WHERE o.phone10 = c.phone10 AND o.day = c.day AND o.helpfulAnswer IS NOT NULL
                  ORDER BY o.localAt DESC, o.logId DESC),
                MAX(c.localAt)
         FROM @calls c
@@ -309,8 +322,8 @@ BEGIN
                 (SELECT COUNT(*) FROM @convs WHERE outcome = 'falla_agente')                         AS withFailure,
                 (SELECT COUNT(*) FROM @convs WHERE outcome = 'pidio_persona')                        AS handedOff,
                 (SELECT COUNT(*) FROM @convs WHERE outcome = 'sin_cierre')                           AS noClosure,
-                (SELECT COUNT(*) FROM @ordered WHERE prevAskedHelpful = 1 AND answer = 'yes')        AS helpfulYes,
-                (SELECT COUNT(*) FROM @ordered WHERE prevAskedHelpful = 1 AND answer = 'no')         AS helpfulNo,
+                (SELECT COUNT(*) FROM @ordered WHERE helpfulAnswer = 'yes')                          AS helpfulYes,
+                (SELECT COUNT(*) FROM @ordered WHERE helpfulAnswer = 'no')                           AS helpfulNo,
                 @nFinal                                                                              AS resolved,
                 @nReasked                                                                            AS reasked,
                 CASE WHEN @nTagged > 0 THEN CAST(100.0 * @nReasked / @nTagged AS DECIMAL(5,1)) END   AS reaskedRatePct,

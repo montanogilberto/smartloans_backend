@@ -392,13 +392,16 @@ async def stop_observability_writer():
 
 # --------------------------------------------------
 # Local development only
-# (Azure ignores this block)
+# Entry point — local dev AND Azure (startup command "python main.py")
 # --------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
+    # Azure DOES run this block (startup command "python main.py"). reload=True there means a
+    # file-watcher supervisor in production; keep it for local dev only. WEBSITE_SITE_NAME is
+    # set by App Service on every instance.
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True
+        reload=not os.getenv("WEBSITE_SITE_NAME"),
     )
