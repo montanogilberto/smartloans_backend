@@ -34,10 +34,11 @@ print(f"[featureFlags][startup] ENABLE_NON_CUSTODIAL_FUNDING_FLOW = {os.getenv('
 print(f"[appEnv][startup] {describe_app_env()}")
 
 from observability import ObservabilityMiddleware, writer
+from security.rate_limit import RateLimitExceeded, rate_limit_handler
 
 # Routers
 from routes_ import (
-    login, utils, swagger, users, symptoms, scannertext, products, checks,
+    login, sessionAuth, swagger, users, symptoms, scannertext, products, checks,
     departaments, employmentTypes, statuses, employees, projects,
     employeeProjectAssignments, contractors, whatsapp, orders, commands,
     vending_v2, contact_email, laundry, income, IOT, tickets, clients,
@@ -155,12 +156,14 @@ app.add_middleware(
 # Added after CORS so it sits outermost and captures the full request lifecycle.
 app.add_middleware(ObservabilityMiddleware)
 
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
+
 # --------------------------------------------------
 # Routers
 # --------------------------------------------------
 app.include_router(swagger.router)
-app.include_router(utils.router)
 app.include_router(login.router)
+app.include_router(sessionAuth.router)
 app.include_router(users.router)
 app.include_router(symptoms.router)
 app.include_router(scannertext.router)

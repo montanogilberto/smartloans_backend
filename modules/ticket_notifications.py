@@ -52,7 +52,7 @@ def send_sms(phone: str, body: str) -> Dict[str, Any]:
     if status_callback_url:
         message_kwargs["status_callback"] = status_callback_url
 
-    logger.info("[send_sms] sending | to=%s callback_configured=%s", phone, bool(status_callback_url))
+    logger.info("[send_sms] sending | callback_configured=%s", bool(status_callback_url))
     msg = client.messages.create(**message_kwargs)
     logger.info("[send_sms] sent | sid=%s status=%s", msg.sid, msg.status)
 
@@ -156,7 +156,7 @@ def _send_whatsapp_twilio(phone: str, body: str) -> Dict[str, Any]:
     if status_callback_url:
         message_kwargs["status_callback"] = status_callback_url
 
-    logger.info("[send_whatsapp] sending | to=%s callback_configured=%s", to_wa, bool(status_callback_url))
+    logger.info("[send_whatsapp] sending | callback_configured=%s", bool(status_callback_url))
     msg = client.messages.create(**message_kwargs)
     logger.info("[send_whatsapp] sent | sid=%s status=%s", msg.sid, msg.status)
 
@@ -170,7 +170,7 @@ def _send_whatsapp_twilio(phone: str, body: str) -> Dict[str, Any]:
 
 
 def send_ticket_sms(ticket_id: str, phone: str, message: Optional[str] = None, receipt_url: Optional[str] = None) -> Dict[str, Any]:
-    logger.info("[send_ticket_sms] start | ticket_id=%s to=%s", ticket_id, phone)
+    logger.info("[send_ticket_sms] start | ticket_id=%s", ticket_id)
     body = _build_message(ticket_id, message, receipt_url)
     result = send_sms(phone, body)
     result["ticketId"] = ticket_id
@@ -178,7 +178,7 @@ def send_ticket_sms(ticket_id: str, phone: str, message: Optional[str] = None, r
 
 
 def send_ticket_whatsapp(ticket_id: str, phone: str, message: Optional[str] = None, receipt_url: Optional[str] = None) -> Dict[str, Any]:
-    logger.info("[send_ticket_whatsapp] start | ticket_id=%s to=%s", ticket_id, phone)
+    logger.info("[send_ticket_whatsapp] start | ticket_id=%s", ticket_id)
     body = _build_message(ticket_id, message, receipt_url)
     detail = message.strip() if message else f"Ticket #{ticket_id}"
     if receipt_url:

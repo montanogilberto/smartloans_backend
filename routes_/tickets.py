@@ -2,7 +2,8 @@
 import json
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from security.rate_limit import field, rate_limit
 from pydantic import BaseModel
 
 from modules.tickets import one_tickets_sp, one_ticket_tracking_sp, ticket_redirect_sp
@@ -60,7 +61,9 @@ def one_ticket_tracking(json: dict):
     return one_ticket_tracking_sp(json)
 
 
-@router.post("/api/tickets/{ticketId}/send-sms", summary="Send ticket by SMS", description=ticket_send_sms_docstring)
+@router.post("/api/tickets/{ticketId}/send-sms", summary="Send ticket by SMS", description=ticket_send_sms_docstring,
+             dependencies=[Depends(rate_limit("ticket", per_ip=600, per_target=20, window=3600,
+                                              target=field("phone")))])
 def send_sms(ticketId: str, payload: TicketNotificationRequest):
     try:
         result = send_ticket_sms(
@@ -76,7 +79,9 @@ def send_sms(ticketId: str, payload: TicketNotificationRequest):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-@router.post("/api/tickets/{ticketId}/send-whatsapp", summary="Send ticket by WhatsApp", description=ticket_send_whatsapp_docstring)
+@router.post("/api/tickets/{ticketId}/send-whatsapp", summary="Send ticket by WhatsApp", description=ticket_send_whatsapp_docstring,
+             dependencies=[Depends(rate_limit("ticket", per_ip=600, per_target=20, window=3600,
+                                              target=field("phone")))])
 def send_whatsapp(ticketId: str, payload: TicketNotificationRequest):
     try:
         result = send_ticket_whatsapp(

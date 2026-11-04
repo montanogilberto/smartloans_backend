@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from security.worker_key import require_worker_key
 from modules.registrationReminders import check_registration_completeness
 
 router = APIRouter(prefix="/registration-reminders", tags=["Registration Reminders"])
@@ -6,6 +7,7 @@ router = APIRouter(prefix="/registration-reminders", tags=["Registration Reminde
 
 @router.post(
     "/check",
+    dependencies=[Depends(require_worker_key)],
     summary="Scan all users for incomplete registration and send one-time reminders",
     description="""
 Checks the CreateAccount.tsx wizard's Perfil, Verificar and Acceso steps for

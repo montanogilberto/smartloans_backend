@@ -25,6 +25,12 @@ from databases import connection
 from observability import log_workflow_step
 
 from modules.users import _normalize_phone, _send_sms_otp, _users_sp_raw
+from security.session_tokens import decode, issue_session, issue_set_pin_token, set_pin_token_required
+
+
+def _session_fields(user_id, company_id, client_id, role_code: str) -> dict:
+    session = issue_session(user_id, company_id, client_id, role_code)
+    return {"session": session} if session else {}
 
 
 def _client_login_codes_sp(payload: dict) -> dict:
@@ -193,6 +199,7 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
             entity_id=int(user_id) if str(user_id or "").isdigit() else None,
         )
 
+        pin_token = issue_set_pin_token(user_id)
         return JSONResponse(content={
             "valid": True,
             "userId": user_id,
@@ -203,6 +210,8 @@ def verify_client_login_code(json_file: dict) -> JSONResponse:
             "firstName": first_name,
             "lastName": last_name,
             "firstLoginCompleted": first_login_completed,
+            **_session_fields(user_id, company_id, client_id, role_code),
+            **({"pinToken": pin_token} if pin_token else {}),
         }, status_code=200)
     except Exception as e:
         log_workflow_step(
@@ -223,6 +232,17 @@ def set_client_password(json_file: dict) -> JSONResponse:
         password = str(payload.get("password") or "").strip()
         if not user_id:
             return JSONResponse(content={"success": False, "error": "userId es requerido"}, status_code=400)
+        # Proof that this user's SMS code was just verified. A token that is sent
+        # must be right; a missing one only passes until AUTH_REQUIRE_PIN_TOKEN is
+        # on (older apps don't send it). Until then anyone can skip this check.
+        pin_token = payload.get("pinToken")
+        claims = decode(pin_token, "set_pin") if pin_token else None
+        proven = claims is not None and claims["sub"] == str(user_id)
+        if not proven and (pin_token or set_pin_token_required()):
+            return JSONResponse(
+                content={"success": False, "error": "Tu código expiró. Solicita uno nuevo."},
+                status_code=401,
+            )
         # 4 = the client app's PIN length (POSVending src/utils/pin.ts); PINs made before
         # the switch are 6 long and keep working since login compares the stored value.
         if len(password) < 4 or len(password) > 50:
@@ -302,6 +322,7 @@ def verify_client_password(json_file: dict) -> JSONResponse:
             "roleName": role_name,
             "firstName": client.get("first_name") or "",
             "lastName": client.get("last_name") or "",
+            **_session_fields(user_id, client.get("companyId"), client.get("clientId"), role_code),
         }, status_code=200)
     except Exception as e:
         log_workflow_step(

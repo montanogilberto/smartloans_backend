@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from databases import connection
 from observability import log_application
+from security.session_tokens import issue_session
 import json
 
 app = FastAPI()
@@ -19,6 +20,17 @@ def _attempted_username(json_file: dict) -> str:
         return ""
 
 
+def _attach_session(result: object) -> None:
+    """A valid login carries session tokens in its row; a failed one never does."""
+    rows = result.get("result") if isinstance(result, dict) else None
+    row = rows[0] if isinstance(rows, list) and rows else None
+    if not isinstance(row, dict) or row.get("error") or not str(row.get("userId") or "").isdigit():
+        return
+    session = issue_session(row["userId"], row.get("companyId"), row.get("clientId"), row.get("roleCode"))
+    if session:
+        row["session"] = session
+
+
 def login_sp(json_file: dict):
     conn = None
     cursor = None
@@ -32,6 +44,7 @@ def login_sp(json_file: dict):
 
         # Parse the JSON string to a Python dictionary
         result = json.loads(json_result)
+        _attach_session(result)
 
         # Security event: a failed login attempt (durable path). The password is
         # NEVER logged — only the attempted username, the reason and (via context)

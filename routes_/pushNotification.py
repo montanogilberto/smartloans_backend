@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from security.worker_key import require_worker_key
+from security.session_tokens import require_session_or_worker_key
 from modules.pushNotifications import (
     pushNotifications_sp,
     all_pushNotifications_sp,
@@ -16,7 +16,6 @@ with open("./docs_description/pushNotifications.txt", "r") as file:
     pushNotifications_docstring = file.read()
 @router.post("/pushNotifications", summary="pushNotifications CRUD", description=pushNotifications_docstring)
 async def pushNotifications(json: dict):
-    print("[pushNotifications][route] Incoming request payload:", json)
     response = await pushNotifications_sp(json)
     print("[pushNotifications][route] Outgoing response prepared.")
     return response
@@ -39,9 +38,8 @@ def one_pushNotification(json: dict):
 with open("./docs_description/registerDevice.txt", "r") as file:
     register_device_docstring = file.read()
 @router.post("/registerDevice", summary="register device token", description=register_device_docstring,
-             dependencies=[Depends(require_worker_key)])
+             dependencies=[Depends(require_session_or_worker_key)])
 async def registerDevice(json: dict):
-    print("[pushNotifications][route][registerDevice] Incoming request payload:", json)
     response = await register_device_sp(json)
     print("[pushNotifications][route][registerDevice] Outgoing response prepared.")
     return response

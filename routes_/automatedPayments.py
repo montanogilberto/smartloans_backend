@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from security.worker_key import require_worker_key
 from modules.automatedPayments import (
     create_setup_intent,
     save_payment_method,
@@ -105,6 +106,7 @@ async def pay_spei(json: dict):
 
 @router.post(
     "/charge-due",
+    dependencies=[Depends(require_worker_key)],
     summary="Auto-charge all due installments (cron job trigger)",
     description="""
 Finds all loanInstallments with dueDate <= today and status=pending,

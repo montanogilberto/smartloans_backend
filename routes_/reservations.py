@@ -1,4 +1,5 @@
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks
+from security.worker_key import require_worker_key
 from fastapi.responses import JSONResponse
 from modules.reservations import reservation_catalog_sp, reservations_sp, run_migration
 
@@ -88,6 +89,7 @@ def reservation_hours(json: dict):
 
 @router.post(
     "/reservations/migrate",
+    dependencies=[Depends(require_worker_key)],
     summary="Create reservation tables, catalogs + SPs on the database (idempotent)",
 )
 def reservations_migrate():

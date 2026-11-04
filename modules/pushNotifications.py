@@ -63,7 +63,6 @@ async def pushNotifications_sp(json_file: dict):
     conn = None
     try:
         print("[pushNotifications][module] Handler started.")
-        print("[pushNotifications][module] Payload received:", json_file)
 
         conn = connection()
         cursor = conn.cursor()
@@ -81,16 +80,12 @@ async def pushNotifications_sp(json_file: dict):
             print("[pushNotifications][module] Auto-wrapped payload item count: 1")
 
         payload_json = json.dumps(sp_payload)
-        print("[pushNotifications][module] payload_item used for action/Azure logic:", payload_item)
         print("[pushNotifications][module] Executing SP: sp_pushNotifications")
-        print("[pushNotifications][module] SP payload JSON:", payload_json)
         cursor.execute("EXEC [dbo].[sp_pushNotifications] @pjsonfile = %s", (payload_json,))
 
         # Upsert SP returns ONE row, ONE column -- use fetchone()[0]
         row = cursor.fetchone()
-        print("[pushNotifications][module] Raw DB row:", row)
         json_result = row[0] if row else '{"message": "ok"}'
-        print("[pushNotifications][module] SP json_result:", json_result)
 
         parsed_content = json.loads(json_result)
         action = payload_item.get("action") if isinstance(payload_item, dict) else None
@@ -112,8 +107,8 @@ async def pushNotifications_sp(json_file: dict):
             push_notification_id = int(push_notification_id) if push_notification_id else None
             print(
                 "[pushNotifications][module] action==1 and SP success, preparing Azure push:",
-                {"title": title, "message": message, "targetType": target_type,
-                 "targetUserId": target_user_id, "targetCompanyId": target_company_id}
+                {"targetType": target_type, "targetUserId": target_user_id,
+                 "targetCompanyId": target_company_id}
             )
 
             if target_type in _UNSUPPORTED_TARGET_TYPES:
@@ -193,7 +188,6 @@ async def pushNotifications_sp(json_file: dict):
         else:
             print("[pushNotifications][module] action is not 1; Azure push not required.", {"action": action})
 
-        print("[pushNotifications][module] Returning parsed response:", parsed_content)
         return JSONResponse(content=parsed_content, status_code=200)
     except Exception as e:
         print("[pushNotifications][module] Exception raised:", str(e))
@@ -269,7 +263,6 @@ def mark_notifications_read_sp(json_file: dict):
 async def register_device_sp(json_file: dict):
     try:
         print("[pushNotifications][registerDevice] Handler started.")
-        print("[pushNotifications][registerDevice] Payload received:", json_file)
 
         user_id = json_file.get("userId") if isinstance(json_file, dict) else None
         token = json_file.get("token") if isinstance(json_file, dict) else None
