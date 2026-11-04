@@ -192,7 +192,9 @@ async def notify_pos(row: dict, source: str = "kiosco"):
                 "priority": "High",
                 "targetType": "Company",
                 "targetCompanyId": company_id,
-                "navigationRoute": "/reservations",
+                # The POS shows reservations in the Dashboard's panel (ReservationsWidget);
+                # there is no /reservations page — that route opened nothing.
+                "navigationRoute": "/dashboard",
                 "payloadJson": json.dumps({"type": "NewReservation", "reservationId": row["reservationId"]}),
             }]
         })
