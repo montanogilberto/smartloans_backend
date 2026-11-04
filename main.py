@@ -73,6 +73,7 @@ from routes_ import (
     factoryRunUsage,
     whatsappCloud,
     whatsappAssistant,
+    marketingLeadAttribution,
     laundryDevices,
 )
 
@@ -264,6 +265,7 @@ app.include_router(commissionTerminals.router)
 app.include_router(factoryRunUsage.router)
 app.include_router(whatsappCloud.router)
 app.include_router(whatsappAssistant.router)
+app.include_router(marketingLeadAttribution.router)
 app.include_router(laundryDevices.router)
 
 # --------------------------------------------------
