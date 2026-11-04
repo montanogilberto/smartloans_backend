@@ -2,7 +2,8 @@ import json
 import logging
 import os
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, BackgroundTasks, Request
+from security.worker_key import require_worker_key
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 
 from modules.whatsappChannels import run_migration, whatsapp_channels_sp
@@ -71,6 +72,7 @@ def whatsapp_channels(json: dict):
 
 @router.post(
     "/whatsapp/cloud/migrate",
+    dependencies=[Depends(require_worker_key)],
     summary="Create whatsappChannels / whatsappConversations tables + SPs (idempotent)",
 )
 def whatsapp_cloud_migrate():

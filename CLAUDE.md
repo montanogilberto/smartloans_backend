@@ -47,9 +47,12 @@ Adds to `~/.claude/CLAUDE.md`; this file wins on conflict.
 - The scheduler (daily repayments, reminders) needs App Service "Always On".
 
 ## Auth
-There is no auth middleware. `X-User-Id` / `X-Company-Id` / `X-Client-Id` headers are
+`security/session_tokens.py` issues signed tokens at login (`SESSION_JWT_SECRET`), but
+nothing enforces them yet: there is no auth middleware. `X-User-Id` / `X-Company-Id` / `X-Client-Id` headers are
 for observability only — never authorize on them. Endpoints that mutate config or run
-jobs take `Depends(require_worker_key)`.
+jobs take `Depends(require_worker_key)`. Public routes that send messages take
+`Depends(rate_limit(...))` (`security/rate_limit.py`). User responses go through
+`_without_password` in `modules/users.py`: the user SPs still select the column.
 
 ## Run & test
 ```bash

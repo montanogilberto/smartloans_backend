@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from security.worker_key import require_worker_key
 from modules.onboardingReminders import check_onboarding_completeness
 
 router = APIRouter(prefix="/onboarding-reminders", tags=["Onboarding Reminders"])
@@ -6,6 +7,7 @@ router = APIRouter(prefix="/onboarding-reminders", tags=["Onboarding Reminders"]
 
 @router.post(
     "/check",
+    dependencies=[Depends(require_worker_key)],
     summary="Scan all clients for incomplete onboarding and send one-time reminders",
     description="""
 Checks Código QR, ID document capture, biometric verification, contract/pagaré

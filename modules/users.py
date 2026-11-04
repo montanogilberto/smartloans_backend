@@ -31,6 +31,16 @@ _SMTP_PORT     = 587
 _SENDER_EMAIL  = os.environ.get("GMAIL_SENDER", "")
 _SENDER_PWD    = os.environ.get("GMAIL_APP_PASSWORD", "")
 
+def _without_password(value):
+    """sp_users_all / sp_users_one / sp_users_one_email select the password
+    column; it must never reach an HTTP response."""
+    if isinstance(value, list):
+        return [_without_password(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _without_password(v) for k, v in value.items() if k.lower() != "password"}
+    return value
+
+
 def _users_sp_raw(json_file: dict) -> dict:
     """EXEC sp_users and return {userId, msg, error} — used by users_sp (route-
     facing, wraps this in a JSONResponse) and by verify_code (persists
@@ -38,7 +48,6 @@ def _users_sp_raw(json_file: dict) -> dict:
     conn = None
     cursor = None
     try:
-        logger.info("[_users_sp_raw] INPUT: %s", json.dumps(json_file))
         conn = connection()
         cursor = conn.cursor()
         cursor.execute("EXEC sp_users @pjsonfile = %s", (json.dumps(json_file),))
@@ -206,7 +215,7 @@ def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str 
     from modules.ticket_notifications import send_sms, send_whatsapp
     normalized = _normalize_phone(phone)
     message = f"Tu código {brand} es: {code}. Expira en 10 min."
-    logger.info("[_send_sms_otp] raw=%s normalized=%s whatsapp=%s", phone, normalized, via_whatsapp)
+    logger.info("[_send_sms_otp] whatsapp=%s", via_whatsapp)
     if via_whatsapp:
         # AUTHENTICATION template: Meta fixes its text, so no brand there.
         # Twilio WhatsApp is disabled and Meta only allows this template on a
@@ -231,7 +240,7 @@ def send_verification_code(json_file: dict):
         code    = "".join(random.choices(string.digits, k=6))
         expires = datetime.utcnow() + timedelta(minutes=10)
         _verification_codes[target] = {"code": code, "expires": expires}
-        logger.info("[send_verification_code] method=%s target=%s code=%s", method, target, code)
+        logger.info("[send_verification_code] method=%s", method)
 
         if method not in ("email", "sms", "whatsapp"):
             return JSONResponse(content={"error": f"Unknown method: {method}"}, status_code=400)
@@ -247,7 +256,7 @@ def send_verification_code(json_file: dict):
                     _send_sms_otp(target, code, via_whatsapp=(method == "whatsapp"))
                 span.http_status = 200
 
-        logger.info("[send_verification_code] sent via %s to %s", method, target)
+        logger.info("[send_verification_code] sent via %s", method)
         return JSONResponse(content={"message": "Código enviado", "method": method}, status_code=200)
     except Exception as e:
         logger.exception("[send_verification_code] EXCEPTION: %s", e)
@@ -268,7 +277,7 @@ def verify_code(json_file: dict):
         code   = str(json_file.get("code", "")).strip()
         user_id = json_file.get("userId")
         entry  = _verification_codes.get(target)
-        logger.info("[verify_code] target=%s code=%s found=%s userId=%s", target, code, bool(entry), user_id)
+        logger.info("[verify_code] found=%s userId=%s", bool(entry), user_id)
 
         if not entry:
             return JSONResponse(content={"valid": False, "error": "No hay código para este contacto"}, status_code=200)
@@ -279,7 +288,7 @@ def verify_code(json_file: dict):
             return JSONResponse(content={"valid": False, "error": "Código incorrecto"}, status_code=200)
 
         _verification_codes.pop(target, None)
-        logger.info("[verify_code] verified OK for %s", target)
+        logger.info("[verify_code] verified OK")
         # Registration milestone: OTP verified (target/code not logged).
         log_workflow_step(
             "OTP Verified", workflow_name="client_registration", entity="users",
@@ -356,7 +365,7 @@ def send_account_created(json_file: dict):
                         send_sms(normalized, message)
                 span.http_status = 200
 
-        logger.info("[send_account_created] sent via %s for username=%s", method, username)
+        logger.info("[send_account_created] sent via %s", method)
         return JSONResponse(content={"message": "Notificación enviada", "method": method}, status_code=200)
     except Exception as e:
         logger.exception("[send_account_created] EXCEPTION: %s", e)
@@ -375,7 +384,6 @@ def check_contact_sp(json_file: dict):
     cursor = None
     try:
         contact = json_file.get("contact", "").strip()
-        logger.info("[check_contact_sp] contact=%s", contact)
         if not contact:
             return JSONResponse(content={"error": "contact is required"}, status_code=400)
 
@@ -386,7 +394,6 @@ def check_contact_sp(json_file: dict):
             (json.dumps({"checkContact": [{"contact": contact}]}),)
         )
         row = cursor.fetchone()
-        logger.info("[check_contact_sp] raw row: %s", row)
 
         if row is None or row[0] is None:
             return JSONResponse(content={"found": False}, status_code=200)
@@ -398,7 +405,7 @@ def check_contact_sp(json_file: dict):
         if data.get("found") is False:
             return JSONResponse(content={"found": False}, status_code=200)
         data["found"] = True
-        logger.info("[check_contact_sp] RESULT: %s", data)
+        logger.info("[check_contact_sp] found")
         return JSONResponse(content=data, status_code=200)
     except Exception as e:
         logger.exception("[check_contact_sp] EXCEPTION: %s", e)
@@ -490,7 +497,7 @@ def all_users_sp():
         json_result = "".join(row[0] for row in rows)
 
         # Parse the JSON string to a Python dictionary
-        result = json.loads(json_result)
+        result = _without_password(json.loads(json_result))
 
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
@@ -519,7 +526,7 @@ def one_users_sp(json_file: dict):
         json_result = cursor.fetchone()[0]
 
         # Parse the JSON string to a Python dictionary
-        result = json.loads(json_result)
+        result = _without_password(json.loads(json_result))
 
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
@@ -549,7 +556,7 @@ def one_users_email_sp(json_file: dict):
         json_result = cursor.fetchone()[0]
 
         # Parse the JSON string to a Python dictionary
-        result = json.loads(json_result)
+        result = _without_password(json.loads(json_result))
 
         return JSONResponse(content=result, status_code=200)
     except Exception as e:

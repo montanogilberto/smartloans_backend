@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from security.rate_limit import field, rate_limit
 from modules.notificationDispatch import (
     notificationDispatch_sp,
     all_notificationDispatch_sp,
@@ -27,6 +28,8 @@ def one_notificationDispatches(json: dict):
 
 @router.post(
     "/notificationDispatch/dispatch",
+    dependencies=[Depends(rate_limit("dispatch", per_ip=600, per_target=20, window=3600,
+                                     target=field("phone")))],
     summary="Push -> WhatsApp -> SMS cost-minimizing notification cascade",
     tags=["connector"],
 )

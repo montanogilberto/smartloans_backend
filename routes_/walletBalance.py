@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from security.worker_key import require_worker_key
 from modules.walletBalance import get_wallet, credit_wallet, debit_wallet, reserve_wallet, release_wallet, get_all_wallets
 
 router = APIRouter(prefix="/wallet", tags=["Wallet Balance"])
@@ -29,6 +30,7 @@ async def all_wallets(json: dict):
 
 @router.post(
     "/credit",
+    dependencies=[Depends(require_worker_key)],
     summary="Credit wallet after top-up or repayment received",
     description="""
 Called internally after Stripe webhook confirms payment_intent.succeeded.
@@ -43,6 +45,7 @@ async def credit(json: dict):
 
 @router.post(
     "/debit",
+    dependencies=[Depends(require_worker_key)],
     summary="Debit wallet after loan disbursement or withdrawal",
     description="""
 Called internally after stripe/disburse succeeds.
@@ -57,6 +60,7 @@ async def debit(json: dict):
 
 @router.post(
     "/reserve",
+    dependencies=[Depends(require_worker_key)],
     summary="Reserve funds when a proposal is accepted",
     description="""
 Moves amountMXN from availableBalance to reservedBalance.
@@ -71,6 +75,7 @@ async def reserve(json: dict):
 
 @router.post(
     "/release",
+    dependencies=[Depends(require_worker_key)],
     summary="Release a reservation when disbursement fails",
     description="""
 Moves amountMXN from reservedBalance back to availableBalance without

@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from security.worker_key import require_worker_key
 from modules.arcadeStore import (
     arcade_chip_packs_all_sp, arcade_purchase_sp, arcade_purchases_all_sp,
     arcade_checkout_sp, arcade_confirm_sp, arcade_quick_buy_sp, arcade_saved_card_sp,
@@ -172,6 +173,7 @@ def arcade_spei_declare(json: dict):
 
 @router.post(
     "/arcade/speiConfirm",
+    dependencies=[Depends(require_worker_key)],
     summary="Conciliar la orden y ACREDITAR las fichas",
     description="""
 ⚠️ SOLO CONCILIACION / ADMINISTRACION. Este es el unico punto donde una compra

@@ -1,12 +1,16 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from modules.client_login import (
     send_client_login_code, verify_client_login_code, set_client_password, verify_client_password,
 )
 
+from security.rate_limit import rate_limit, row_field
+
 
 router = APIRouter()
 
-@router.post("/send_client_login_code", summary="Send SMS OTP for POS client self-service login (skipped if firstLoginCompleted)")
+@router.post("/send_client_login_code", summary="Send SMS OTP for POS client self-service login (skipped if firstLoginCompleted)",
+             dependencies=[Depends(rate_limit("otp", per_ip=30, per_target=5, window=900,
+                                              target=row_field("clientLoginCodes", "phone")))])
 def send_code(json: dict):
     return send_client_login_code(json)
 
