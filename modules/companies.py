@@ -6,6 +6,26 @@ import json
 app = FastAPI()
 
 
+def company_name(json_file: dict) -> str:
+    """companies.name for {"companyId": int}, or "" when it can't be read.
+    For labels only, so a failed lookup never breaks the caller."""
+    conn = None
+    try:
+        conn = connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC sp_companies_one @pjsonfile = %s",
+                       (json.dumps({"companies": [{"companyId": json_file.get("companyId")}]}),))
+        data = json.loads(cursor.fetchone()[0])
+        rows = (data.get("result") or [data])[0].get("companies") or [{}]
+        return str(rows[0].get("name") or "")
+    except Exception as e:
+        print(f"[companies] name lookup failed companyId={json_file.get('companyId')}: {e}")
+        return ""
+    finally:
+        if conn:
+            conn.close()
+
+
 def companies_sp(json_file: dict):
     conn = None
     try:

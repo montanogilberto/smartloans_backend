@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, BackgroundTasks
+from security.session_tokens import require_company_admin_on_write
 from security.worker_key import require_worker_key
 from fastapi.responses import JSONResponse
 from modules.reservations import reservation_catalog_sp, reservations_sp, run_migration
@@ -66,6 +67,7 @@ action 3 — deactivate: { ..., "action": 3, "companyId": int, "reservationServi
 durationMinutes / capacity left empty = taken from dbo.machines of machineType
 (longest cycle, machines in service); neither = 60 min, 1 booking.
 """,
+    dependencies=[Depends(require_company_admin_on_write("reservationServices"))],
 )
 def reservation_services(json: dict):
     return reservation_catalog_sp(json, "sp_reservationServices")
@@ -82,6 +84,7 @@ action 1 — set a day: { ..., "action": 1, "companyId": int, "dayOfWeek": int,
 action 3 — close a day: { ..., "action": 3, "companyId": int, "dayOfWeek": int }
 → { "result": [{ "reservationHours": [{ "dayOfWeek", "openTime", "closeTime" }] }] }
 """,
+    dependencies=[Depends(require_company_admin_on_write("reservationHours"))],
 )
 def reservation_hours(json: dict):
     return reservation_catalog_sp(json, "sp_reservationHours")

@@ -17,6 +17,7 @@ SQL stored procedures expected (create in Azure SQL):
 
 import os
 import json
+import threading
 import stripe
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -24,10 +25,17 @@ from databases import connection
 from datetime import datetime
 from modules.walletBalance import debit_wallet
 from modules.walletTransactions import post_entry
+from modules.companies import company_name
+from modules.companyPaymentAccounts import (
+    active_stripe_account, add_stripe_account, confirm_account, list_accounts,
+    sync_charges_enabled, WALLET_TOPUP_PURPOSE,
+)
 from observability.logger import log_workflow_step, log_integration
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+# Connect endpoints have their own signing secret in the Stripe Dashboard.
+CONNECT_WEBHOOK_SECRET = os.getenv("STRIPE_CONNECT_WEBHOOK_SECRET", "")
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -657,6 +665,150 @@ async def get_onboarding_link(payload: dict):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+# ── Company accounts (RFC-010) ───────────────────────────────────────────────
+
+def _company_stripe_account(company_id) -> str:
+    return active_stripe_account({"companyId": company_id, "purpose": WALLET_TOPUP_PURPOSE})
+
+
+def _company_customer(stripe_account: str, client_id) -> str:
+    """The client's Customer on the company's Stripe account, where saved cards
+    live, or "" if it can't be resolved: the top-up still goes through, only
+    saving the card is lost."""
+    try:
+        client = int(client_id)
+        found = stripe.Customer.search(query=f"metadata['clientId']:'{client}'", limit=1,
+                                       stripe_account=stripe_account)
+        if found["data"]:
+            return found["data"][0]["id"]
+        return stripe.Customer.create(metadata={"clientId": str(client)}, stripe_account=stripe_account,
+                                      idempotency_key=f"customer-{stripe_account}-{client}")["id"]
+    except Exception as e:
+        print(f"[stripe][company] customer lookup failed clientId={client_id}: {e}")
+        return ""
+
+
+async def answer_save_card(payload: dict):
+    """After a top-up the client chooses whether to keep the card. Stripe can only
+    keep a card if the charge was set up for it, so a "no" removes it here."""
+    intent_id = payload.get("paymentIntentId")
+    if not intent_id:
+        return JSONResponse({"error": "paymentIntentId required"}, status_code=400)
+    try:
+        acct = _intent_account(payload.get("companyId"), payload.get("stripeAccount"))
+        if not acct:
+            return JSONResponse({"error": "Compañía sin cuenta Stripe activa"}, status_code=400)
+        intent = stripe.PaymentIntent.retrieve(intent_id, stripe_account=acct)
+        if intent["metadata"]["paymentType"] != LAUNDRY_TOP_UP:
+            return JSONResponse({"error": "Pago no válido"}, status_code=400)
+        keep = payload.get("save") is True
+        if not keep and intent["payment_method"]:
+            stripe.PaymentMethod.detach(intent["payment_method"], stripe_account=acct)
+        log_workflow_step("Top-up Card Choice", workflow_name="money_trail", action=LAUNDRY_TOP_UP,
+                          entity="stripeTransactions", message=f"intent {intent_id} keep={keep}")
+        return JSONResponse({"saved": keep}, status_code=200)
+    except stripe.StripeError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def _intent_account(company_id, requested: str = None) -> str:
+    """The account a top-up was charged on. The app sends back the one it paid
+    on, because the company's ACTIVE account can change after the charge; it only
+    counts if that company owns it, archived accounts included."""
+    if requested and any(a.get("stripeConnectedAccountId") == requested
+                         for a in list_accounts({"companyId": company_id})):
+        return requested
+    return _company_stripe_account(company_id)
+
+
+def _refresh_pending_accounts(rows: list) -> list:
+    """Reads Stripe directly, so the admin isn't left waiting on a webhook after
+    finishing onboarding. Rows that are already enabled are left alone."""
+    for row in rows:
+        acct_id = row.get("stripeConnectedAccountId")
+        if row.get("accountStatus") != "PENDING_VERIFICATION" or row.get("chargesEnabled") or not acct_id:
+            continue
+        try:
+            enabled = bool(stripe.Account.retrieve(acct_id)["charges_enabled"])
+            if enabled:
+                sync_charges_enabled({"stripeConnectedAccountId": acct_id, "chargesEnabled": True})
+                row["chargesEnabled"] = True
+        except stripe.StripeError as e:
+            print(f"[stripe][company] refresh failed acct={acct_id}: {e}")
+    return rows
+
+
+async def list_company_accounts(payload: dict):
+    row = (payload.get("companyPaymentAccounts") or [{}])[0]
+    try:
+        rows = _refresh_pending_accounts(list_accounts({"companyId": row.get("companyId")}))
+        return JSONResponse({"companyPaymentAccounts": rows}, status_code=200)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def confirm_company_account(payload: dict):
+    row = (payload.get("companyPaymentAccounts") or [{}])[0]
+    try:
+        _refresh_pending_accounts(list_accounts({"companyId": row.get("companyId")}))
+        return confirm_account(row)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def company_onboarding_link(payload: dict):
+    """Creates or reuses the company's Stripe account and returns its onboarding
+    URL. A Standard account makes the company the merchant of record: it has its
+    own Stripe dashboard and receives its own payouts."""
+    row = (payload.get("companyPaymentAccounts") or [{}])[0]
+    company_id = row.get("companyId")
+    user_id = row.get("createdByUserId")
+    return_url = row.get("returnUrl")
+    if not company_id or not user_id or not return_url:
+        return JSONResponse({"error": "companyId, createdByUserId and returnUrl required"}, status_code=400)
+    try:
+        rows = [a for a in list_accounts({"companyId": company_id})
+                if a.get("accountType") == "stripe_connect" and a.get("purpose") == WALLET_TOPUP_PURPOSE]
+        # replaceActive starts a new account; the old one keeps charging until a
+        # second admin confirms the new one, which archives it.
+        reusable = ("PENDING_VERIFICATION",) if row.get("replaceActive") else ("PENDING_VERIFICATION", "ACTIVE")
+        existing = next((a for a in rows if a.get("accountStatus") in reusable), None)
+        acct_id = existing.get("stripeConnectedAccountId") if existing else None
+        if not acct_id:
+            # Same key until a row is saved: a retry or a second admin gets this
+            # same account back instead of creating another one in Stripe.
+            acct = stripe.Account.create(type="standard", country="MX",
+                                         metadata={"companyId": str(company_id)},
+                                         idempotency_key=f"company-account-{company_id}-{len(rows)}")
+            acct_id = acct["id"]
+            try:
+                added = add_stripe_account({
+                    "companyId": company_id, "purpose": WALLET_TOPUP_PURPOSE, "stripeConnectedAccountId": acct_id,
+                    "holderName": company_name({"companyId": company_id}) or f"Compañía {company_id}",
+                    "createdByUserId": user_id,
+                })
+            except Exception as e:
+                added = {"error": str(e)}
+            saved = bool(added.get("companyPaymentAccountId")) or any(
+                a.get("stripeConnectedAccountId") == acct_id for a in list_accounts({"companyId": company_id}))
+            if not saved:
+                # The account exists in Stripe but nothing points to it yet.
+                print(f"[stripe][company] persist FAILED acct={acct_id} companyId={company_id}: {added}")
+                return JSONResponse({"error": "No se pudo guardar la cuenta de Stripe."}, status_code=500)
+            log_workflow_step("Company Stripe Account Created", workflow_name="money_trail",
+                              action="company_account", entity="companyPaymentAccounts",
+                              entity_id=added.get("companyPaymentAccountId"), message=f"companyId={company_id}")
+        link = stripe.AccountLink.create(account=acct_id, refresh_url=return_url, return_url=return_url,
+                                         type="account_onboarding")
+        return JSONResponse({"url": link["url"]}, status_code=200)
+    except stripe.StripeError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ── Payment Intents ──────────────────────────────────────────────────────────
 
 async def create_payment_intent(payload: dict):
@@ -677,11 +829,12 @@ async def create_payment_intent(payload: dict):
     description    = payload.get("description", "P2P GMO Payment")
     metadata       = payload.get("metadata", {})
 
-    # RFC-010 (POSVending docs/rfcs): a laundry card top-up must be a direct charge on
-    # the laundry's own connected Stripe account. A charge here lands in the platform
-    # account (SmartLoans would hold customer money, against D1), so it stays off
-    # until that flow ships. Intents created before this keep crediting on confirm.
-    if payment_type == LAUNDRY_TOP_UP:
+    # RFC-010 (POSVending docs/rfcs): a card top-up is a direct charge on the company's
+    # own connected Stripe account. A charge on the platform account would mean
+    # SmartLoans holds customer money (against D1), so without an ACTIVE company
+    # account it stays off. Intents created before this keep crediting on confirm.
+    connected_account = _company_stripe_account(company_id) if payment_type == LAUNDRY_TOP_UP else None
+    if payment_type == LAUNDRY_TOP_UP and not connected_account:
         return JSONResponse({
             "error": "laundry_card_topup_unavailable",
             "message": "La recarga con tarjeta no está disponible por ahora. Recarga en mostrador.",
@@ -702,6 +855,7 @@ async def create_payment_intent(payload: dict):
         return JSONResponse({"error": "Monto mínimo: $1.00 MXN"}, status_code=400)
 
     try:
+        customer = _company_customer(connected_account, from_client_id) if connected_account else ""
         intent = stripe.PaymentIntent.create(
             amount=amount,
             currency="mxn",
@@ -715,10 +869,10 @@ async def create_payment_intent(payload: dict):
                 "proposalId": str(proposal_id or ""),
                 **metadata,
             },
-            payment_method_types=["card", "oxxo"],
-            payment_method_options={
-                "oxxo": {"expires_after_days": 3},
-            },
+            **({"customer": customer, "setup_future_usage": "off_session"} if customer else {}),
+            **({"stripe_account": connected_account, "payment_method_types": ["card"]} if connected_account
+               else {"payment_method_types": ["card", "oxxo"],
+                     "payment_method_options": {"oxxo": {"expires_after_days": 3}}}),
         )
 
         # Persist transaction record in SQL (status=pending)
@@ -749,6 +903,7 @@ async def create_payment_intent(payload: dict):
             "transactionId": tx.get("transactionId", 0),
             "amount": amount,
             "currency": "mxn",
+            **({"stripeAccount": connected_account, "canSaveCard": bool(customer)} if connected_account else {}),
         }, status_code=200)
 
     except stripe.StripeError as e:
@@ -778,14 +933,40 @@ def _stripe_fee_and_net_mxn(intent, gross_mxn: float) -> tuple[float, float]:
     return fee, round(gross_mxn - fee, 2)
 
 
-# Recarga del saldo prepago de GMO Lavandería: se acredita en walletTransactions,
+# Recarga del saldo prepago de la compañía: se acredita en walletTransactions,
 # el mismo libro que /laundryDevices/authorize descuenta (LAUNDRY_USAGE). La
 # cartera P2P (wallet_top_up) sigue en clientWallets — no se mezclan.
 LAUNDRY_TOP_UP = "laundry_top_up"
 _TOP_UP_TYPES = ("wallet_top_up", LAUNDRY_TOP_UP)
 
 
-async def _settle_wallet_top_up(tx: dict, net_mxn: float = None):
+def _is_first_success(tx) -> bool:
+    """update_status returns prevStatus, so only the caller that performed the
+    pending→succeeded flip sees this as True."""
+    return isinstance(tx, dict) and tx.get("status") == "succeeded" and tx.get("prevStatus") != "succeeded"
+
+
+def _intent_fee_and_net(tx: dict, stripe_account: str = None) -> tuple[float, float]:
+    """(feeMXN, netMXN) for a transaction when only its row is at hand (webhook)."""
+    intent_id = tx.get("stripePaymentIntentId") or ""
+    intent = None
+    if intent_id and not intent_id.startswith("pi_mock_"):
+        try:
+            intent = stripe.PaymentIntent.retrieve(
+                intent_id, expand=["latest_charge.balance_transaction"],
+                **({"stripe_account": stripe_account} if stripe_account else {}))
+        except Exception as e:
+            print(f"[stripe][topup] intent retrieve for net FAILED: {e}")
+    return _stripe_fee_and_net_mxn(intent, float(tx.get("amount", 0)) / 100.0)
+
+
+def _send_receipt_async(tx: dict, intent_id: str, fee_mxn: float, net_mxn: float) -> None:
+    """Comprobante por correo en un hilo aparte — no retrasa la respuesta."""
+    threading.Thread(target=_send_transaction_receipt_email,
+                     args=(tx, intent_id, fee_mxn, net_mxn), daemon=True).start()
+
+
+async def _settle_wallet_top_up(tx: dict, net_mxn: float = None, stripe_account: str = None):
     """Credit the client's wallet ledger for a wallet_top_up / laundry_top_up transaction that
     JUST transitioned to succeeded. Runs from both the app's confirm call and
     the Stripe webhook — sp_stripe_transactions.update_status returns the
@@ -808,15 +989,7 @@ async def _settle_wallet_top_up(tx: dict, net_mxn: float = None):
             return
 
         if net_mxn is None:
-            intent_id = tx.get("stripePaymentIntentId") or ""
-            intent = None
-            if intent_id and not intent_id.startswith("pi_mock_"):
-                try:
-                    intent = stripe.PaymentIntent.retrieve(
-                        intent_id, expand=["latest_charge.balance_transaction"])
-                except Exception as e:
-                    print(f"[stripe][topup] intent retrieve for net FAILED: {e}")
-            _fee, net_mxn = _stripe_fee_and_net_mxn(intent, gross_mxn)
+            _fee, net_mxn = _intent_fee_and_net(tx, stripe_account)
 
         if tx.get("paymentType") == LAUNDRY_TOP_UP:
             intent_id = tx.get("stripePaymentIntentId") or ""
@@ -937,14 +1110,16 @@ def _send_transaction_receipt_email(tx: dict, intent_id: str,
         folio = tx.get("transactionId") or "—"
         payment_type = tx.get("paymentType") or ""
         concepto = ("Recarga de cartera P2P" if payment_type == "wallet_top_up"
-                    else "Recarga de saldo GMO Lavandería" if payment_type == LAUNDRY_TOP_UP
+                    else f"Recarga de saldo {company_name({'companyId': tx.get('companyId')})}".strip() if payment_type == LAUNDRY_TOP_UP
                     else "Pago de préstamo" if payment_type == "loan_repayment"
                     else payment_type or "Movimiento")
         fecha = datetime.utcnow().strftime("%d/%m/%Y %H:%M UTC")
+        negocio = ((company_name({"companyId": tx.get("companyId")}) if payment_type == LAUNDRY_TOP_UP else "")
+                   or "SmartLoans")
         lineas = [
             f"Hola {contact.get('name', 'cliente')},",
             "",
-            "Tu operación en SmartLoans fue procesada con éxito.",
+            f"Tu operación en {negocio} fue procesada con éxito.",
             "",
             f"Concepto:            {concepto}",
             f"Folio de operación:  {folio}",
@@ -1017,8 +1192,12 @@ async def confirm_payment_intent(payload: dict):
 
         # expand: el balance transaction trae la comisión REAL de Stripe para
         # acreditar la cartera con el neto y reportarla al cliente.
+        # A company top-up lives on that company's Stripe account, not the platform's.
+        connected_account = (_intent_account(company_id, payload.get("stripeAccount"))
+                             if payload.get("paymentType") == LAUNDRY_TOP_UP else None)
         intent = stripe.PaymentIntent.retrieve(
-            payment_intent_id, expand=["latest_charge.balance_transaction"])
+            payment_intent_id, expand=["latest_charge.balance_transaction"],
+            **({"stripe_account": connected_account} if connected_account else {}))
         # Bracket access, not .get(): stripe 15.x StripeObject is no longer a
         # dict — .get() raises AttributeError and this endpoint 500'd on every
         # call (same bug automatedPayments already fixed).
@@ -1046,18 +1225,14 @@ async def confirm_payment_intent(payload: dict):
                           action=tx.get("paymentType") or "charge",
                           entity="stripeTransactions", entity_id=tx.get("transactionId"),
                           message=f"bruto ${gross_mxn:,.2f} − comisión ${fee_mxn:,.2f} = neto ${net_mxn:,.2f} MXN")
+        first_success = _is_first_success(tx)
         await _settle_wallet_top_up(tx, net_mxn=net_mxn)
 
         if save_pm:
             _persist_intent_payment_method(intent, tx, company_id)
 
-        # Comprobante por correo en un hilo aparte — no retrasa la respuesta.
-        import threading
-        threading.Thread(
-            target=_send_transaction_receipt_email,
-            args=(tx, payment_intent_id, fee_mxn, net_mxn),
-            daemon=True,
-        ).start()
+        if first_success:
+            _send_receipt_async(tx, payment_intent_id, fee_mxn, net_mxn)
 
         return JSONResponse({"status": status, "stripePaymentIntentId": payment_intent_id,
                              "feeMXN": fee_mxn, "netCreditedMXN": net_mxn, **tx}, status_code=200)
@@ -1250,24 +1425,39 @@ async def handle_webhook(request: Request):
     payload_bytes = await request.body()
     sig_header    = request.headers.get("stripe-signature", "")
 
-    if not WEBHOOK_SECRET or WEBHOOK_SECRET.startswith("whsec_YOUR"):
+    secrets = [s for s in (WEBHOOK_SECRET, CONNECT_WEBHOOK_SECRET) if s and not s.startswith("whsec_YOUR")]
+    if not secrets:
         # Webhook secret not configured — parse without verification (dev only)
         event = json.loads(payload_bytes)
+        if event.get("account") or "_live_" in (stripe.api_key or ""):
+            # Never credit real money from an event nobody verified.
+            print("[stripe][webhook] rejected: no webhook secret configured")
+            return JSONResponse({"error": "Webhook secret not configured"}, status_code=400)
     else:
-        try:
-            # construct_event VERIFIES the signature but returns a stripe 15.x
-            # StripeObject, which no longer supports dict .get() — every
-            # handler below crashed with AttributeError('get') and Stripe saw
-            # nothing but 500s. Verify with it, then work on the plain-JSON
-            # payload so the .get() handling keeps working in any SDK version.
-            stripe.Webhook.construct_event(payload_bytes, sig_header, WEBHOOK_SECRET)
-            event = json.loads(payload_bytes)
-        except stripe.SignatureVerificationError as e:
-            print(f"[stripe][webhook] Signature verification failed: {e}")
+        event = None
+        for secret in secrets:
+            try:
+                # construct_event VERIFIES the signature but returns a stripe 15.x
+                # StripeObject, which no longer supports dict .get() — every
+                # handler below crashed with AttributeError('get') and Stripe saw
+                # nothing but 500s. Verify with it, then work on the plain-JSON
+                # payload so the .get() handling keeps working in any SDK version.
+                stripe.Webhook.construct_event(payload_bytes, sig_header, secret)
+                event = json.loads(payload_bytes)
+                break
+            except stripe.SignatureVerificationError as e:
+                print(f"[stripe][webhook] Signature verification failed: {e}")
+        if event is None:
             return JSONResponse({"error": "Invalid signature"}, status_code=400)
 
     event_type = event.get("type", "")
     data_obj   = event.get("data", {}).get("object", {})
+    connected_account = event.get("account")
+
+    # A company's Stripe account also has its own sales; only our top-ups matter.
+    if (connected_account and event_type.startswith("payment_intent.")
+            and (data_obj.get("metadata") or {}).get("paymentType") != LAUNDRY_TOP_UP):
+        return JSONResponse({"received": True}, status_code=200)
 
     print(f"[stripe][webhook] Received event: {event_type}")
 
@@ -1300,7 +1490,10 @@ async def handle_webhook(request: Request):
         })
         # Wallet top-ups: credit the ledger (no-op if the app's confirm call
         # already did — update_status returns prevStatus for idempotency).
-        await _settle_wallet_top_up(tx)
+        if _is_first_success(tx):
+            fee_mxn, net_mxn = _intent_fee_and_net(tx, connected_account)
+            await _settle_wallet_top_up(tx, net_mxn=net_mxn)
+            _send_receipt_async(tx, intent_id, fee_mxn, net_mxn)
         log_workflow_step("Webhook Payment Succeeded", workflow_name="money_trail",
                           entity="stripeTransactions",
                           entity_id=tx.get("transactionId") if isinstance(tx, dict) else None,
@@ -1338,6 +1531,8 @@ async def handle_webhook(request: Request):
                 "payoutsEnabled": payouts_enabled,
                 "detailsSubmitted": details_submitted,
             })
+        elif company_id:
+            sync_charges_enabled({"stripeConnectedAccountId": acct_id, "chargesEnabled": charges_enabled})
         print(f"[stripe][webhook] Account updated: {acct_id} charges={charges_enabled}")
 
     return JSONResponse({"received": True}, status_code=200)

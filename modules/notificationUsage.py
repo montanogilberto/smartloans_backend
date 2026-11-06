@@ -15,8 +15,9 @@ Read-only. What each provider can actually tell us:
   by the screen from our rows.
 
 Env:
-  WHATSAPP_FREE_MONTHLY_LIMIT   optional int — free WhatsApp allowance / month the
-                                screen measures against. Unset => limit is null.
+  WHATSAPP_LIMIT_24H            optional int — Meta's messaging limit: customers the
+                                business may start a chat with in a rolling 24 h.
+                                The screen measures against it. Unset => limit is null.
   WA_SENDER_PHONE_NUMBER_ID     set => app WhatsApp goes out through Meta.
 """
 import logging
@@ -50,7 +51,7 @@ def _twilio_client():
 
 
 def _limit() -> int | None:
-    raw = os.getenv("WHATSAPP_FREE_MONTHLY_LIMIT", "").strip()
+    raw = os.getenv("WHATSAPP_LIMIT_24H", "").strip()
     return int(raw) if raw.isdigit() and int(raw) > 0 else None
 
 

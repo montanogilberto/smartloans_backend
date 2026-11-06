@@ -18,12 +18,13 @@ import certifi
 from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 from databases import connection
+from modules.companies import company_name
 from modules.pushNotifications import pushNotifications_sp
 from modules.ticket_notifications import send_sms, send_whatsapp
 
 logger = logging.getLogger(__name__)
 
-COMPANY_NAME = os.getenv("COMPANY_NAME", "Lavandería GMO")
+FALLBACK_COMPANY_NAME = "GMO"
 
 
 def _conn():
@@ -44,9 +45,9 @@ def _sp(json_file: dict, procedure: str = "sp_reservations"):
             conn.close()
 
 
-def _send_confirmation_sms(phone: str, name: str, service: str, date: str, time_slot: str, reservation_id: int):
+def _send_confirmation_sms(phone: str, name: str, service: str, date: str, time_slot: str, reservation_id: int, company: str):
     body = (
-        f"✅ Reservación confirmada - {COMPANY_NAME}\n"
+        f"✅ Reservación confirmada - {company}\n"
         f"Hola {name}! Tu reservación para {service} está lista.\n"
         f"📅 Fecha: {date}  🕐 Hora: {time_slot}\n"
         f"Folio: #{reservation_id}\n"
@@ -59,9 +60,9 @@ def _send_confirmation_sms(phone: str, name: str, service: str, date: str, time_
         logger.warning("[reservations] SMS failed: %s", e)
 
 
-def _send_confirmation_whatsapp(phone: str, name: str, service: str, date: str, time_slot: str, reservation_id: int):
+def _send_confirmation_whatsapp(phone: str, name: str, service: str, date: str, time_slot: str, reservation_id: int, company: str):
     body = (
-        f"✅ *Reservación confirmada - {COMPANY_NAME}*\n\n"
+        f"✅ *Reservación confirmada - {company}*\n\n"
         f"Hola *{name}*! Tu reservación para *{service}* está lista.\n\n"
         f"📅 *Fecha:* {date}\n"
         f"🕐 *Hora:* {time_slot}\n"
@@ -70,13 +71,13 @@ def _send_confirmation_whatsapp(phone: str, name: str, service: str, date: str, 
     )
     try:
         send_whatsapp(phone, body, "reservacion_confirmada",
-                      [COMPANY_NAME, name, service, date, time_slot, reservation_id])
+                      [company, name, service, date, time_slot, reservation_id])
         logger.info("[reservations] WhatsApp sent to %s for reservation #%d", phone, reservation_id)
     except Exception as e:
         logger.warning("[reservations] WhatsApp failed: %s", e)
 
 
-def _send_confirmation_email(email: str, name: str, service: str, date: str, time_slot: str, reservation_id: int, detail: Optional[str]):
+def _send_confirmation_email(email: str, name: str, service: str, date: str, time_slot: str, reservation_id: int, detail: Optional[str], company: str):
     smtp_server = os.getenv("SMTP_SERVER", "smtp.office365.com")
     port = int(os.getenv("SMTP_PORT", "587"))
     sender = os.getenv("SMTP_USER", "")
@@ -87,12 +88,12 @@ def _send_confirmation_email(email: str, name: str, service: str, date: str, tim
 
     detail_line = f"<p><strong>Servicio:</strong> {detail}</p>" if detail else ""
 
-    subject = f"✅ Reservación #{reservation_id} — {COMPANY_NAME}"
+    subject = f"✅ Reservación #{reservation_id} — {company}"
     html = f"""
     <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;background:#f9f9f9;border-radius:12px">
       <h2 style="color:#0a2d6e">¡Reservación Confirmada!</h2>
       <p>Hola <strong>{name}</strong>,</p>
-      <p>Tu reservación en <strong>{COMPANY_NAME}</strong> ha sido registrada con éxito.</p>
+      <p>Tu reservación en <strong>{company}</strong> ha sido registrada con éxito.</p>
       <table style="border-collapse:collapse;width:100%">
         <tr><td style="padding:8px 0;color:#555">Servicio</td><td><strong>{service}</strong></td></tr>
         {detail_line.replace('<p>','<tr><td style="padding:8px 0;color:#555">Detalle</td><td>').replace('</p>','</td></tr>') if detail else ''}
@@ -169,10 +170,11 @@ def notify_customer(row: dict):
     """SMS (Twilio) + WhatsApp (Meta template, Twilio fallback) + email confirmation to the customer."""
     args = (row.get("phone", ""), row.get("clientName", ""), row.get("serviceType", ""),
             row.get("reservationDate", ""), row.get("timeSlot", ""), row["reservationId"])
-    _send_confirmation_sms(*args)
-    _send_confirmation_whatsapp(*args)
+    company = company_name({"companyId": row.get("companyId")}) or FALLBACK_COMPANY_NAME
+    _send_confirmation_sms(*args, company)
+    _send_confirmation_whatsapp(*args, company)
     if row.get("email"):
-        _send_confirmation_email(row["email"], *args[1:], row.get("serviceDetail"))
+        _send_confirmation_email(row["email"], *args[1:], row.get("serviceDetail"), company)
 
 
 async def notify_pos(row: dict, source: str = "kiosco"):

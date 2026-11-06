@@ -56,6 +56,7 @@ def _sp(proc: str, json_file: dict):
 
 CASH_ACCOUNT_CODE = '1101'              # Caja (ASSET)
 DEFAULT_BANK_ACCOUNT_CODE = '1105'      # Bancos (ASSET)
+CUSTOMER_ADVANCES_ACCOUNT_CODE = '2115'  # Anticipos de clientes (LIABILITY)
 DEFAULT_INCOME_ACCOUNT_CODE = '4105'    # Ingresos por ventas (INCOME)
 DEFAULT_EXPENSE_ACCOUNT_CODE = '5105'   # Gastos de operación (EXPENSE)
 COMMISSION_EXPENSE_ACCOUNT_CODE = '5120'  # Comisiones bancarias (EXPENSE)
@@ -179,6 +180,17 @@ def post_income_journal_entry(company_id: int, income_id: int, amount: float, en
         company_id, 'income', income_id, amount, entry_date,
         description=f"Ingreso #{income_id}",
         debit_code=cash_or_bank_code(payment_method), credit_code=DEFAULT_INCOME_ACCOUNT_CODE,
+    )
+
+
+def post_wallet_topup_journal_entry(company_id: int, ledger_entry_id: int, amount: float, entry_date=None,
+                                    payment_method=None) -> bool:
+    """Debe Caja or Bancos / Haber Anticipos de clientes: a top-up is money the
+    company owes in services, so it only becomes income when the saldo is spent."""
+    return _post_movement_journal_entry(
+        company_id, 'wallet_topup', ledger_entry_id, amount, entry_date,
+        description=f"Recarga de saldo #{ledger_entry_id}",
+        debit_code=cash_or_bank_code(payment_method), credit_code=CUSTOMER_ADVANCES_ACCOUNT_CODE,
     )
 
 

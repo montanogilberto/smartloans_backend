@@ -114,3 +114,36 @@ async def require_session_or_worker_key(request: Request, x_worker_key: str | No
         body = None
     if not isinstance(body, dict) or str(body.get("userId")) != claims["sub"]:
         raise HTTPException(status_code=403, detail="Forbidden")
+
+
+_COMPANY_ADMIN_ROLES = {"admin", "manager"}  # same roles as the POS "Agente WhatsApp" screens
+
+
+def require_company_admin_on_write(key: str):
+    """Guards a catalog endpoint whose body is {key: [{action, companyId, ...}]}.
+    Reads stay open: the agent and the kiosk call them. A write needs the worker
+    key, or a session of an admin/manager of that row's company. This data reaches
+    customers (the CLABE to pay to, for one), so the company comes from the signed
+    token, never from the X-Company-Id header."""
+    async def guard(request: Request, x_worker_key: str | None = Header(default=None)) -> None:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        rows = body.get(key) if isinstance(body, dict) else None
+        rows = rows if isinstance(rows, list) and rows and all(isinstance(r, dict) for r in rows) else None
+        if rows and all(r.get("action") in (None, 0, "0") for r in rows):
+            return
+        token = _bearer(request)
+        if not token:
+            require_worker_key(x_worker_key)
+            return
+        claims = decode(token, "access")
+        if claims is None:
+            raise HTTPException(status_code=401, detail="Session expired")
+        allowed = {_as_int(c.get("companyId")) for c in claims.get("companies") or []
+                   if str(c.get("role") or "").strip().lower() in _COMPANY_ADMIN_ROLES}
+        allowed.discard(0)
+        if not rows or any(_as_int(r.get("companyId")) not in allowed for r in rows):
+            raise HTTPException(status_code=403, detail="Forbidden")
+    return guard

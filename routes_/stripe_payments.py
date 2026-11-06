@@ -8,6 +8,7 @@ from modules.stripe_payments import (
     get_onboarding_link,
     create_payment_intent,
     confirm_payment_intent,
+    answer_save_card,
     disburse_loan,
     withdraw_to_bank,
     list_transactions,
@@ -215,6 +216,11 @@ async def transactions(json: dict):
 
 
 # ── Webhook ───────────────────────────────────────────────────────────────────
+
+@router.post("/top-up/save-card", summary="Keep or remove the card used for a top-up")
+async def top_up_save_card(json: dict):
+    return await answer_save_card(json)
+
 
 @router.post(
     "/webhook",

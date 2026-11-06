@@ -54,7 +54,7 @@ from routes_ import (
     digitalContracts, legalCases, disbursement,
     document_intelligence, geocoding, onboardingReminders, registrationReminders,
     clientFollowUps, clientContactPreferences,
-    bankAccounts, walletTransactions, transfers,
+    bankAccounts, walletTransactions, transfers, companyPaymentAccounts, walletTopUps,
     paymentIntents, fundingTransactions, transferEvidence, paymentHistory,
     featureFlags,
     arcade,
@@ -243,6 +243,8 @@ app.include_router(notificationDispatch.router)
 # CLABEs verificadas + ledger inmutable + dispersión SPEI (STP, mock hasta contrato)
 app.include_router(bankAccounts.router)
 app.include_router(walletTransactions.router)
+app.include_router(companyPaymentAccounts.router)
+app.include_router(walletTopUps.router)
 app.include_router(transfers.router)
 app.include_router(creditScore.router)
 app.include_router(walletBalance.router)

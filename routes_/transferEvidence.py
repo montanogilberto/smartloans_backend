@@ -22,7 +22,7 @@ attached to a fundingTransactions or (future) loanPayments declaration.
 See sql/sp_transferEvidence.sql, RFC-002 §3, RFC-003 §3/§6.
 
 action "create": { "transferEvidence": [{ "action": "create", "companyId": int,
-  "referenceType": "FUNDING"|"INSTALLMENT"|"PARTIAL"|"PAYOFF", "referenceId": int,
+  "referenceType": "FUNDING"|"INSTALLMENT"|"PARTIAL"|"PAYOFF"|"WALLET_TOPUP", "referenceId": int,
   "claveRastreo": str, "transferDate": str, "bankFrom"?: str, "amountMXN": float,
   "evidenceFileUrl"?: str, "evidenceHash"?: str, "uploadedByClientId": int }] }
   FUNDING is fully validated: referenceId must be a PENDING_CONFIRMATION

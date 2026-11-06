@@ -5,6 +5,7 @@ from modules.whatsappAssistant import (
     whatsapp_agent_insights,
 )
 from modules.whatsappCloud import staff_reply
+from security.session_tokens import require_company_admin_on_write
 from security.worker_key import require_worker_key
 
 router = APIRouter()
@@ -26,6 +27,7 @@ action 2 — update (only keys sent): { ..., "action": 2, "companyId": int, "pro
 action 3 — deactivate: { ..., "action": 3, "companyId": int, "promotionId": int }
 → { "result": [{ "promotions": [...] }] }
 """,
+    dependencies=[Depends(require_company_admin_on_write("promotions"))],
 )
 def promotions(json: dict):
     return assistant_catalog_sp("promotions", json)
@@ -45,6 +47,7 @@ action 1 — upsert (only keys sent change): { "businessInfo": [{ "action": 1, "
   company-wide row together, never one by one)
 → { "result": [{ "businessInfo": [{ companyName, branchName, address, ... }] }] }
 """,
+    dependencies=[Depends(require_company_admin_on_write("businessInfo"))],
 )
 def business_info(json: dict):
     return assistant_catalog_sp("businessInfo", json)
@@ -61,6 +64,7 @@ action 2 — update (only keys sent): { ..., "action": 2, "companyId": int, "faq
 action 3 — deactivate: { ..., "action": 3, "companyId": int, "faqId": int }
 → { "result": [{ "businessFaqs": [...] }] }
 """,
+    dependencies=[Depends(require_company_admin_on_write("businessFaqs"))],
 )
 def business_faqs(json: dict):
     return assistant_catalog_sp("businessFaqs", json)
