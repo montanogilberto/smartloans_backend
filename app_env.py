@@ -16,6 +16,14 @@ APP_ENV: str = (os.getenv("APP_ENV") or "prod").strip().lower()
 IS_PROD: bool = APP_ENV == "prod"
 IS_DEV: bool = not IS_PROD
 
+# Scheduled jobs (daily charge_due, client reminders, funding sweeps) act on
+# whatever DB LOCAL_DB_* points to. Run them only in prod so a local backend
+# never double-charges or double-notifies; ENABLE_SCHEDULER=true/false overrides.
+_scheduler_flag = (os.getenv("ENABLE_SCHEDULER") or "").strip().lower()
+SCHEDULER_ENABLED: bool = (
+    _scheduler_flag in ("1", "true", "yes") if _scheduler_flag else IS_PROD
+)
+
 # Extra CORS origins for this environment (comma-separated), e.g. the DEV/QA
 # Static Web App URLs:  CORS_EXTRA_ORIGINS=https://xxx.azurestaticapps.net,https://yyy...
 CORS_EXTRA_ORIGINS: list[str] = [
@@ -27,5 +35,6 @@ def describe() -> str:
     """One-line startup banner: which env and which DB this process talks to."""
     return (
         f"APP_ENV={APP_ENV} "
-        f"DB={os.getenv('LOCAL_DB_SERVER', '?')}/{os.getenv('LOCAL_DB_NAME', '?')}"
+        f"DB={os.getenv('LOCAL_DB_SERVER', '?')}/{os.getenv('LOCAL_DB_NAME', '?')} "
+        f"SCHEDULER={'on' if SCHEDULER_ENABLED else 'off'}"
     )
