@@ -40,6 +40,7 @@ import httpx
 from fastapi.responses import JSONResponse
 
 from modules import clientContactPreferences, marketingLeadAttributions, whatsappChannels, whatsappReservations
+from modules import whatsappEvidence
 from modules.whatsapp import log_message_to_database
 from modules.whatsappAssistant import _sp as assistant_sp
 from observability.integrations import timed_integration
@@ -267,6 +268,7 @@ def _extract_inbound(payload: dict) -> List[Dict[str, Any]]:
                     "messageId": msg.get("id"),
                     "type": msg_type,
                     "text": text,
+                    "mediaId": (msg.get("image") or {}).get("id"),
                     "referral": msg.get("referral"),
                     "timestamp": msg.get("timestamp"),
                 })
@@ -403,8 +405,12 @@ def _handle_message(msg: dict) -> None:
     if reply is None:
         if not channel.get("botEnabled"):
             return
-        reply = whatsappReservations.reply_to(channel, phone, msg["name"], msg["text"],
-                                              on_answering=lambda: show_typing(channel, msg["messageId"]))
+        if msg["type"] == "image":
+            show_typing(channel, msg["messageId"])
+            reply = whatsappEvidence.handle_image(channel, phone, msg.get("mediaId"))
+        if reply is None:
+            reply = whatsappReservations.reply_to(channel, phone, msg["name"], msg["text"],
+                                                  on_answering=lambda: show_typing(channel, msg["messageId"]))
     if not reply:
         return
     try:

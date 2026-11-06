@@ -63,18 +63,18 @@ class MonthStartTest(unittest.TestCase):
 
 class BuildUsageTest(unittest.TestCase):
     def setUp(self):
-        for k in ("WHATSAPP_FREE_MONTHLY_LIMIT", "WA_SENDER_PHONE_NUMBER_ID"):
+        for k in ("WHATSAPP_LIMIT_24H", "WA_SENDER_PHONE_NUMBER_ID"):
             os.environ.pop(k, None)
 
     def test_no_limit_configured_is_null(self):
         self.assertIsNone(nu.build_usage(nu.count_messages([]), SINCE)["whatsappLimit"])
 
     def test_limit_from_env(self):
-        with mock.patch.dict(os.environ, {"WHATSAPP_FREE_MONTHLY_LIMIT": "1000"}):
+        with mock.patch.dict(os.environ, {"WHATSAPP_LIMIT_24H": "1000"}):
             self.assertEqual(nu.build_usage(nu.count_messages([]), SINCE)["whatsappLimit"], 1000)
 
     def test_garbage_limit_is_ignored(self):
-        with mock.patch.dict(os.environ, {"WHATSAPP_FREE_MONTHLY_LIMIT": "abc"}):
+        with mock.patch.dict(os.environ, {"WHATSAPP_LIMIT_24H": "abc"}):
             self.assertIsNone(nu.build_usage(nu.count_messages([]), SINCE)["whatsappLimit"])
 
     def test_whatsapp_provider_follows_meta_sender(self):

@@ -362,7 +362,7 @@ def authorize(device_id, device_key, payload: dict):
             direction="D", amount_mxn=float(use["amountMXN"]),
             idempotency_key=f"laundry:{device['deviceId']}:{request_id}",
             reference_type="laundryDeviceUse", reference_id=use["useId"],
-            note=f"Lavandería: {device.get('name')}" + (f" · {use['choiceName']}" if use.get("choiceName") else ""),
+            note=f"{device.get('name')}" + (f" · {use['choiceName']}" if use.get("choiceName") else ""),
         )
         available = None
         if entry.get("error") == "Saldo insuficiente":

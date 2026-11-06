@@ -67,7 +67,7 @@ CREATE TABLE [dbo].[transferEvidence] (
     -- RFC-003 §3: "Clave única por company = idempotencia."
     CONSTRAINT UQ_transferEvidence_claveRastreo UNIQUE (companyId, claveRastreo),
     CONSTRAINT CK_transferEvidence_referenceType CHECK (
-        referenceType IN ('FUNDING','INSTALLMENT','PARTIAL','PAYOFF')
+        referenceType IN ('FUNDING','INSTALLMENT','PARTIAL','PAYOFF','WALLET_TOPUP')
     ),
     CONSTRAINT CK_transferEvidence_amount CHECK (amountMXN > 0)
 )

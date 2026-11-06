@@ -22,7 +22,7 @@ whole Twilio account (every company and direct ticket sends), counted from the
 Messages API by final status — not Usage Records, which skip unpriced messages.
 Meta WhatsApp and Push are not here: the screen counts them from
 dbo.notificationDispatches (Meta status webhooks set confirmed/failed; Notification
-Hub has no per-device receipt). whatsappLimit is WHATSAPP_FREE_MONTHLY_LIMIT.
+Hub has no per-device receipt). whatsappLimit is WHATSAPP_LIMIT_24H.
 """,
 )
 def notifications_usage():

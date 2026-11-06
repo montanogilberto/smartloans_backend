@@ -65,6 +65,7 @@ action 2 — bot / channel on-off:
     "botEnabled"?: bool, "isActive"?: bool }] }
 → { "result": [{ "whatsappChannels": [...] }] }
 """,
+    dependencies=[Depends(require_worker_key)],
 )
 def whatsapp_channels(json: dict):
     return whatsapp_channels_sp(json)
