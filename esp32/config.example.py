@@ -9,7 +9,7 @@ DEVICE_ID = "ID_DEL_DISPOSITIVO"
 DEVICE_KEY = "LLAVE_QUE_DEVOLVIO_EL_SERVIDOR"   # se entrega una sola vez al crear/rotar
 
 # Hardware
-RELAY_PIN = 26          # salida al relé que enciende la lavadora
+RELAY_PIN = 13          # salida al relé que enciende la lavadora
 RELAY_ACTIVE_HIGH = True
 LED_PIN = 2             # LED de estado
 

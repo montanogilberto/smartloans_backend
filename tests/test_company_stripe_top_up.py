@@ -349,3 +349,119 @@ class RouteTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlatformTopUpTest(unittest.TestCase):
+    """RFC-010 Amendment A: a company the platform owns charges on the platform's
+    own Stripe account; any other company never can."""
+    OWNED = next(iter(accounts.PLATFORM_TOPUP_COMPANIES))
+
+    def setUp(self):
+        self.addCleanup(mock.patch.stopall)
+
+    def test_an_owned_company_resolves_to_the_platform(self):
+        rows = [{"accountType": "stripe_platform", "chargesEnabled": True}]
+        with mock.patch.object(accounts, "_read", return_value=rows):
+            self.assertEqual(accounts.active_stripe_account({"companyId": self.OWNED}), accounts.PLATFORM_ACCOUNT)
+
+    def test_another_company_never_charges_on_the_platform(self):
+        rows = [{"accountType": "stripe_platform", "chargesEnabled": True}]
+        with mock.patch.object(accounts, "_read", return_value=rows):
+            self.assertEqual(accounts.active_stripe_account({"companyId": 7}), "")
+
+    def test_the_companys_own_stripe_wins(self):
+        rows = [{"accountType": "stripe_platform", "chargesEnabled": True},
+                {"accountType": "stripe_connect", "stripeConnectedAccountId": ACCT, "chargesEnabled": True}]
+        with mock.patch.object(accounts, "_read", return_value=rows):
+            self.assertEqual(accounts.active_stripe_account({"companyId": self.OWNED}), ACCT)
+
+    def test_the_charge_runs_on_the_platform_and_sends_no_account(self):
+        create = mock.patch.object(sp.stripe.PaymentIntent, "create",
+                                   return_value={"id": "pi_1", "client_secret": "sec"}).start()
+        mock.patch.object(sp.stripe, "api_key", "sk_test_real").start()
+        mock.patch.object(sp, "_sp_transaction", return_value={"transactionId": 1}).start()
+        mock.patch.object(sp, "log_integration").start()
+        mock.patch.object(sp, "log_workflow_step").start()
+        mock.patch.object(sp, "_company_stripe_account", return_value=accounts.PLATFORM_ACCOUNT).start()
+        mock.patch.object(sp, "_company_customer", return_value="cus_1").start()
+        body = _body(asyncio.run(sp.create_payment_intent({**TOP_UP, "companyId": self.OWNED})))
+        kwargs = create.call_args.kwargs
+        self.assertNotIn("stripe_account", kwargs)
+        self.assertEqual(kwargs["payment_method_types"], ["card"])
+        self.assertNotIn("stripeAccount", body)
+        self.assertTrue(body["canSaveCard"])
+
+    def test_the_customer_is_matched_by_company_on_the_platform(self):
+        search = mock.patch.object(sp.stripe.Customer, "search", return_value={"data": []}).start()
+        create = mock.patch.object(sp.stripe.Customer, "create", return_value={"id": "cus_2"}).start()
+        self.assertEqual(sp._company_customer(accounts.PLATFORM_ACCOUNT, 9, self.OWNED), "cus_2")
+        self.assertIn(f"metadata['topUpCompanyId']:'{self.OWNED}'", search.call_args.kwargs["query"])
+        self.assertNotIn("stripe_account", search.call_args.kwargs)
+        self.assertEqual(create.call_args.kwargs["metadata"]["topUpCompanyId"], str(self.OWNED))
+
+    def test_save_card_refuses_another_companys_platform_charge(self):
+        intent = {"metadata": {"paymentType": "laundry_top_up", "companyId": "999"}, "payment_method": "pm_1"}
+        mock.patch.object(sp, "_intent_account", return_value=accounts.PLATFORM_ACCOUNT).start()
+        mock.patch.object(sp.stripe.PaymentIntent, "retrieve", return_value=intent).start()
+        detach = mock.patch.object(sp.stripe.PaymentMethod, "detach").start()
+        response = asyncio.run(sp.answer_save_card({"paymentIntentId": "pi_1", "companyId": self.OWNED, "save": False}))
+        self.assertEqual(response.status_code, 400)
+        detach.assert_not_called()
+
+    def test_requesting_it_needs_an_owned_company(self):
+        response = accounts.add_platform_account({"companyPaymentAccounts": [{"companyId": 7, "createdByUserId": 1}]})
+        self.assertEqual(_body(response)["error"], "platform_not_allowed")
+
+    def test_a_request_is_saved_as_a_pending_platform_account(self):
+        mock.patch.object(accounts, "list_accounts", return_value=[]).start()
+        mock.patch.object(accounts, "log_audit").start()
+        write = mock.patch.object(accounts, "_write",
+                                  return_value={"value": "3", "msg": "Inserted Successfully", "error": ""}).start()
+        response = accounts.add_platform_account(
+            {"companyPaymentAccounts": [{"companyId": self.OWNED, "createdByUserId": 1}]})
+        self.assertEqual(response.status_code, 200)
+        row = write.call_args.args[0]
+        self.assertEqual((row["accountType"], row["action"]), ("stripe_platform", 1))
+
+    def test_a_second_request_is_refused(self):
+        mock.patch.object(accounts, "list_accounts",
+                          return_value=[{"accountType": "stripe_platform", "accountStatus": "PENDING_VERIFICATION"}]).start()
+        write = mock.patch.object(accounts, "_write").start()
+        response = accounts.add_platform_account(
+            {"companyPaymentAccounts": [{"companyId": self.OWNED, "createdByUserId": 1}]})
+        self.assertEqual(_body(response)["error"], "platform_already_requested")
+        write.assert_not_called()
+
+    def test_the_route_needs_an_admin(self):
+        app = FastAPI()
+        app.include_router(routes.router)
+        mock.patch.object(worker_key, "WORKER_KEY", "key").start()
+        response = TestClient(app).post("/companyPaymentAccounts/stripe/platform", json={
+            "companyPaymentAccounts": [{"action": 7, "companyId": self.OWNED, "createdByUserId": 1}]})
+        self.assertEqual(response.status_code, 403)
+
+
+class CompanyAbsorbsFeeTest(unittest.TestCase):
+    """RFC-012 decision A: a company saldo top-up credits the full amount paid;
+    the P2P wallet keeps crediting the net."""
+    TX = {"paymentType": "laundry_top_up", "status": "succeeded", "prevStatus": "pending",
+          "amount": 10000, "fromClientId": 9, "companyId": 1, "stripePaymentIntentId": "pi_1", "transactionId": 4}
+
+    def setUp(self):
+        self.addCleanup(mock.patch.stopall)
+        self.post = mock.patch.object(sp, "post_entry", return_value={"entryId": 1}).start()
+        mock.patch.object(sp, "log_workflow_step").start()
+
+    def test_the_client_gets_what_they_paid(self):
+        asyncio.run(sp._settle_wallet_top_up(dict(self.TX), net_mxn=92.34))
+        self.assertEqual(self.post.call_args.kwargs["amount_mxn"], 100.0)
+
+    def test_the_app_is_told_the_full_amount(self):
+        self.assertEqual(sp._credited_mxn(self.TX, 100.0, 92.34), 100.0)
+
+    def test_the_p2p_wallet_still_gets_the_net(self):
+        self.assertEqual(sp._credited_mxn({**self.TX, "paymentType": "wallet_top_up"}, 100.0, 92.34), 92.34)
+        credit = mock.patch("modules.walletBalance.credit_wallet", new=mock.AsyncMock()).start()
+        asyncio.run(sp._settle_wallet_top_up({**self.TX, "paymentType": "wallet_top_up"}, net_mxn=92.34))
+        self.assertEqual(credit.await_args.args[0]["amountMXN"], 92.34)
+        self.post.assert_not_called()

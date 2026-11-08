@@ -84,6 +84,7 @@ class HandleKeywordTest(unittest.TestCase):
 class WebhookHookTest(unittest.TestCase):
     def setUp(self):
         self.channel = dict(CHANNEL)
+        wc._seen_messages.clear()  # each test is a new delivery
         self.sent, self.agent = [], mock.Mock(return_value="¿En qué te ayudo?")
         for p in (mock.patch.object(wc.whatsappChannels, "get_channel", lambda _id: self.channel),
                   mock.patch.object(wc, "log_message_to_database"),
@@ -115,6 +116,30 @@ class WebhookHookTest(unittest.TestCase):
         self.assertEqual(self.sent, [])
         self.agent.assert_not_called()
 
+
+
+class DeliveryTest(WebhookHookTest):
+    """Reactions and Meta retries (2026-11-07 review of a customer chat)."""
+
+    def setUp(self):
+        super().setUp()
+        wc._seen_messages.clear()
+
+    def test_a_reaction_never_reaches_the_agent(self):
+        wc._handle_message({**_msg("[reaction]"), "type": "reaction", "messageId": "wamid.r1"})
+        self.agent.assert_not_called()
+        self.assertEqual(self.sent, [])
+
+    def test_a_retried_message_is_answered_once(self):
+        wc._handle_message({**_msg("hola"), "messageId": "wamid.dup"})
+        wc._handle_message({**_msg("hola"), "messageId": "wamid.dup"})
+        self.agent.assert_called_once()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_different_messages_are_each_answered(self):
+        wc._handle_message({**_msg("hola"), "messageId": "wamid.a"})
+        wc._handle_message({**_msg("hola"), "messageId": "wamid.b"})
+        self.assertEqual(self.agent.call_count, 2)
 
 if __name__ == "__main__":
     unittest.main()
