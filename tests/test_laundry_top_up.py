@@ -34,13 +34,14 @@ class LaundryTopUpTests(unittest.TestCase):
     def settle(self, tx, net=92.4):
         asyncio.run(sp._settle_wallet_top_up(tx, net_mxn=net))
 
-    def test_laundry_top_up_credits_ledger_net_once_per_intent(self):
+    def test_laundry_top_up_credits_ledger_gross_once_per_intent(self):
+        # RFC-012 decision A: the company absorbs the Stripe fee.
         self.settle(_tx("laundry_top_up"))
         self.post_entry.assert_called_once()
         kw = self.post_entry.call_args.kwargs
         self.assertEqual(kw["entry_type"], "DEPOSIT")
         self.assertEqual(kw["direction"], "C")
-        self.assertEqual(kw["amount_mxn"], 92.4)
+        self.assertEqual(kw["amount_mxn"], _tx("laundry_top_up")["amount"] / 100.0)
         self.assertEqual((kw["company_id"], kw["client_id"]), (1, 2260))
         self.assertEqual(kw["idempotency_key"], "stripe:pi_abc")
         self.credit_wallet.assert_not_called()

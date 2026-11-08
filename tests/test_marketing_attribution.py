@@ -93,6 +93,7 @@ class ExtractReferralTest(unittest.TestCase):
 
 class WebhookStubs(unittest.TestCase):
     def setUp(self):
+        wc._seen_messages.clear()  # each test is a new delivery
         self.calls = []
         self.record = mock.Mock(side_effect=lambda *_: self.calls.append("record") or 1)
         self.reply_to = mock.Mock(side_effect=lambda *a, **k: self.calls.append("agent") or "¡Hola!")

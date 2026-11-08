@@ -187,7 +187,7 @@ FROM (VALUES
 
     ('employee', 'laundry'),    ('employee', 'pos'),                ('employee', 'posRewards'),
     ('employee', 'scannerqr'),  ('employee', 'sells'),              ('employee', 'rewards'),
-    ('employee', 'game'),       ('employee', 'arcade'),
+    ('employee', 'game'),       ('employee', 'arcade'),             ('employee', 'clients'),
 
     ('borrower', 'clientDashboards'),         ('borrower', 'loanChat'),
     ('borrower', 'loans'),      ('borrower', 'p2pLending'),         ('borrower', 'game'),

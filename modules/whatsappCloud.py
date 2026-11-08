@@ -30,6 +30,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import time
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -380,6 +381,26 @@ def _record_ad_referral(channel: dict, phone: str, msg: dict) -> None:
         logger.warning("[whatsappCloud] ad referral not recorded | id=%s", msg.get("messageId"))
 
 
+# Meta delivers at least once: a retry of a message already answered must not
+# get a second reply. In process only — another App Service instance can still
+# see a retry, so this cuts duplicates, it doesn't guarantee none.
+SEEN_MESSAGE_SECONDS = 3600
+_seen_messages: dict[str, float] = {}
+
+
+def _first_delivery(message_id: str | None) -> bool:
+    if not message_id:
+        return True
+    now = time.time()
+    if len(_seen_messages) > 5000:
+        for key in [k for k, t in _seen_messages.items() if now - t > SEEN_MESSAGE_SECONDS]:
+            del _seen_messages[key]
+    if now - _seen_messages.get(message_id, 0) < SEEN_MESSAGE_SECONDS:
+        return False
+    _seen_messages[message_id] = now
+    return True
+
+
 def _handle_message(msg: dict) -> None:
     channel = whatsappChannels.get_channel(msg["phoneNumberId"])
     if not channel:
@@ -399,11 +420,18 @@ def _handle_message(msg: dict) -> None:
     except Exception:
         logger.exception("[whatsappCloud] failed to log inbound message")
 
+    # Only the reply is skipped on a retry: the logging and the ad referral
+    # above dedupe in their own SPs.
+    if not _first_delivery(msg.get("messageId")):
+        logger.info("[whatsappCloud] retry already answered | id=%s", msg.get("messageId"))
+        return
+
     # BAJA/ALTA (marketing consent) is answered even when the bot is off: an
     # opt-out must always work, and it is never passed on to the agent.
     reply = clientContactPreferences.handle_keyword(channel["companyId"], phone, msg["text"])
     if reply is None:
-        if not channel.get("botEnabled"):
+        # A reaction (❤️ on a message) is not something to answer.
+        if not channel.get("botEnabled") or msg["type"] == "reaction":
             return
         if msg["type"] == "image":
             show_typing(channel, msg["messageId"])

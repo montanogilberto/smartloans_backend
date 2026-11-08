@@ -12,6 +12,13 @@ from modules.bankAccounts import BANK_CODES, validate_clabe
 from observability.logger import log_audit
 
 WALLET_TOPUP_PURPOSE = "wallet_topup"
+
+# RFC-010 Amendment A: companies the platform owns may charge card top-ups on the
+# platform's own Stripe account. Any other company needs its own (stripe_connect),
+# so a third party's money never lands in ours. Lavandería = 1.
+PLATFORM_TOPUP_COMPANIES = frozenset({1})
+# Stands for "charge on the platform account": never a real Stripe id, never sent to the app.
+PLATFORM_ACCOUNT = "platform"
 _ACTION_INSERT, _ACTION_UPDATE, _ACTION_CONFIRM = 1, 2, 4
 
 
@@ -62,14 +69,27 @@ def _active_rows(json_file: dict) -> list:
         return []
 
 
-def _stripe_id(rows: list) -> str:
-    return next((str(r["stripeConnectedAccountId"]) for r in rows
-                 if r.get("accountType") == "stripe_connect" and r.get("chargesEnabled")), "")
+def platform_allowed(company_id: object) -> bool:
+    try:
+        return int(company_id) in PLATFORM_TOPUP_COMPANIES
+    except (TypeError, ValueError):
+        return False
+
+
+def _stripe_id(rows: list, company_id: object) -> str:
+    """The company's own Stripe account, PLATFORM_ACCOUNT, or "" (top-ups off)."""
+    own = next((str(r["stripeConnectedAccountId"]) for r in rows
+                if r.get("accountType") == "stripe_connect" and r.get("chargesEnabled")), "")
+    if own:
+        return own
+    if platform_allowed(company_id) and any(r.get("accountType") == "stripe_platform" for r in rows):
+        return PLATFORM_ACCOUNT
+    return ""
 
 
 def active_stripe_account(json_file: dict) -> str:
-    """The company's ACTIVE account with charges enabled, or ""."""
-    return _stripe_id(_active_rows(json_file))
+    """The account a company's card top-ups are charged on, or "" when they're off."""
+    return _stripe_id(_active_rows(json_file), json_file.get("companyId"))
 
 
 def active_accounts(json_file: dict) -> JSONResponse:
@@ -78,7 +98,7 @@ def active_accounts(json_file: dict) -> JSONResponse:
     rows = _active_rows(json_file)
     spei = next((r for r in rows if r.get("accountType") == "spei"), None)
     return JSONResponse({
-        "cardTopUpAvailable": bool(_stripe_id(rows)),
+        "cardTopUpAvailable": bool(_stripe_id(rows, json_file.get("companyId"))),
         "transferAccount": spei and {k: spei.get(k) for k in ("holderName", "clabe", "bankName", "terminalName")},
     }, status_code=200)
 
@@ -94,6 +114,31 @@ def add_stripe_account(json_file: dict) -> dict:
     log_audit("CompanyPaymentAccount", int(result["value"]), "stripeConnectedAccountId",
               None, json_file.get("stripeConnectedAccountId"), action="INSERT")
     return {"companyPaymentAccountId": int(result["value"])}
+
+
+def add_platform_account(json_file: dict) -> JSONResponse:
+    """An admin asks to charge top-ups on the platform's Stripe account. Only a
+    company the platform owns may, and a second admin must still confirm it."""
+    row = (json_file.get("companyPaymentAccounts") or [{}])[0]
+    company_id = row.get("companyId")
+    if not platform_allowed(company_id):
+        return JSONResponse({"error": "platform_not_allowed"}, status_code=400)
+    try:
+        if any(a.get("accountType") == "stripe_platform" and a.get("accountStatus") != "ARCHIVED"
+               for a in list_accounts({"companyId": company_id})):
+            return JSONResponse({"error": "platform_already_requested"}, status_code=400)
+        result = _write({
+            "action": _ACTION_INSERT, "accountType": "stripe_platform", "companyId": company_id,
+            "purpose": WALLET_TOPUP_PURPOSE, "holderName": str(row.get("holderName") or "Cuenta Stripe de GMO"),
+            "createdByUserId": row.get("createdByUserId"),
+        })
+        if _failed(result):
+            return JSONResponse({"error": result.get("msg")}, status_code=400)
+        log_audit("CompanyPaymentAccount", int(result["value"]), "accountType", None, "stripe_platform",
+                  action="INSERT")
+        return JSONResponse({"result": [result]}, status_code=200)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 def sync_charges_enabled(json_file: dict) -> None:

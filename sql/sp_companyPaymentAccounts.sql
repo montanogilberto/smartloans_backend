@@ -67,7 +67,7 @@ BEGIN
         BEGIN
             IF EXISTS (SELECT 1 FROM @payload
                        WHERE companyId IS NULL OR purpose IS NULL OR holderName IS NULL OR createdByUserId IS NULL
-                          OR accountType NOT IN ('spei', 'stripe_connect')
+                          OR accountType NOT IN ('spei', 'stripe_connect', 'stripe_platform')
                           OR (accountType = 'spei' AND (LEN(ISNULL(clabe, '')) <> 18 OR commissionTerminalId IS NULL))
                           OR (accountType = 'stripe_connect' AND stripeConnectedAccountId IS NULL))
             BEGIN
@@ -89,7 +89,7 @@ BEGIN
                  bankName, holderName, rfc, stripeConnectedAccountId, chargesEnabled, createdByUserId)
             SELECT p.companyId, p.commissionTerminalId, p.purpose, p.accountType, 'PENDING_VERIFICATION', p.clabe,
                    p.clabeHash, LEFT(p.clabe, 3), p.bankName, p.holderName, p.rfc, p.stripeConnectedAccountId,
-                   CASE WHEN p.accountType = 'stripe_connect' THEN 0 END, p.createdByUserId
+                   CASE p.accountType WHEN 'stripe_connect' THEN 0 WHEN 'stripe_platform' THEN 1 END, p.createdByUserId
             FROM @payload AS p;
 
             SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(SCOPE_IDENTITY() AS VARCHAR(20)));
@@ -131,9 +131,13 @@ BEGIN
                 GOTO Finish;
             END
 
+            -- One card account per company: the company's own Stripe and the platform's replace each other.
             UPDATE dbo.companyPaymentAccounts
             SET accountStatus = 'ARCHIVED', archivedAt = GETDATE(), updated_at = GETDATE()
-            WHERE companyId = @rowCompany AND purpose = @rowPurpose AND accountType = @rowType AND accountStatus = 'ACTIVE';
+            WHERE companyId = @rowCompany AND purpose = @rowPurpose AND accountStatus = 'ACTIVE'
+              AND (accountType = @rowType
+                   OR (@rowType IN ('stripe_connect', 'stripe_platform')
+                       AND accountType IN ('stripe_connect', 'stripe_platform')));
 
             UPDATE t
             SET t.accountStatus = 'ACTIVE', t.verifiedByUserId = p.verifiedByUserId,

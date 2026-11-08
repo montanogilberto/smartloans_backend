@@ -27,7 +27,7 @@ from modules.walletBalance import debit_wallet
 from modules.walletTransactions import post_entry
 from modules.companies import company_name
 from modules.companyPaymentAccounts import (
-    active_stripe_account, add_stripe_account, confirm_account, list_accounts,
+    PLATFORM_ACCOUNT, active_stripe_account, add_stripe_account, confirm_account, list_accounts, platform_allowed,
     sync_charges_enabled, WALLET_TOPUP_PURPOSE,
 )
 from observability.logger import log_workflow_step, log_integration
@@ -668,21 +668,33 @@ async def get_onboarding_link(payload: dict):
 # ── Company accounts (RFC-010) ───────────────────────────────────────────────
 
 def _company_stripe_account(company_id) -> str:
+    """The company's own Stripe account id, PLATFORM_ACCOUNT, or "" (top-ups off)."""
     return active_stripe_account({"companyId": company_id, "purpose": WALLET_TOPUP_PURPOSE})
 
 
-def _company_customer(stripe_account: str, client_id) -> str:
-    """The client's Customer on the company's Stripe account, where saved cards
-    live, or "" if it can't be resolved: the top-up still goes through, only
-    saving the card is lost."""
+def _on(account: str) -> dict:
+    """Stripe call kwargs for a top-up account: none for the platform's own."""
+    return {"stripe_account": account} if account and account != PLATFORM_ACCOUNT else {}
+
+
+def _company_customer(stripe_account: str, client_id, company_id=None) -> str:
+    """The client's Customer on the account the top-up is charged on, where saved
+    cards live, or "" if it can't be resolved: the top-up still goes through, only
+    saving the card is lost. On the platform account the company is part of the
+    match, so a top-up never picks up a Customer made for something else."""
     try:
         client = int(client_id)
-        found = stripe.Customer.search(query=f"metadata['clientId']:'{client}'", limit=1,
-                                       stripe_account=stripe_account)
+        query = f"metadata['clientId']:'{client}'"
+        metadata = {"clientId": str(client)}
+        if stripe_account == PLATFORM_ACCOUNT:
+            company = int(company_id)
+            query += f" AND metadata['topUpCompanyId']:'{company}'"
+            metadata["topUpCompanyId"] = str(company)
+        found = stripe.Customer.search(query=query, limit=1, **_on(stripe_account))
         if found["data"]:
             return found["data"][0]["id"]
-        return stripe.Customer.create(metadata={"clientId": str(client)}, stripe_account=stripe_account,
-                                      idempotency_key=f"customer-{stripe_account}-{client}")["id"]
+        return stripe.Customer.create(metadata=metadata, **_on(stripe_account),
+                                      idempotency_key=f"customer-{stripe_account}-{company_id or ''}-{client}")["id"]
     except Exception as e:
         print(f"[stripe][company] customer lookup failed clientId={client_id}: {e}")
         return ""
@@ -698,12 +710,13 @@ async def answer_save_card(payload: dict):
         acct = _intent_account(payload.get("companyId"), payload.get("stripeAccount"))
         if not acct:
             return JSONResponse({"error": "Compañía sin cuenta Stripe activa"}, status_code=400)
-        intent = stripe.PaymentIntent.retrieve(intent_id, stripe_account=acct)
-        if intent["metadata"]["paymentType"] != LAUNDRY_TOP_UP:
+        intent = stripe.PaymentIntent.retrieve(intent_id, **_on(acct))
+        if intent["metadata"]["paymentType"] != LAUNDRY_TOP_UP or (
+                acct == PLATFORM_ACCOUNT and intent["metadata"].get("companyId") != str(payload.get("companyId"))):
             return JSONResponse({"error": "Pago no válido"}, status_code=400)
         keep = payload.get("save") is True
         if not keep and intent["payment_method"]:
-            stripe.PaymentMethod.detach(intent["payment_method"], stripe_account=acct)
+            stripe.PaymentMethod.detach(intent["payment_method"], **_on(acct))
         log_workflow_step("Top-up Card Choice", workflow_name="money_trail", action=LAUNDRY_TOP_UP,
                           entity="stripeTransactions", message=f"intent {intent_id} keep={keep}")
         return JSONResponse({"saved": keep}, status_code=200)
@@ -744,7 +757,8 @@ async def list_company_accounts(payload: dict):
     row = (payload.get("companyPaymentAccounts") or [{}])[0]
     try:
         rows = _refresh_pending_accounts(list_accounts({"companyId": row.get("companyId")}))
-        return JSONResponse({"companyPaymentAccounts": rows}, status_code=200)
+        return JSONResponse({"companyPaymentAccounts": rows,
+                             "platformTopUpAllowed": platform_allowed(row.get("companyId"))}, status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -855,7 +869,7 @@ async def create_payment_intent(payload: dict):
         return JSONResponse({"error": "Monto mínimo: $1.00 MXN"}, status_code=400)
 
     try:
-        customer = _company_customer(connected_account, from_client_id) if connected_account else ""
+        customer = _company_customer(connected_account, from_client_id, company_id) if connected_account else ""
         intent = stripe.PaymentIntent.create(
             amount=amount,
             currency="mxn",
@@ -870,7 +884,7 @@ async def create_payment_intent(payload: dict):
                 **metadata,
             },
             **({"customer": customer, "setup_future_usage": "off_session"} if customer else {}),
-            **({"stripe_account": connected_account, "payment_method_types": ["card"]} if connected_account
+            **({**_on(connected_account), "payment_method_types": ["card"]} if connected_account
                else {"payment_method_types": ["card", "oxxo"],
                      "payment_method_options": {"oxxo": {"expires_after_days": 3}}}),
         )
@@ -903,7 +917,9 @@ async def create_payment_intent(payload: dict):
             "transactionId": tx.get("transactionId", 0),
             "amount": amount,
             "currency": "mxn",
-            **({"stripeAccount": connected_account, "canSaveCard": bool(customer)} if connected_account else {}),
+            # The platform's own account is the app's default: it gets no stripeAccount.
+            **({"canSaveCard": bool(customer), **({"stripeAccount": connected_account} if _on(connected_account) else {})}
+               if connected_account else {}),
         }, status_code=200)
 
     except stripe.StripeError as e:
@@ -940,6 +956,13 @@ LAUNDRY_TOP_UP = "laundry_top_up"
 _TOP_UP_TYPES = ("wallet_top_up", LAUNDRY_TOP_UP)
 
 
+def _credited_mxn(tx: dict, gross_mxn: float, net_mxn: float) -> float:
+    """What reaches the client's balance. A company saldo top-up credits the full
+    amount paid and the company absorbs the fee (RFC-012, decision A); a P2P
+    wallet top-up still credits the net."""
+    return gross_mxn if isinstance(tx, dict) and tx.get("paymentType") == LAUNDRY_TOP_UP else net_mxn
+
+
 def _is_first_success(tx) -> bool:
     """update_status returns prevStatus, so only the caller that performed the
     pending→succeeded flip sees this as True."""
@@ -973,9 +996,10 @@ async def _settle_wallet_top_up(tx: dict, net_mxn: float = None, stripe_account:
     previous status, so only the caller that performed the pending→succeeded
     flip credits; the other sees prevStatus='succeeded' and skips.
 
-    Se acredita el NETO real (bruto − comisión Stripe): si el caller no lo
-    pasa (webhook), se resuelve aquí desde el balance transaction del intent,
-    con la fórmula MX como fallback. El cliente ve la comisión en la app."""
+    La cartera P2P recibe el NETO real (bruto − comisión Stripe): si el caller
+    no lo pasa (webhook), se resuelve aquí desde el balance transaction del
+    intent, con la fórmula MX como fallback. El saldo de una compañía recibe el
+    BRUTO: la comisión la absorbe la compañía (RFC-012, decisión A)."""
     try:
         if not isinstance(tx, dict) or tx.get("paymentType") not in _TOP_UP_TYPES:
             return
@@ -995,7 +1019,7 @@ async def _settle_wallet_top_up(tx: dict, net_mxn: float = None, stripe_account:
             intent_id = tx.get("stripePaymentIntentId") or ""
             entry = post_entry(
                 company_id=int(company_id), client_id=int(client_id), entry_type="DEPOSIT",
-                direction="C", amount_mxn=net_mxn, idempotency_key=f"stripe:{intent_id}",
+                direction="C", amount_mxn=gross_mxn, idempotency_key=f"stripe:{intent_id}",
                 reference_type="stripe_tx", reference_id=tx.get("transactionId"),
                 note="Recarga con tarjeta (Stripe)",
             )
@@ -1004,9 +1028,10 @@ async def _settle_wallet_top_up(tx: dict, net_mxn: float = None, stripe_account:
             log_workflow_step("Laundry Balance Credited", workflow_name="money_trail",
                               action=LAUNDRY_TOP_UP, entity="walletTransactions",
                               entity_id=entry.get("entryId"),
-                              message=f"+${net_mxn:,.2f} MXN neto (bruto ${gross_mxn:,.2f}) — intent {intent_id}")
-            print(f"[stripe][topup] laundry balance CREDITED clientId={client_id} +{net_mxn} MXN neto "
-                  f"(bruto {gross_mxn}, intent {intent_id})")
+                              message=f"+${gross_mxn:,.2f} MXN; comisión ${gross_mxn - net_mxn:,.2f} "
+                                      f"a cargo de la compañía — intent {intent_id}")
+            print(f"[stripe][topup] laundry balance CREDITED clientId={client_id} +{gross_mxn} MXN "
+                  f"(company fee {round(gross_mxn - net_mxn, 2)}, intent {intent_id})")
             return
 
         from modules.walletBalance import credit_wallet
@@ -1127,12 +1152,14 @@ def _send_transaction_receipt_email(tx: dict, intent_id: str,
             f"Fecha y hora:        {fecha}",
             "",
             f"Monto pagado:        ${gross_mxn:,.2f} MXN",
-            f"Comisión Stripe:     -${fee_mxn:,.2f} MXN",
         ]
-        if payment_type == "wallet_top_up":
-            lineas.append(f"Abonado a tu cartera: ${net_mxn:,.2f} MXN")
-        elif payment_type == LAUNDRY_TOP_UP:
-            lineas.append(f"Abonado a tu saldo:   ${net_mxn:,.2f} MXN")
+        if payment_type == LAUNDRY_TOP_UP:
+            # The company absorbs the fee: the client is credited what they paid.
+            lineas.append(f"Abonado a tu saldo:   ${gross_mxn:,.2f} MXN")
+        else:
+            lineas.append(f"Comisión Stripe:     -${fee_mxn:,.2f} MXN")
+            if payment_type == "wallet_top_up":
+                lineas.append(f"Abonado a tu cartera: ${net_mxn:,.2f} MXN")
         lineas += [
             "",
             "Puedes consultar este movimiento en la app GMO → SmartLoans → Movimientos.",
@@ -1188,7 +1215,8 @@ async def confirm_payment_intent(payload: dict):
                     "expiryMonth": 12, "expiryYear": 2030,
                 })
             return JSONResponse({"status": "succeeded", "stripePaymentIntentId": payment_intent_id,
-                                 "feeMXN": mock_fee, "netCreditedMXN": mock_net, **tx}, status_code=200)
+                                 "feeMXN": mock_fee, "netCreditedMXN": _credited_mxn(tx, mock_gross, mock_net),
+                                 **tx}, status_code=200)
 
         # expand: el balance transaction trae la comisión REAL de Stripe para
         # acreditar la cartera con el neto y reportarla al cliente.
@@ -1197,7 +1225,7 @@ async def confirm_payment_intent(payload: dict):
                              if payload.get("paymentType") == LAUNDRY_TOP_UP else None)
         intent = stripe.PaymentIntent.retrieve(
             payment_intent_id, expand=["latest_charge.balance_transaction"],
-            **({"stripe_account": connected_account} if connected_account else {}))
+            **_on(connected_account))
         # Bracket access, not .get(): stripe 15.x StripeObject is no longer a
         # dict — .get() raises AttributeError and this endpoint 500'd on every
         # call (same bug automatedPayments already fixed).
@@ -1235,7 +1263,8 @@ async def confirm_payment_intent(payload: dict):
             _send_receipt_async(tx, payment_intent_id, fee_mxn, net_mxn)
 
         return JSONResponse({"status": status, "stripePaymentIntentId": payment_intent_id,
-                             "feeMXN": fee_mxn, "netCreditedMXN": net_mxn, **tx}, status_code=200)
+                             "feeMXN": fee_mxn, "netCreditedMXN": _credited_mxn(tx, gross_mxn, net_mxn),
+                             **tx}, status_code=200)
 
     except stripe.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=400)

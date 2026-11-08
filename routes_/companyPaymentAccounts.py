@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from modules.companyPaymentAccounts import active_accounts, add_transfer_account
+from modules.companyPaymentAccounts import active_accounts, add_platform_account, add_transfer_account
 from modules.stripe_payments import company_onboarding_link, confirm_company_account, list_company_accounts
 from security.session_tokens import _bearer, decode, require_company_admin_on_write
 
@@ -49,6 +49,12 @@ async def confirm(request: Request, json: dict):
 @router.post("/transfer-account", summary="Register the company's CLABE (pending)", dependencies=_admin)
 def transfer_account(request: Request, json: dict):
     return add_transfer_account(_session_user(request, json, "createdByUserId"))
+
+
+@router.post("/stripe/platform", summary="Charge top-ups on the platform's Stripe account (pending)",
+             dependencies=_admin)
+def platform_account(request: Request, json: dict):
+    return add_platform_account(_session_user(request, json, "createdByUserId"))
 
 
 @router.post("/stripe/onboarding-link", summary="Connect the company's Stripe account", dependencies=_admin)
