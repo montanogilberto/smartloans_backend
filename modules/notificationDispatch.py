@@ -232,7 +232,9 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
       pushTitle, pushMessage,     # used only if a push attempt is made
       waSmsMessage,               # body used for whatsapp/sms
       messagePreview,             # short summary stored on the row
-      receiptUrl                  # optional, appended to waSmsMessage if given
+      receiptUrl,                 # optional, appended to waSmsMessage if given
+      waTemplate, waParams,       # optional Meta template override
+      navigationRoute             # optional, where a push tap opens the app
     }
     """
     conn = None
@@ -249,7 +251,11 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
         receipt_url = payload.get("receiptUrl")
         # Meta template (docs/whatsapp-templates.md) — built before the URL
         # is appended to the free-form text, which the template carries apart.
-        if receipt_url:
+        if payload.get("waTemplate"):
+            # The caller's own approved template (e.g. abono_saldo): a top-up
+            # is not a purchase, so detalle_compra's wording would be wrong.
+            wa_template, wa_params = payload["waTemplate"], payload.get("waParams") or [wa_sms_message]
+        elif receipt_url:
             wa_template, wa_params = "comprobante_listo", [wa_sms_message, receipt_url]
         else:
             wa_template, wa_params = "detalle_compra", [wa_sms_message]
@@ -333,7 +339,8 @@ async def dispatch_notification_connector(payload: dict) -> JSONResponse:
                     ) as span:
                         result = await send_azure_push(
                             title=push_title, message=push_message, target_user_id=push_user_id,
-                            data={"navigationRoute": None, "sourceType": source_type, "sourceId": source_id},
+                            data={"navigationRoute": payload.get("navigationRoute"), "sourceType": source_type,
+                                  "sourceId": source_id},
                         )
                         span.response = result
                         span.http_status = 200 if result.get("sent") else 502

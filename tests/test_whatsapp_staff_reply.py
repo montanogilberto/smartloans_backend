@@ -111,3 +111,32 @@ class NeverPauseTest(unittest.TestCase):
             wc._log_staff_echoes(payload)
         pause.assert_not_called()
         self.assertEqual(log_msg.call_args.kwargs["status"], "staff_app")
+
+
+class InboundMarksNumberTest(unittest.TestCase):
+    """Every inbound message marks the number the customer wrote to, so the
+    staff reply ('channel' lookup, ordered by updatedAt) uses that number and
+    not the number of the customer's last booking (Meta answered 400)."""
+
+    def test_inbound_touches_the_conversation_of_that_number(self):
+        channel = {**CHANNEL, "botEnabled": False}
+        msg = {"phoneNumberId": "PNID", "from": "5216621234567", "name": "Ana", "text": "hola",
+               "type": "text", "messageId": "wamid.T1"}
+        with mock.patch.object(wc.whatsappChannels, "get_channel", return_value=channel), \
+             mock.patch.object(wc, "_record_ad_referral") as referral, \
+             mock.patch.object(wc, "log_message_to_database"), \
+             mock.patch.object(wc.clientContactPreferences, "handle_keyword", return_value=None), \
+             mock.patch.object(wc.whatsappChannels, "touch") as touch:
+            wc._handle_message(msg)
+        touch.assert_called_once_with(3, "+526621234567")
+        referral.assert_called_once()  # still before the touch: a first message is still a new lead
+
+    def test_a_failed_touch_never_stops_the_message(self):
+        with mock.patch.object(wc.whatsappChannels, "get_channel", return_value={**CHANNEL, "botEnabled": False}), \
+             mock.patch.object(wc, "_record_ad_referral"), \
+             mock.patch.object(wc, "log_message_to_database") as logged, \
+             mock.patch.object(wc.clientContactPreferences, "handle_keyword", return_value=None), \
+             mock.patch.object(wc.whatsappChannels, "touch", side_effect=RuntimeError("db down")):
+            wc._handle_message({"phoneNumberId": "PNID", "from": "5216621234567", "text": "hola",
+                                "type": "text", "messageId": "wamid.T2"})
+        logged.assert_called_once()

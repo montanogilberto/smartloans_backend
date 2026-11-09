@@ -70,6 +70,83 @@ class ConfirmTest(unittest.TestCase):
         self.journal.assert_not_called()
 
 
+class TicketTest(unittest.TestCase):
+    """Every credit sends the client a ticket once; a replay or a refusal sends none."""
+
+    def setUp(self):
+        self.addCleanup(mock.patch.stopall)
+        self.entry = mock.patch.object(topups, "post_entry", return_value={"entryId": 5, "balanceAfter": 310}).start()
+        mock.patch.object(topups, "post_wallet_topup_journal_entry", return_value=True).start()
+        mock.patch.object(topups, "transfer_evidence_sp", return_value=JSONResponse({"transferEvidenceId": 7})).start()
+        mock.patch.object(topups, "log_workflow_step").start()
+        mock.patch.object(topups, "log_audit").start()
+        self.sent = []
+
+    def test_a_confirmed_transfer_sends_one_ticket(self):
+        topups.confirm_transfer(GOOD, notify=self.sent.append)
+        self.assertEqual(self.sent, [{"companyId": 1, "clientId": 9, "entryId": 5, "amountMXN": 500.0,
+                                      "method": "transferencia", "balanceAfter": 310}])
+
+    def test_a_replayed_transfer_sends_none(self):
+        self.entry.return_value = {"entryId": 5, "replayed": True}
+        topups.confirm_transfer(GOOD, notify=self.sent.append)
+        self.assertEqual(self.sent, [])
+
+    def test_cash_credits_with_the_attempt_key_and_sends_a_ticket(self):
+        r = topups.credit_cash({"companyId": 1, "clientId": 9, "amountMXN": 50, "userId": 3,
+                                "idempotencyKey": "cash:1:9:abc"}, notify=self.sent.append)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.entry.call_args.kwargs["idempotency_key"], "cash:1:9:abc")
+        self.assertEqual(self.sent[0]["method"], "efectivo")
+
+    def test_cash_refuses_a_key_from_another_company(self):
+        r = topups.credit_cash({"companyId": 1, "clientId": 9, "amountMXN": 50,
+                                "idempotencyKey": "terminal:3:123456"}, notify=self.sent.append)
+        self.assertEqual(r.status_code, 400)
+        self.entry.assert_not_called()
+
+    def test_terminal_keys_by_operation_and_sends_a_ticket(self):
+        r = topups.credit_terminal({"companyId": 1, "clientId": 9, "amountMXN": 150, "terminalId": 3,
+                                    "terminalName": "Terminal MP", "operationNumber": "abc-1234"},
+                                   notify=self.sent.append)
+        self.assertEqual(r.status_code, 200)
+        kwargs = self.entry.call_args.kwargs
+        self.assertEqual((kwargs["idempotency_key"], kwargs["reference_type"], kwargs["reference_id"]),
+                         ("terminal:3:ABC-1234", "commissionTerminal", 3))
+        self.assertEqual(self.sent[0]["method"], "terminal")
+
+    def test_terminal_refuses_a_bad_operation_number(self):
+        r = topups.credit_terminal({"companyId": 1, "clientId": 9, "amountMXN": 150, "terminalId": 3,
+                                    "operationNumber": "x"}, notify=self.sent.append)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.sent, [])
+
+    def test_the_ticket_reads_like_a_receipt(self):
+        text = topups.top_up_message({"amountMXN": 50, "method": "transferencia", "companyName": "Lavanderia GMO",
+                                      "balanceAfter": 310, "entryId": 1234})
+        self.assertEqual(text, "Abono de $50.00 MXN con transferencia en Lavanderia GMO.\n"
+                               "Saldo disponible: $310.00 MXN\nFolio: 1234")
+
+    def test_the_ticket_goes_through_the_push_whatsapp_sms_cascade(self):
+        import asyncio
+        import modules.notificationDispatch as dispatch
+        with mock.patch.object(topups, "company_name", return_value="Lavanderia GMO"), \
+             mock.patch.object(topups, "_client_phone", return_value="+526621806214"), \
+             mock.patch.object(dispatch, "dispatch_notification_connector",
+                               new=mock.AsyncMock(return_value=JSONResponse({}))) as send:
+            asyncio.run(topups.notify_top_up({"companyId": 1, "clientId": 9, "entryId": 5, "amountMXN": 50,
+                                              "method": "efectivo", "balanceAfter": 310}))
+        payload = send.call_args.args[0]
+        self.assertEqual((payload["eventName"], payload["sourceType"], payload["sourceId"], payload["waTemplate"]),
+                         ("wallet_topup_credited", "walletTransaction", 5, "abono_saldo"))
+        self.assertEqual(payload["navigationRoute"], "/my-qr")
+
+    def test_a_failed_ticket_never_raises(self):
+        with mock.patch.object(topups, "company_name", side_effect=RuntimeError("db down")):
+            import asyncio
+            asyncio.run(topups.notify_top_up({"companyId": 1, "clientId": 9, "entryId": 5}))
+
+
 class RouteTest(unittest.TestCase):
     def setUp(self):
         app = FastAPI()
@@ -95,6 +172,14 @@ class RouteTest(unittest.TestCase):
 
     def test_staff_of_the_company_gets_through(self):
         self.assertEqual(self._post({"sub": "3", "companies": [{"companyId": 1, "role": "employee"}]}), 200)
+
+    def test_cash_and_terminal_need_staff_too(self):
+        for path in ("/walletTopUps/cash", "/walletTopUps/terminal"):
+            self.assertEqual(self.client.post(path, json=GOOD).status_code, 403)
+            with mock.patch.object(routes, "decode", return_value={"sub": "3", "companies": [
+                    {"companyId": 1, "role": "pos"}]}):
+                self.assertEqual(self.client.post(path, json=GOOD, headers={"Authorization": "Bearer t"}).status_code,
+                                 403)
 
 
 class WhatsAppTest(unittest.TestCase):

@@ -19,6 +19,7 @@ templates**. Register each one below in **WhatsApp Manager → Message templates
 | `cuenta_creada` | Utility | `users.send_account_created` |
 | `comprobante_listo` | Utility | `notificationDispatch` (with receiptUrl), `send_ticket_whatsapp` |
 | `detalle_compra` | Utility | `notificationDispatch` (no receiptUrl, e.g. income_created), `send_ticket_whatsapp` |
+| `abono_saldo` | Utility | `walletTopUps.notify_top_up` (saldo top-up ticket) |
 | `capital_publicado` | Utility | `loanOffers._send_offer_published_ticket` |
 | `reservacion_confirmada` | Utility | `reservations._send_confirmation_whatsapp` |
 | `registro_pendiente` | Utility | `registrationReminders._notify_cellphone` |
@@ -86,6 +87,19 @@ Detalle: {{1}}
 Gracias por tu preferencia.
 ```
 Sample: `{{1}}` = `Gracias por su compra. Total: $250.00 MXN · Descuento aplicado (VERANO10): -$25.00 MXN`
+
+---
+
+## abono_saldo — Utility
+
+```
+Registramos tu abono de saldo.
+
+Detalle: {{1}}
+
+Gracias por tu preferencia.
+```
+Sample: `{{1}}` = `Abono de $50.00 MXN con transferencia en Lavanderia GMO. · Saldo disponible: $310.00 MXN · Folio: 1234`
 
 ---
 

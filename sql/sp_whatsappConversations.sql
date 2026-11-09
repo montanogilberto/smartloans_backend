@@ -4,7 +4,7 @@
 -- so every App Service instance sees the same answer.
 --   0  get state            1  set pending proposal (ttlSeconds)
 --   2  clear pending        3  pause bot for staff (pauseSeconds; clears pending)
---   4  set last booking
+--   4  set last booking     5  touch (the customer wrote on this number)
 -- Every action returns the current state:
 --   {"result":[{"pending": {...}|null, "staffPaused": bool, "lastBooked": {...}|null}]}
 -- Table: sql/migration_history/migrations/2026-09-28_whatsapp_channels.sql
@@ -34,7 +34,7 @@ BEGIN
             RETURN;
         END
 
-        IF @action IN (1, 2, 3, 4)
+        IF @action IN (1, 2, 3, 4, 5)
            AND NOT EXISTS (SELECT 1 FROM [dbo].[whatsappConversations]
                            WHERE channelId = @channelId AND customerPhone = @phone)
             INSERT INTO [dbo].[whatsappConversations] (channelId, customerPhone)
@@ -70,6 +70,13 @@ BEGIN
         ELSE IF @action = 4
             UPDATE [dbo].[whatsappConversations]
             SET lastBookedJson = @lastBooked, updatedAt = @now
+            WHERE channelId = @channelId AND customerPhone = @phone;
+        -- Every inbound message: updatedAt then says which of the company's numbers
+        -- the customer wrote to last, so a staff reply goes out from that number
+        -- (sp_whatsappAgentConversations action 'channel' orders by updatedAt).
+        ELSE IF @action = 5
+            UPDATE [dbo].[whatsappConversations]
+            SET updatedAt = @now
             WHERE channelId = @channelId AND customerPhone = @phone;
 
         DECLARE @pendingOut NVARCHAR(MAX) = NULL, @lastOut NVARCHAR(MAX) = NULL, @paused BIT = 0;
