@@ -415,6 +415,10 @@ def _handle_message(msg: dict) -> None:
     # Before the agent runs: it creates the conversation row isNewLead looks for.
     _record_ad_referral(channel, phone, msg)
     try:
+        whatsappChannels.touch(channel["channelId"], phone)
+    except Exception:
+        logger.exception("[whatsappCloud] failed to mark the conversation's number")
+    try:
         log_message_to_database(phone_number=phone, message_body=msg["text"], response_body="",
                                 direction="inbound", status="received", action=1)
     except Exception:

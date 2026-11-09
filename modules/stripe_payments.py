@@ -14,6 +14,7 @@ SQL stored procedures expected (create in Azure SQL):
   sp_stripe_connectedAccounts  @pjsonfile  — action 1=upsert, 2=get by clientId
   sp_stripe_transactions        @pjsonfile  — action 1=insert, 2=update status, 3=list
 """
+import asyncio
 
 import os
 import json
@@ -989,6 +990,18 @@ def _send_receipt_async(tx: dict, intent_id: str, fee_mxn: float, net_mxn: float
                      args=(tx, intent_id, fee_mxn, net_mxn), daemon=True).start()
 
 
+_TICKET_TASKS: set = set()
+
+
+def _send_top_up_ticket(data: dict) -> None:
+    """Client's push/WhatsApp/SMS ticket, sent without holding up the confirm
+    response. The task is kept referenced until it finishes."""
+    from modules.walletTopUps import notify_top_up  # lazy: avoids an import cycle
+    task = asyncio.get_running_loop().create_task(notify_top_up(data))
+    _TICKET_TASKS.add(task)
+    task.add_done_callback(_TICKET_TASKS.discard)
+
+
 async def _settle_wallet_top_up(tx: dict, net_mxn: float = None, stripe_account: str = None):
     """Credit the client's wallet ledger for a wallet_top_up / laundry_top_up transaction that
     JUST transitioned to succeeded. Runs from both the app's confirm call and
@@ -1032,6 +1045,10 @@ async def _settle_wallet_top_up(tx: dict, net_mxn: float = None, stripe_account:
                                       f"a cargo de la compañía — intent {intent_id}")
             print(f"[stripe][topup] laundry balance CREDITED clientId={client_id} +{gross_mxn} MXN "
                   f"(company fee {round(gross_mxn - net_mxn, 2)}, intent {intent_id})")
+            if not entry.get("replayed"):
+                _send_top_up_ticket({"companyId": int(company_id), "clientId": int(client_id),
+                                     "entryId": entry.get("entryId"), "amountMXN": gross_mxn,
+                                     "method": "tarjeta", "balanceAfter": entry.get("balanceAfter")})
             return
 
         from modules.walletBalance import credit_wallet

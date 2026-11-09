@@ -124,6 +124,13 @@ def set_last_booked(channel_id: int, phone: str, row: dict) -> None:
     _conversation(4, channel_id, phone, lastBooked=row)
 
 
+def touch(channel_id: int, phone: str) -> None:
+    """The customer just wrote on this number. A staff reply picks the number
+    whose conversation was updated last, so without this it went out from the
+    number of the customer's last booking and Meta refused it (400)."""
+    _conversation(5, channel_id, phone)
+
+
 # ── Migration ───────────────────────────────────────────────────────────────
 
 _MIGRATION_FILES = (
