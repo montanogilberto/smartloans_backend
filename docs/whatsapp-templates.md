@@ -20,6 +20,7 @@ templates**. Register each one below in **WhatsApp Manager → Message templates
 | `comprobante_listo` | Utility | `notificationDispatch` (with receiptUrl), `send_ticket_whatsapp` |
 | `detalle_compra` | Utility | `notificationDispatch` (no receiptUrl, e.g. income_created), `send_ticket_whatsapp` |
 | `abono_saldo` | Utility | `walletTopUps.notify_top_up` (saldo top-up ticket) |
+| `mensaje_negocio` | Utility | `whatsappCloud.staff_reply` with asTemplate (staff write first, outside 24 h) |
 | `capital_publicado` | Utility | `loanOffers._send_offer_published_ticket` |
 | `reservacion_confirmada` | Utility | `reservations._send_confirmation_whatsapp` |
 | `registro_pendiente` | Utility | `registrationReminders._notify_cellphone` |
@@ -100,6 +101,22 @@ Detalle: {{1}}
 Gracias por tu preferencia.
 ```
 Sample: `{{1}}` = `Abono de $50.00 MXN con transferencia en Lavanderia GMO. · Saldo disponible: $310.00 MXN · Folio: 1234`
+
+---
+
+## mensaje_negocio — Utility
+
+```
+Hola, te escribimos de {{1}}.
+
+{{2}}
+
+Si tienes dudas, responde a este mensaje.
+```
+Samples: `{{1}}` = `Lavanderia GMO`, `{{2}}` = `Tu ropa ya está lista, puedes pasar por ella hoy antes de las 8 pm.`
+
+`{{2}}` is whatever the staff typed. If Meta files it as Marketing, it still
+sends but costs more and needs the client's opt-in (BAJA/ALTA).
 
 ---
 

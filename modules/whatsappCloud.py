@@ -470,6 +470,10 @@ def handle_webhook(payload: dict) -> None:
 
 # ── Staff replies from the POS (Agente WhatsApp › Conversaciones) ───────────
 STAFF_REPLY_MAX_CHARS = 4096  # Meta's text body limit
+# Outside the 24 h window the text goes inside this approved template
+# (docs/whatsapp-templates.md): {{1}} company, {{2}} the staff's message.
+STAFF_TEMPLATE = "mensaje_negocio"
+STAFF_TEMPLATE_MAX_CHARS = 900  # Meta caps a template body at 1024 with its fixed text
 # Meta's customer-service window. Free-form text outside it is ACCEPTED by the
 # API and only fails later (status 131047), so it is checked here, before sending.
 _SERVICE_WINDOW = timedelta(hours=24)
@@ -481,11 +485,17 @@ def staff_reply(json_file: dict) -> JSONResponse:
     'staff_sent' (responseBody = "userId=<id>"). The agent keeps answering the
     chat — it is never paused.
 
-    Body: { "whatsappStaffReply": [{ "companyId": int, "userId": int, "phone10": str, "body": str }] }
-    200 { sent: true, messageId, atUtc }
+    Body: { "whatsappStaffReply": [{ "companyId": int, "userId": int, "phone10": str, "body": str,
+                                     "asTemplate"?: bool }] }
+    200 { sent: true, messageId, atUtc, viaTemplate }
     400 bad input   404 no_channel (no number of this company has talked to the phone)
     409 outside_24h (the customer hasn't written in 24 h: Meta only allows templates)
-    502 the send to Meta failed"""
+    502 send_failed / template_failed (Meta refused it)
+
+    asTemplate: the staff chose to write first. Outside the 24 h window (or to a
+    client who never wrote) the text goes inside the mensaje_negocio template,
+    from the number the client used before, else the business sender number.
+    Inside the window it is sent as plain text, as always."""
     row = (json_file.get("whatsappStaffReply") or [{}])[0]
     try:
         company_id = int(row.get("companyId"))
@@ -494,6 +504,7 @@ def staff_reply(json_file: dict) -> JSONResponse:
         return JSONResponse({"error": "companyId and userId are required"}, status_code=400)
     phone10 = re.sub(r"\D", "", str(row.get("phone10") or ""))[-10:]
     body = (row.get("body") or "").strip()
+    as_template = bool(row.get("asTemplate"))
     if len(phone10) != 10 or not body:
         return JSONResponse({"error": "phone10 (10 digits) and body are required"}, status_code=400)
     if len(body) > STAFF_REPLY_MAX_CHARS:
@@ -509,21 +520,27 @@ def staff_reply(json_file: dict) -> JSONResponse:
         return JSONResponse({"error": found["error"]}, status_code=500)
     target = (found.get("result") or [None])[0]
     channel = whatsappChannels.get_channel(target["phoneNumberId"]) if target else None
-    if not channel or channel.get("companyId") != company_id:
-        return JSONResponse({"error": "no_channel"}, status_code=404)
+    if channel and channel.get("companyId") != company_id:
+        logger.info("[staffReply] picked number belongs to company %s, not %s", channel.get("companyId"), company_id)
+        channel = None
 
-    last_in = target.get("lastInboundUtc")
-    if not last_in or datetime.now(timezone.utc) - datetime.fromisoformat(last_in).replace(tzinfo=timezone.utc) > _SERVICE_WINDOW:
+    last_in = target.get("lastInboundUtc") if channel else None
+    window_open = bool(last_in) and (datetime.now(timezone.utc)
+                                     - datetime.fromisoformat(last_in).replace(tzinfo=timezone.utc) <= _SERVICE_WINDOW)
+    logger.info("[staffReply] lookup | company=%s phone=…%s channel=%s number=…%s lastInboundUtc=%s window=%s asTemplate=%s",
+                company_id, phone10[-4:], (channel or {}).get("channelId"),
+                str((channel or {}).get("phoneNumberId") or "")[-4:], last_in, window_open, as_template)
+    if not window_open:
+        if as_template:
+            return _staff_template(company_id, user_id, channel, target, phone10, body)
+        if not channel:
+            return JSONResponse({"error": "no_channel"}, status_code=404)
         return JSONResponse({"error": "outside_24h", "lastInboundUtc": last_in}, status_code=409)
 
     customer = target["customerPhone"]
-    try:
-        sent = send_text(channel, customer, body)
-    except Exception as e:
-        logger.exception("[whatsappCloud] staff reply send failed | channel=%s", channel["channelId"])
-        log_workflow_step("staff_reply", workflow_name="whatsapp_chat", status="FAILED",
-                          entity="whatsappChannel", entity_id=channel["channelId"], message=str(e)[:300])
-        return JSONResponse({"error": "send_failed"}, status_code=502)
+    sent, channel, attempts = _send_from_company_numbers(company_id, channel, customer, body)
+    if sent is None:
+        return JSONResponse({"error": "send_failed", "attempts": attempts}, status_code=502)
 
     try:
         log_message_to_database(phone_number=customer, message_body=body, response_body=f"userId={user_id}",
@@ -533,5 +550,84 @@ def staff_reply(json_file: dict) -> JSONResponse:
     # No message text or phone here: the logs stay free of PII.
     log_workflow_step("staff_reply", workflow_name="whatsapp_chat", entity="whatsappChannel",
                       entity_id=channel["channelId"], message=f"userId={user_id} company={company_id}")
-    return JSONResponse({"sent": True, "messageId": sent.get("messageId"),
+    return JSONResponse({"sent": True, "messageId": sent.get("messageId"), "viaTemplate": False, "attempts": attempts,
+                         "atUtc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}, status_code=200)
+
+
+def _masked(text: Any, limit: int = 240) -> str:
+    """Error text safe for logs and for the app: long digit runs (phones, ids) keep their last 4."""
+    return re.sub(r"\d{8,}", lambda m: "…" + m.group()[-4:], str(text))[:limit]
+
+
+def _send_from_company_numbers(company_id: int, first: dict, customer: str, body: str):
+    """Sends from `first` (the number the lookup picked); if Meta refuses it, tries
+    the company's other active numbers. The lookup can pick a number the customer
+    isn't writing to (its conversation row was stale), and Meta answers 400 from
+    that one. Returns (sent, channel, attempts); sent is None when every number
+    failed. attempts = [{channelId, number (last 4), result}] for the app's console."""
+    attempts: list = []
+
+    def attempt(channel: dict):
+        number = str(channel.get("phoneNumberId") or "")[-4:]
+        try:
+            sent = send_text(channel, customer, body)
+            attempts.append({"channelId": channel.get("channelId"), "number": number, "result": "sent"})
+            logger.info("[staffReply] sent | channel=%s number=…%s", channel.get("channelId"), number)
+            return sent
+        except Exception as e:
+            reason = _masked(e)
+            attempts.append({"channelId": channel.get("channelId"), "number": number, "result": reason})
+            logger.warning("[staffReply] refused | channel=%s number=…%s reason=%s", channel.get("channelId"), number, reason)
+            log_workflow_step("staff_reply", workflow_name="whatsapp_chat", status="FAILED", entity="whatsappChannel",
+                              entity_id=channel.get("channelId"), message=reason)
+            return None
+
+    sent = attempt(first)
+    if sent is not None:
+        return sent, first, attempts
+    try:
+        others = [c for c in whatsappChannels.company_channels(company_id)
+                  if c.get("phoneNumberId") != first.get("phoneNumberId")]
+    except Exception:
+        logger.exception("[whatsappCloud] staff reply: listing the company's numbers failed")
+        others = []
+    logger.info("[staffReply] trying the company's other numbers | count=%s", len(others))
+    for channel in others:
+        sent = attempt(channel)
+        if sent is not None:
+            return sent, channel, attempts
+    return None, first, attempts
+
+
+def _staff_template(company_id: int, user_id: int, channel: dict | None, target: dict | None,
+                    phone10: str, body: str) -> JSONResponse:
+    """Staff write first: mensaje_negocio from the client's usual number, else the
+    business sender. Meta answers 132001 until the template is approved."""
+    if len(body) > STAFF_TEMPLATE_MAX_CHARS:
+        return JSONResponse({"error": "too_long_for_template", "max": STAFF_TEMPLATE_MAX_CHARS}, status_code=400)
+    sender = channel or outbound_channel()
+    if not sender:
+        return JSONResponse({"error": "no_channel"}, status_code=404)
+    customer = (target or {}).get("customerPhone") or f"+52{phone10}"
+    logger.info("[staffReply] template | company=%s phone=…%s channel=%s number=…%s", company_id, phone10[-4:],
+                sender.get("channelId"), str(sender.get("phoneNumberId") or "")[-4:])
+    from modules.companies import company_name  # lazy: keeps this module's imports light
+    try:
+        sent = send_template(sender, customer, STAFF_TEMPLATE, [company_name({"companyId": company_id}) or "tu negocio",
+                                                                body])
+    except Exception as e:
+        reason = _masked(e)
+        logger.warning("[staffReply] template refused | channel=%s reason=%s", sender.get("channelId"), reason)
+        log_workflow_step("staff_template", workflow_name="whatsapp_chat", status="FAILED",
+                          entity="whatsappChannel", entity_id=sender.get("channelId"), message=reason)
+        return JSONResponse({"error": "template_failed", "reason": reason}, status_code=502)
+    try:
+        log_message_to_database(phone_number=customer, message_body=body,
+                                response_body=f"userId={user_id} template={STAFF_TEMPLATE}",
+                                direction="outbound", status="staff_sent", action=1)
+    except Exception:
+        logger.exception("[whatsappCloud] failed to log staff template")
+    log_workflow_step("staff_template", workflow_name="whatsapp_chat", entity="whatsappChannel",
+                      entity_id=sender.get("channelId"), message=f"userId={user_id} company={company_id}")
+    return JSONResponse({"sent": True, "messageId": sent.get("messageId"), "viaTemplate": True,
                          "atUtc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}, status_code=200)

@@ -67,6 +67,18 @@ def get_channel(phone_number_id: str) -> Optional[dict]:
     return channel
 
 
+def company_channels(company_id: int) -> list:
+    """The company's active numbers (sp_whatsappChannels action 0), in channelId order."""
+    result = _sp("sp_whatsappChannels", {"whatsappChannels": [{"action": 0, "companyId": company_id}]})
+    if result.get("error"):
+        raise RuntimeError(f"sp_whatsappChannels list failed: {result['error']}")
+    try:
+        rows = result["result"][0]["whatsappChannels"] or []
+    except (KeyError, IndexError, TypeError):
+        rows = []
+    return [r for r in rows if r.get("isActive")]
+
+
 def access_token(channel: Optional[dict]) -> str:
     """The channel's token setting if it names one, else WA_ACCESS_TOKEN
     (system user of our own Meta portfolio)."""
