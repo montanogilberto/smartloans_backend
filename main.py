@@ -76,6 +76,8 @@ from routes_ import (
     whatsappAssistant,
     marketingLeadAttribution,
     laundryDevices,
+    voiceCalls,
+    serviceCompletionNotices,
 )
 
 @asynccontextmanager
@@ -272,6 +274,8 @@ app.include_router(whatsappCloud.router)
 app.include_router(whatsappAssistant.router)
 app.include_router(marketingLeadAttribution.router)
 app.include_router(laundryDevices.router)
+app.include_router(voiceCalls.router)
+app.include_router(serviceCompletionNotices.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job

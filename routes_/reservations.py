@@ -43,7 +43,9 @@ action 6 — free slots for a date (kiosk / WhatsApp calendar):
   → { "result": [{ "date", "reservationServiceId", "serviceName",
       "durationMinutes", "capacity", "open", "close",
       "slots": [{ "timeSlot": "HH:MM", "available": int }] }] }
-  Hours from /reservationHours (closed day: open/close null, no slots).
+  Hours from /reservationHours, replaced on a holiday by /reservationHolidays
+  (closed day: open/close null, no slots). Action 1 on a closed holiday, or
+  outside its special hours → {"error":"closed_day"}.
   Duration/capacity from the service, else its machineType's machines.
 """,
 )
@@ -88,6 +90,43 @@ action 3 — close a day: { ..., "action": 3, "companyId": int, "dayOfWeek": int
 )
 def reservation_hours(json: dict):
     return reservation_catalog_sp(json, "sp_reservationHours")
+
+
+@router.post(
+    "/reservationHolidays",
+    summary="Holidays / special days (per company and date)",
+    description="""
+A date here replaces that day's weekly hours (/reservationHours).
+openTime + closeTime empty = closed all day; both set = that day's hours.
+action 0 (or omit) — list: { "reservationHolidays": [{ "companyId": int,
+  "fromDate"?: "YYYY-MM-DD" (default today, Hermosillo), "toDate"?: "YYYY-MM-DD" }] }
+action 1 — set a date: { ..., "action": 1, "companyId": int,
+  "holidayDate": "YYYY-MM-DD", "name"?: str, "openTime"?: "HH:MM", "closeTime"?: "HH:MM" }
+action 3 — remove a date: { ..., "action": 3, "companyId": int, "holidayDate": "YYYY-MM-DD" }
+→ { "result": [{ "reservationHolidays": [{ "holidayDate", "name", "isOpen",
+    "openTime", "closeTime" }] }] }
+""",
+    dependencies=[Depends(require_company_admin_on_write("reservationHolidays"))],
+)
+def reservation_holidays(json: dict):
+    return reservation_catalog_sp(json, "sp_reservationHolidays")
+
+
+@router.post(
+    "/reservationSchedule",
+    summary="The company's schedule day by day (weekly hours + holidays)",
+    description="""
+Read-only. What the agents and the kiosk ask: is it open on a date, and when.
+{ "reservationSchedule": [{ "companyId": int,
+  "fromDate"?: "YYYY-MM-DD" (default today, Hermosillo), "days"?: int (default 7, max 62) }] }
+→ { "result": [{ "reservationSchedule": [{ "date": "YYYY-MM-DD",
+    "dayOfWeek": 0-6 (0 = lunes), "weekday": "lunes", "isOpen": bool,
+    "openTime": "HH:MM"|null, "closeTime": "HH:MM"|null,
+    "isHoliday": bool, "holidayName": str|null }] }] }
+""",
+)
+def reservation_schedule(json: dict):
+    return reservation_catalog_sp(json, "sp_reservationSchedule")
 
 
 @router.post(

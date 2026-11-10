@@ -63,6 +63,7 @@ CREATE PROCEDURE [dbo].[sp_bankAccountsLifecycle]
 AS
 BEGIN
     SET NOCOUNT ON;
+    SET XACT_ABORT ON;  -- any error inside a transaction rolls it back whole
     BEGIN TRY
         DECLARE @action      NVARCHAR(30)  = JSON_VALUE(@pjsonfile, '$.bankAccounts[0].action')
         DECLARE @companyId   INT           = JSON_VALUE(@pjsonfile, '$.bankAccounts[0].companyId')
@@ -140,12 +141,23 @@ BEGIN
                 SELECT '{"error":"No puedes cambiar tu cuenta principal con préstamos activos. Se promoverá al liquidarlos."}' AS [jsonResult]
                 RETURN
             END
+            -- Archive the old PRIMARY and promote the new one together. Before,
+            -- a failed or 0-row promote left the client with NO primary CLABE
+            -- and still answered promoted:true.
+            BEGIN TRANSACTION;
             UPDATE dbo.bankAccounts SET accountStatus = 'ARCHIVED', isDefault = 0, updated_at = GETUTCDATE()
             WHERE companyId = @companyId AND clientId = @clientId
               AND accountStatus = 'PRIMARY' AND bankAccountId <> @pendingId;
             UPDATE dbo.bankAccounts SET accountStatus = 'PRIMARY', isDefault = 1, updated_at = GETUTCDATE()
-            WHERE companyId = @companyId AND bankAccountId = @pendingId
+            WHERE companyId = @companyId AND clientId = @clientId AND bankAccountId = @pendingId
               AND accountStatus = 'PENDING_VERIFICATION';
+            IF @@ROWCOUNT = 0
+            BEGIN
+                ROLLBACK TRANSACTION;
+                SELECT '{"error":"La cuenta a promover no existe o no está pendiente de verificación."}' AS [jsonResult]
+                RETURN
+            END
+            COMMIT TRANSACTION;
             SELECT '{"promoted":true}' AS [jsonResult]
             RETURN
         END
@@ -225,6 +237,7 @@ BEGIN
         SELECT '{"error":"Acción no soportada."}' AS [jsonResult]
     END TRY
     BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT ('{"error":"' + REPLACE(ERROR_MESSAGE(),'"','\"') + '"}') AS [jsonResult]
     END CATCH
 END

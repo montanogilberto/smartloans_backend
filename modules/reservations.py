@@ -205,7 +205,8 @@ async def notify_pos(row: dict, source: str = "kiosco"):
 
 
 def reservation_catalog_sp(json_file: dict, procedure: str):
-    """Passthrough for the catalogs: sp_reservationServices / sp_reservationHours."""
+    """Passthrough for the catalogs: sp_reservationServices / sp_reservationHours /
+    sp_reservationHolidays, and the read-only sp_reservationSchedule."""
     try:
         return JSONResponse(_sp(json_file, procedure), status_code=200)
     except Exception as e:

@@ -114,6 +114,7 @@ CREATE PROCEDURE [dbo].[sp_transferEvidence]
 AS
 BEGIN
     SET NOCOUNT ON;
+    SET XACT_ABORT ON;  -- any error inside a transaction rolls it back whole
     BEGIN TRY
 
     DECLARE @action    NVARCHAR(40) = JSON_VALUE(@pjsonfile, '$.transferEvidence[0].action')
@@ -269,6 +270,10 @@ BEGIN
             RETURN
         END
 
+        -- The verdict and its paymentHistory row land together or not at all:
+        -- an evidence marked validated with no history row breaks D16.
+        BEGIN TRANSACTION;
+
         UPDATE dbo.transferEvidence
         SET validationStatus = @validationStatus,
             aiConfidence     = @aiConfidence,
@@ -288,6 +293,8 @@ BEGIN
             VALUES
                 (@companyId, 'FUNDING', @evidenceReferenceId, NULL, @validationStatus, 'evidence_ai_validation')
 
+        COMMIT TRANSACTION;
+
         SELECT (
             SELECT transferEvidenceId, companyId, referenceType, referenceId,
                    validationStatus, aiConfidence, aiReasoning, aiMismatches,
@@ -299,6 +306,7 @@ BEGIN
 
     END TRY
     BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         IF ERROR_NUMBER() IN (2601, 2627)
             SELECT '{"error":"Esta clave de rastreo ya fue registrada (posible duplicado)."}' AS [jsonResult]
         ELSE

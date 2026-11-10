@@ -1,0 +1,11 @@
+"Tu servicio está listo" from Dashboard → Actividad Reciente. Only for companies with the SERVICE_COMPLETION_NOTICE feature enabled in dbo.companyFeatures (no row = off). Staff session of that company (or worker key).
+
+POST /serviceCompletionNotices/status
+{ "serviceCompletionNotices": [{ "companyId": int, "userId": int, "incomeIds": [int, ...] (max 30) }] }
+→ 200 { enabled: bool, actions: { "<incomeId>": { key: "NOTIFY_SERVICE_COMPLETION", status: "available" | "sent", channel?, sentAt? } } }
+A sale without an entry has no action (walk-in client, another company, or the feature is off).
+
+POST /serviceCompletionNotices/send
+{ "serviceCompletionNotice": [{ "companyId": int, "userId": int, "incomeId": int }] }
+→ 200 { status: "sent" | "already_sent", channel } · 403 feature_disabled · 404 not_found · 409 no_client · 502 send_failed (can be retried)
+Push → WhatsApp (template servicio_listo) → SMS through notificationDispatch, eventName service_completed. Never sent twice for the same sale.
