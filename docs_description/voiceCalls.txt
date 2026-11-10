@@ -1,0 +1,8 @@
+The virtual Secretary (LoanAgents voice agent) phones one POS client to tell them their order is ready and agree a pickup.
+
+Body: {"voiceCall": [{"companyId": 1, "clientId": 5416, "userId": 12}]}
+Auth: Authorization: Bearer <access token> of a staff member (admin/manager/employee/business) of that company, whose userId matches; or X-Worker-Key.
+The number dialed is the client's cellphone on file. The walk-in client (1) is refused. Max 3 calls per client per hour.
+
+200 {"placed": true, "callSid": "CA...", "status": "queued"}  — queued means Twilio accepted it, not that the client answered.
+Errors: {"placed": false, "error": "disabled" | "not_configured" | "walk_in" | "not_found" | "no_phone" | "invalid" | "call_failed"}

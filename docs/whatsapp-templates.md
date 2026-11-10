@@ -20,7 +20,7 @@ templates**. Register each one below in **WhatsApp Manager → Message templates
 | `comprobante_listo` | Utility | `notificationDispatch` (with receiptUrl), `send_ticket_whatsapp` |
 | `detalle_compra` | Utility | `notificationDispatch` (no receiptUrl, e.g. income_created), `send_ticket_whatsapp` |
 | `abono_saldo` | Utility | `walletTopUps.notify_top_up` (saldo top-up ticket) |
-| `mensaje_negocio` | Utility | `whatsappCloud.staff_reply` with asTemplate (staff write first, outside 24 h) |
+| `mensaje_negocio` | Marketing | `whatsappCloud.staff_reply` with asTemplate (staff write first, outside 24 h) |
 | `capital_publicado` | Utility | `loanOffers._send_offer_published_ticket` |
 | `reservacion_confirmada` | Utility | `reservations._send_confirmation_whatsapp` |
 | `registro_pendiente` | Utility | `registrationReminders._notify_cellphone` |
@@ -104,7 +104,7 @@ Sample: `{{1}}` = `Abono de $50.00 MXN con transferencia en Lavanderia GMO. · S
 
 ---
 
-## mensaje_negocio — Utility
+## mensaje_negocio — Marketing (Meta rejected Utility; submitted 2026-11-09)
 
 ```
 Hola, te escribimos de {{1}}.

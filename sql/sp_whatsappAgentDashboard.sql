@@ -15,8 +15,13 @@
 --             cerrada / le_sirvio (finalized) · no_le_sirvio / falla_agente / pidio_persona /
 --             sin_cierre — from the agent's closing flow ("¿Te funcionó la respuesta?",
 --             "¿Hay algo más…?", answered 1/2 or sí/no), plus the list of unfinished chats,
---             re-asked topics, complaints and new customers
+--             re-asked topics, complaints and new customers.
+--             "finalized" = the chat ENDED (a goodbye or a booking) — not that it helped.
+--             Whether it helped is "resolution" (LoanAgents responseSummary.outcome,
+--             since 2026-11-09): resolved_explicit / resolved_implicit / not_helped /
+--             escalated / agent_failure / ended_no_result / no_result
 --   dataSince first day each source has data — earlier days can't be measured
+--             (outcomes: before it, only answers to "¿Te funcionó?" count for resolution)
 -- Sources (nothing new is written):
 --   dbo.integrationLogs  service 'loanagents_smartloans', operation
 --                        'whatsapp_reservations' — one row per agent call; companyId
@@ -63,7 +68,7 @@ BEGIN
                               branchId INT, branchName NVARCHAR(100), logId BIGINT,
                               customerName NVARCHAR(120), message NVARCHAR(300),
                               askedHelpful BIT, askedMore BIT, answer NVARCHAR(3),
-                              stage NVARCHAR(30), feedback NVARCHAR(3));
+                              stage NVARCHAR(30), feedback NVARCHAR(3), outcome NVARCHAR(20));
         INSERT INTO @calls
         SELECT RIGHT(REPLACE(REPLACE(REPLACE(JSON_VALUE(q.j, '$.phone'), '+', ''), ' ', ''), '-', ''), 10),
                CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END,
@@ -92,7 +97,10 @@ BEGIN
                          OR n.t LIKE N'no %' OR n.t LIKE N'2 %' THEN 'no' END,
                JSON_VALUE(r.j, '$.conversationStage'),
                -- The customer's answer to "¿Te funcionó?", set by the route on the answering turn.
-               JSON_VALUE(r.j, '$.feedback')
+               JSON_VALUE(r.j, '$.feedback'),
+               -- How the customer took the previous reply (route, since 2026-11-09):
+               -- explicit_positive / implicit_positive / explicit_negative / escalated / NULL.
+               JSON_VALUE(r.j, '$.outcome')
         FROM [dbo].[integrationLogs]
         CROSS APPLY (SELECT CASE WHEN ISJSON(requestSummary) = 1 THEN requestSummary END AS j) q
         CROSS APPLY (SELECT CASE WHEN ISJSON(responseSummary) = 1 THEN responseSummary END AS j) r
@@ -247,7 +255,8 @@ BEGIN
 
         DECLARE @convs TABLE (phone10 NVARCHAR(10), day DATE, failed BIT, handedOff BIT, firstHandoffAt DATETIME2,
                               booked BIT, goodbye BIT, lastHelpful NVARCHAR(3), staffReplied BIT,
-                              lastAt DATETIME2, outcome NVARCHAR(20));
+                              lastAt DATETIME2, outcome NVARCHAR(20),
+                              lastOutcome NVARCHAR(20), resolution NVARCHAR(20));
         INSERT INTO @convs (phone10, day, failed, handedOff, firstHandoffAt, booked, goodbye, lastHelpful, lastAt)
         SELECT c.phone10, c.day,
                -- A failed call, or the agent's own "se me complicó responderte" fallback (stage error).
@@ -286,6 +295,35 @@ BEGIN
             WHEN lastHelpful = 'yes'                       THEN 'le_sirvio'
             ELSE 'sin_cierre' END;
 
+        -- ── Did it HELP? (separate from whether it ended) ──
+        --   lastOutcome = the conversation's last non-null outcome; rows from before the route
+        --   returned one fall back to the answer to "¿Te funcionó?". resolution, first match wins:
+        --     agent_failure      an agent call failed / stage 'error' (nothing else is trustworthy)
+        --     resolved_explicit  booked, or last outcome explicit_positive
+        --     not_helped         last outcome explicit_negative
+        --     resolved_implicit  last outcome implicit_positive ("en un rato paso")
+        --     escalated          last outcome escalated (handed to a person)
+        --     ended_no_result    a goodbye with no outcome — a bare "gracias" is politeness, not success
+        --     no_result          open and no outcome: they stopped answering. Never a success.
+        UPDATE v SET lastOutcome = (
+                SELECT TOP 1 COALESCE(c.outcome, CASE o.helpfulAnswer WHEN 'yes' THEN 'explicit_positive'
+                                                                     WHEN 'no'  THEN 'explicit_negative' END)
+                FROM @calls c JOIN @ordered o ON o.logId = c.logId
+                WHERE c.phone10 = v.phone10 AND c.day = v.day
+                  AND COALESCE(c.outcome, o.helpfulAnswer) IS NOT NULL
+                ORDER BY c.localAt DESC, c.logId DESC)
+        FROM @convs v;
+
+        UPDATE @convs SET resolution = CASE
+            WHEN failed = 1                                THEN 'agent_failure'
+            WHEN booked = 1 OR lastOutcome = 'explicit_positive' THEN 'resolved_explicit'
+            WHEN lastOutcome = 'explicit_negative'         THEN 'not_helped'
+            WHEN lastOutcome = 'implicit_positive'         THEN 'resolved_implicit'
+            WHEN lastOutcome = 'escalated'                 THEN 'escalated'
+            WHEN goodbye = 1                               THEN 'ended_no_result'
+            ELSE 'no_result' END;
+        DECLARE @nResolved INT = (SELECT COUNT(*) FROM @convs WHERE resolution IN ('resolved_explicit', 'resolved_implicit'));
+
         DECLARE @nTagged INT = (SELECT COUNT(*) FROM @ordered WHERE topic IS NOT NULL);
         DECLARE @nReasked INT = (
             SELECT COUNT(*) FROM @ordered
@@ -303,6 +341,7 @@ BEGIN
                    CONVERT(NVARCHAR(10), v.day, 23)                                             AS date,
                    CONVERT(NVARCHAR(19), DATEADD(HOUR, 7, v.lastAt), 126)                       AS lastAtUtc,
                    v.outcome,
+                   v.resolution,
                    (SELECT TOP 1 c.message FROM @calls c WHERE c.phone10 = v.phone10 AND c.day = v.day
                       ORDER BY c.localAt DESC, c.logId DESC)                                    AS lastMessage
             FROM @convs v
@@ -333,6 +372,15 @@ BEGIN
                                     WHERE l.service = 'loanagents_smartloans' AND l.operation = 'whatsapp_reservations'
                                       AND l.companyId = @companyId AND l.created_At < @fromUtc
                                       AND l.requestSummary LIKE '%' + cu.phone10 + '%'))             AS newCustomers,
+                @nResolved                                                                           AS [resolution.resolved],
+                CASE WHEN @nConvs > 0 THEN CAST(100.0 * @nResolved / @nConvs AS DECIMAL(5,1)) END    AS [resolution.resolvedRatePct],
+                (SELECT COUNT(*) FROM @convs WHERE resolution = 'resolved_explicit')                 AS [resolution.resolvedExplicit],
+                (SELECT COUNT(*) FROM @convs WHERE resolution = 'resolved_implicit')                 AS [resolution.resolvedImplicit],
+                (SELECT COUNT(*) FROM @convs WHERE resolution = 'not_helped')                        AS [resolution.notHelped],
+                (SELECT COUNT(*) FROM @convs WHERE resolution = 'escalated')                         AS [resolution.escalated],
+                (SELECT COUNT(*) FROM @convs WHERE resolution = 'agent_failure')                     AS [resolution.agentFailure],
+                (SELECT COUNT(*) FROM @convs WHERE resolution = 'ended_no_result')                   AS [resolution.endedNoResult],
+                (SELECT COUNT(*) FROM @convs WHERE resolution = 'no_result')                         AS [resolution.noResult],
                 JSON_QUERY(ISNULL(@unfinished, '[]'))                                                AS unfinished
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
         );
@@ -349,7 +397,11 @@ BEGIN
                 (SELECT CONVERT(NVARCHAR(10), CONVERT(DATE, DATEADD(HOUR, -7, MIN(created_At))), 23)
                  FROM [dbo].[integrationLogs]
                  WHERE service = 'loanagents_smartloans' AND operation = 'whatsapp_reservations'
-                   AND companyId = @companyId AND responseSummary LIKE '%"topic":"%')     AS topics
+                   AND companyId = @companyId AND responseSummary LIKE '%"topic":"%')     AS topics,
+                (SELECT CONVERT(NVARCHAR(10), CONVERT(DATE, DATEADD(HOUR, -7, MIN(created_At))), 23)
+                 FROM [dbo].[integrationLogs]
+                 WHERE service = 'loanagents_smartloans' AND operation = 'whatsapp_reservations'
+                   AND companyId = @companyId AND responseSummary LIKE '%"outcome":"%')   AS outcomes
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES
         );
 

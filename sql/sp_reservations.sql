@@ -1,8 +1,10 @@
 -- ============================================================
 -- Reservations — customers book a time slot for a service from the
 -- company's catalog (sp_reservationServices) via kiosk or WhatsApp.
--- Staff confirms via POS. Business hours: sp_reservationHours.
--- Requires sql/migration_history/migrations/2026-09-24_reservation_catalogs.sql.
+-- Staff confirms via POS. Business hours: sp_reservationHours, with the
+-- holidays / special days of sp_reservationHolidays applied on top.
+-- Requires sql/migration_history/migrations/2026-09-24_reservation_catalogs.sql
+-- and sql/migrations/2026-11-09_reservation_holidays.sql.
 -- ============================================================
 
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'reservations')
@@ -130,6 +132,18 @@ BEGIN
             IF @slotStart IS NULL
             BEGIN
                 SELECT '{"error":"timeSlot must be HH:MM"}' AS jsonResult;
+                RETURN;
+            END
+
+            -- A holiday: closed all day, or the slot must fit that day's own hours.
+            DECLARE @hOpen TIME, @hClose TIME, @isHoliday BIT = 0;
+            SELECT @isHoliday = 1, @hOpen = openTime, @hClose = closeTime
+            FROM [dbo].[reservationHolidays]
+            WHERE companyId = @companyId AND holidayDate = @resDate;
+            IF @isHoliday = 1 AND (@hOpen IS NULL OR @slotStart < @hOpen
+                                   OR DATEDIFF(MINUTE, @hOpen, @slotStart) + @slotMinutes > DATEDIFF(MINUTE, @hOpen, @hClose))
+            BEGIN
+                SELECT '{"error":"closed_day","message":"Ese dia el negocio no abre en ese horario. Elige otro."}' AS jsonResult;
                 RETURN;
             END
 
@@ -266,6 +280,12 @@ BEGIN
             SELECT @open = openTime, @close = closeTime
             FROM [dbo].[reservationHours]
             WHERE companyId = @companyId AND dayOfWeek = @dow;
+            -- A holiday / special day replaces the weekly hours (NULL = closed).
+            IF EXISTS (SELECT 1 FROM [dbo].[reservationHolidays]
+                       WHERE companyId = @companyId AND holidayDate = @availDate)
+                SELECT @open = openTime, @close = closeTime
+                FROM [dbo].[reservationHolidays]
+                WHERE companyId = @companyId AND holidayDate = @availDate;
             DECLARE @slotsJson NVARCHAR(MAX) = '[]';
 
             IF @open IS NOT NULL AND @availDate >= CAST(@nowLocal AS DATE)

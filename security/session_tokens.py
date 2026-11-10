@@ -147,3 +147,92 @@ def require_company_admin_on_write(key: str):
         if not rows or any(_as_int(r.get("companyId")) not in allowed for r in rows):
             raise HTTPException(status_code=403, detail="Forbidden")
     return guard
+
+
+_COMPANY_STAFF_ROLES = {"admin", "manager", "employee", "business"}  # POS staff (rolePermissions.ts STAFF_ROLES minus viewer)
+
+
+def require_company_staff_session(key: str):
+    """Guards an endpoint that acts on a customer for a company (a phone call):
+    body {key: [{companyId, userId, ...}]}. Needs the worker key, or an access
+    token of a staff member of that company whose userId is the token's. The
+    company comes from the signed token, never from X-Company-Id."""
+    async def guard(request: Request, x_worker_key: str | None = Header(default=None)) -> None:
+        token = _bearer(request)
+        if not token:
+            require_worker_key(x_worker_key)
+            return
+        claims = decode(token, "access")
+        if claims is None:
+            raise HTTPException(status_code=401, detail="Session expired")
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        rows = body.get(key) if isinstance(body, dict) else None
+        row = rows[0] if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict) else None
+        allowed = {_as_int(c.get("companyId")) for c in claims.get("companies") or []
+                   if str(c.get("role") or "").strip().lower() in _COMPANY_STAFF_ROLES}
+        allowed.discard(0)
+        if (row is None or str(row.get("userId")) != claims["sub"]
+                or _as_int(row.get("companyId")) not in allowed):
+            raise HTTPException(status_code=403, detail="Forbidden")
+    return guard
+
+
+# RFC-011 P1.1 — walletTransactions is the saldo the machines (and, later, the
+# register) spend, so a forged credit is free merchandise.
+_LEDGER_READ_ROLES = {"admin", "manager", "employee", "business", "viewer"}
+_LEDGER_WRITE_ROLES = {"admin", "manager"}
+# What a client may write on their OWN ledger: the lender's capital history,
+# which sp_walletTransactions keeps out of the spendable balance.
+_LEDGER_SELF_WRITE_TYPES = {"CAPITAL_DECLARED", "CAPITAL_UNDECLARED"}
+# The lender screen's "simulated SPEI deposit" test tool: never in production.
+_LEDGER_SELF_WRITE_TYPES_DEV = {"DEPOSIT"}
+
+
+def _ledger_row_allowed(row: dict, claims: dict, write: bool, is_prod: bool) -> bool:
+    company_id = _as_int(row.get("companyId"))
+    if not company_id:
+        return False
+    roles = {str(c.get("role") or "").strip().lower() for c in claims.get("companies") or []
+             if _as_int(c.get("companyId")) == company_id}
+    if not roles:
+        return False  # the company comes from the signed token, never from the body
+    if roles & (_LEDGER_WRITE_ROLES if write else _LEDGER_READ_ROLES):
+        return True
+    own_client = _as_int(claims.get("clientId"))
+    if not own_client or _as_int(row.get("clientId")) != own_client:
+        return False
+    if not write:
+        return True
+    entry_type = str(row.get("entryType") or "").strip().upper()
+    return entry_type in _LEDGER_SELF_WRITE_TYPES or (not is_prod and entry_type in _LEDGER_SELF_WRITE_TYPES_DEV)
+
+
+def require_wallet_ledger_access(write: bool):
+    """Guards POST /walletTransactions (write) and /all_walletTransactions (read):
+    body {"walletTransactions": [{companyId, clientId, ...}]}. Worker key (the
+    agents service), or a session that is staff of that company (writes: admin/
+    manager), or the client's own ledger (writes: only the types above)."""
+    async def guard(request: Request, x_worker_key: str | None = Header(default=None)) -> None:
+        token = _bearer(request)
+        if not token:
+            require_worker_key(x_worker_key)
+            return
+        claims = decode(token, "access")
+        if claims is None:
+            raise HTTPException(status_code=401, detail="Session expired")
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        rows = body.get("walletTransactions") if isinstance(body, dict) else None
+        if not isinstance(rows, list) or not rows or not all(isinstance(r, dict) for r in rows):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        from app_env import IS_PROD
+        if not all(_ledger_row_allowed(r, claims, write, IS_PROD) for r in rows):
+            logger.warning("[session_tokens] walletTransactions %s refused for user %s",
+                           "write" if write else "read", claims.get("sub"))
+            raise HTTPException(status_code=403, detail="Forbidden")
+    return guard
