@@ -1,0 +1,7 @@
+Returns one company's demand signals (interest per service concept and zone), newest first, max 500, via sp_demandSignals_all. Phones are masked (last 4 digits).
+Filters: startDate/endDate (Hermosillo days, fixed UTC-7, default last 30 days), concept (autoservicio_24h|lockers|qr_gmo), origin (anuncio|organico|personal), intentLevel (alta|media|baja), sourceId (Meta ad id).
+Auth: worker key, or an admin/manager session of that company (userId must be the token's).
+Stored procedure: EXEC [dbo].[sp_demandSignals_all] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "$API_BASE_URL/all_demandSignals" -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"demandSignals":[{"companyId":1,"userId":10,"concept":"lockers"}]}'

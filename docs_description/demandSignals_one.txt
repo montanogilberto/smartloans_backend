@@ -1,0 +1,6 @@
+Returns one demand signal of the given company (phone masked) via sp_demandSignals_one. An id from another company returns an empty list.
+Auth: worker key, or an admin/manager session of that company.
+Stored procedure: EXEC [dbo].[sp_demandSignals_one] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "$API_BASE_URL/one_demandSignals" -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"demandSignals":[{"companyId":1,"userId":10,"demandSignalId":5}]}'

@@ -1,0 +1,7 @@
+Red GMO: one company's host candidates (businesses offering space for a GMO locker), newest first, max 500, via sp_locationHosts_all. Includes the business contact's phone so the team can call back.
+Filters: status (nuevo|contactado|visitado|aprobado|instalado|descartado), zoneName, startDate/endDate (Hermosillo days, fixed UTC-7, default last 90 days).
+Auth: worker key, or an admin/manager session of that company (userId must be the token's).
+Stored procedure: EXEC [dbo].[sp_locationHosts_all] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "$API_BASE_URL/all_locationHosts" -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"locationHosts":[{"companyId":1,"userId":10}]}'
