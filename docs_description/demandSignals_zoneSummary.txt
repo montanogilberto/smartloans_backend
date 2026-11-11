@@ -1,0 +1,7 @@
+Demand map: distinct people per zone and concept (intent alta/media/baja, % semanal+quincenal, dominant time, new vs existing clients, opt-ins, colonia centroid) via sp_demandSignals_zoneSummary. Zones with fewer than 3 people are folded into 'otras zonas'; unlocated zones go to 'sin ubicar'.
+Filters: startDate/endDate (Hermosillo days, default last 30 days), concept, origin.
+Auth: worker key, or an admin/manager session of that company.
+Stored procedure: EXEC [dbo].[sp_demandSignals_zoneSummary] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "$API_BASE_URL/demandSignals/zoneSummary" -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"demandSignals":[{"companyId":1,"userId":10}]}'

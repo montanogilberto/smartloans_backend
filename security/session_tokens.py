@@ -152,11 +152,14 @@ def require_company_admin_on_write(key: str):
 _COMPANY_STAFF_ROLES = {"admin", "manager", "employee", "business"}  # POS staff (rolePermissions.ts STAFF_ROLES minus viewer)
 
 
-def require_company_staff_session(key: str):
+def require_company_staff_session(key: str, roles: set[str] | None = None):
     """Guards an endpoint that acts on a customer for a company (a phone call):
     body {key: [{companyId, userId, ...}]}. Needs the worker key, or an access
     token of a staff member of that company whose userId is the token's. The
-    company comes from the signed token, never from X-Company-Id."""
+    company comes from the signed token, never from X-Company-Id. roles narrows
+    which company roles count (default: all POS staff roles)."""
+    staff_roles = _COMPANY_STAFF_ROLES if roles is None else {r.strip().lower() for r in roles}
+
     async def guard(request: Request, x_worker_key: str | None = Header(default=None)) -> None:
         token = _bearer(request)
         if not token:
@@ -172,7 +175,7 @@ def require_company_staff_session(key: str):
         rows = body.get(key) if isinstance(body, dict) else None
         row = rows[0] if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict) else None
         allowed = {_as_int(c.get("companyId")) for c in claims.get("companies") or []
-                   if str(c.get("role") or "").strip().lower() in _COMPANY_STAFF_ROLES}
+                   if str(c.get("role") or "").strip().lower() in staff_roles}
         allowed.discard(0)
         if (row is None or str(row.get("userId")) != claims["sub"]
                 or _as_int(row.get("companyId")) not in allowed):

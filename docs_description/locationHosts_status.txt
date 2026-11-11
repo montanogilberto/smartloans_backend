@@ -1,0 +1,6 @@
+Red GMO: staff moves one host candidate through the pipeline (nuevo → contactado → visitado → aprobado → instalado, or descartado) and may add notes, via sp_locationHosts_status. Only status and staffNotes change; an id of another company returns an error.
+Auth: worker key, or an admin/manager session of that company. Rate limited.
+Stored procedure: EXEC [dbo].[sp_locationHosts_status] @pjsonfile = '<json>'
+
+Example:
+curl -X POST "$API_BASE_URL/locationHosts/status" -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"locationHosts":[{"companyId":1,"userId":10,"locationHostId":4,"status":"contactado"}]}'

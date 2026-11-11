@@ -75,6 +75,8 @@ from routes_ import (
     whatsappCloud,
     whatsappAssistant,
     marketingLeadAttribution,
+    demandSignal,
+    locationHost,
     laundryDevices,
     voiceCalls,
     serviceCompletionNotices,
@@ -273,6 +275,8 @@ app.include_router(factoryRunUsage.router)
 app.include_router(whatsappCloud.router)
 app.include_router(whatsappAssistant.router)
 app.include_router(marketingLeadAttribution.router)
+app.include_router(demandSignal.router)
+app.include_router(locationHost.router)
 app.include_router(laundryDevices.router)
 app.include_router(voiceCalls.router)
 app.include_router(serviceCompletionNotices.router)
