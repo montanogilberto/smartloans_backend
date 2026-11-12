@@ -101,6 +101,7 @@ class WebhookStubs(unittest.TestCase):
         patches = [
             mock.patch.object(wc.whatsappChannels, "get_channel", side_effect=CHANNELS.get),
             mock.patch.object(wc.marketingLeadAttributions, "record_referral", self.record),
+            mock.patch.object(wc.marketingAds, "ensure_pending", return_value=1),
             mock.patch.object(wc.clientContactPreferences, "handle_keyword", return_value=None),
             mock.patch.object(wc.whatsappReservations, "reply_to", self.reply_to),
             mock.patch.object(wc, "log_message_to_database"),

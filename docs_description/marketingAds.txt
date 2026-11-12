@@ -1,0 +1,8 @@
+Worker-only (X-Worker-Key). Writes the ad → ad set / campaign lookup used to group WhatsApp leads by offer, via sp_marketingAds.
+action 1 = ensure a 'pending' row for (companyId, provider, adId); idempotent, returns the existing id when present.
+action 2 = write a lookup result on an EXISTING row; returns 404 "ad_not_found" otherwise.
+lookupStatus for action 2: resolved | not_found | forbidden | error. 'resolved' stores the names and ids; 'not_found' and 'forbidden' clear them; 'error' keeps what was resolved before. lastError is a short provider code + message, never a token.
+Stored procedure: EXEC [dbo].[sp_marketingAds] @pjsonfile = '<json>'
+
+Example (worker writes a result):
+curl -X POST "https://smartloansbackend.azurewebsites.net/marketingAds"   -H "Content-Type: application/json" -H "X-Worker-Key: <key>"   -d '{"marketingAds":[{"action":2, "companyId":1, "provider":"meta", "adId":"120200000000000011", "lookupStatus":"resolved", "adName":"Example_Ad", "adsetId":"120200000000000022", "adsetName":"Example_AdSet", "campaignId":"120200000000000033", "campaignName":"Example_Campaign", "adAccountId":"act_1000000000000000"}]}'

@@ -40,7 +40,7 @@ import httpx
 
 from fastapi.responses import JSONResponse
 
-from modules import clientContactPreferences, marketingLeadAttributions, whatsappChannels, whatsappReservations
+from modules import clientContactPreferences, marketingAds, marketingLeadAttributions, whatsappChannels, whatsappReservations
 from modules import whatsappEvidence
 from modules.whatsapp import log_message_to_database
 from modules.whatsappAssistant import _sp as assistant_sp
@@ -384,6 +384,15 @@ def _record_ad_referral(channel: dict, phone: str, msg: dict) -> None:
             "rawReferral": referral,
             "referredAt": _sent_at(msg.get("timestamp")),
         }]})
+        # Meta's referral has the ad id only: leave the ad 'pending' so
+        # marketingAdsSyncWorker resolves its ad set and campaign later.
+        if referral.get("source_id"):
+            marketingAds.ensure_pending({"marketingAds": [{
+                "action": 1,
+                "companyId": channel["companyId"],
+                "provider": "meta",
+                "adId": str(referral["source_id"]),
+            }]})
     except Exception:
         logger.warning("[whatsappCloud] ad referral not recorded | id=%s", msg.get("messageId"))
 
