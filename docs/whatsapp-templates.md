@@ -24,6 +24,7 @@ templates**. Register each one below in **WhatsApp Manager → Message templates
 | `capital_publicado` | Utility | `loanOffers._send_offer_published_ticket` |
 | `reservacion_confirmada` | Utility | `reservations._send_confirmation_whatsapp` |
 | `registro_pendiente` | Utility | `registrationReminders._notify_cellphone` |
+| `aviso_apertura` | Marketing | **Not wired yet.** For the demand signals with `notifyOptIn = 1` (Client Acquisition) |
 
 ---
 
@@ -157,6 +158,37 @@ Aún te falta completar tu registro en GMO: {{1}}.
 Termínalo para acceder al sistema.
 ```
 Sample: `{{1}}` = `Perfil de aplicación, Verificación de identidad`
+
+---
+
+## aviso_apertura — Marketing (draft 2026-11-11, not submitted)
+
+Tells someone who said "sí, avísenme" during the validation campaign that the
+service they asked for is now open in their zone. These people are in
+`dbo.demandSignals` with `notifyOptIn = 1`. It's almost always sent outside the
+24 h window, so it must be a template. A "service X is open now" message is
+promotional, so submit it as **Marketing** (Utility would get
+INCORRECT_CATEGORY, like `cuenta_creada`).
+
+```
+Hola, te escribimos de {{1}}.
+
+Nos pediste avisarte cuando abriéramos: {{2}} ya está disponible en {{3}}.
+
+Responde a este mensaje si quieres saber cómo usarlo.
+```
+Samples: `{{1}}` = `Lavanderia GMO`, `{{2}}` = `el Autoservicio 24 h`,
+`{{3}}` = `Pitic, Hermosillo`
+
+Buttons (quick reply): `Quiero más info` · `No me interesa`.
+Also turn on Meta's **marketing opt-out button** (`Detener promociones`).
+
+`{{2}}` per concept (from `demandSignals.concept`):
+`autoservicio_24h` → `el Autoservicio 24 h` · `lockers` → `el Locker GMO` ·
+`qr_gmo` → `Tu QR GMO`. `{{3}}` = the zone that opened (`preferredZoneName`).
+
+Send it only to `notifyOptIn = 1`. Clicking the ad is not permission. A
+"No me interesa" reply should clear `notifyOptIn`.
 
 ---
 
