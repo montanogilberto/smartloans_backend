@@ -18,6 +18,9 @@
 --   dbo.whatsappConversations / whatsappChannels  which number the customer wrote to,
 --                         and whether the bot is paused for staff.
 --   dbo.reservations      source = 'whatsapp'.
+--   dbo.whatsappMessageDeliveries  Meta receipt per outbound whatsappMessages row → item.delivery
+--                         (accepted|sent|delivered|read|failed|null) + item.error = Meta code when
+--                         failed. DEPLOY sql/sp_whatsappMessageDeliveries.sql FIRST (table must exist).
 --   dbo.notificationDispatches  push / WhatsApp template / SMS sent to the client
 --                         (recipientType 'client' = clientId, 'user' = userId).
 --   dbo.pushNotifications direct pushes to the client's app user (targetUserId).
@@ -339,11 +342,12 @@ BEGIN
 
         -- ord breaks ties within the same second: the customer's message first.
         DECLARE @items TABLE (atUtc DATETIME2, ord INT, kind NVARCHAR(20), text NVARCHAR(MAX), detail NVARCHAR(400),
-                              channel NVARCHAR(20), status NVARCHAR(30), error NVARCHAR(400));
+                              channel NVARCHAR(20), status NVARCHAR(30), error NVARCHAR(400),
+                              delivery NVARCHAR(20));
 
         IF @useMessages = 1
         BEGIN
-            INSERT INTO @items (atUtc, ord, kind, text, detail, status)
+            INSERT INTO @items (atUtc, ord, kind, text, detail, status, delivery, error)
             SELECT CONVERT(DATETIME2, (m.createdAt AT TIME ZONE 'Eastern Standard Time') AT TIME ZONE 'UTC'),
                    CASE WHEN m.direction = 'inbound' THEN 0 ELSE 2 END,
                    CASE WHEN m.direction = 'inbound' THEN 'client'
@@ -352,8 +356,13 @@ BEGIN
                         ELSE 'bot' END,
                    m.messageBody,
                    CASE WHEN m.status = 'staff_sent' THEN NULLIF(m.responseBody, '') END,
-                   m.status
+                   m.status,
+                   -- Meta's receipt for this outbound row (ticks on the bubble); NULL = none recorded.
+                   d.status,
+                   CASE WHEN d.status = 'failed' THEN d.errorCode END
             FROM [dbo].[whatsappMessages] m
+            LEFT JOIN [dbo].[whatsappMessageDeliveries] d
+                   ON d.whatsappMessageId = m.messageId AND d.companyId = @companyId AND m.direction = 'outbound'
             WHERE m.createdAt >= @fromEt AND m.createdAt < @toEt
               AND m.phoneNumber LIKE '%' + RIGHT(@phone10, 4)
               AND RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(m.phoneNumber, 'whatsapp:', ''), '+', ''), ' ', ''), '-', ''), 10) = @phone10;
@@ -422,7 +431,7 @@ BEGIN
                                        WHERE ISNULL(customerName, '') <> '' ORDER BY atUtc DESC);
 
         DECLARE @itemsJson NVARCHAR(MAX) = (
-            SELECT TOP (800) CONVERT(NVARCHAR(19), atUtc, 126) AS atUtc, kind, text, detail, channel, status, error
+            SELECT TOP (800) CONVERT(NVARCHAR(19), atUtc, 126) AS atUtc, kind, text, detail, channel, status, error, delivery
             FROM @items ORDER BY atUtc, ord
             FOR JSON PATH, INCLUDE_NULL_VALUES
         );

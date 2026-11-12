@@ -42,7 +42,8 @@ from fastapi.responses import JSONResponse
 
 from modules import clientContactPreferences, marketingLeadAttributions, whatsappChannels, whatsappReservations
 from modules import whatsappEvidence
-from modules.whatsapp import log_message_to_database
+from modules import whatsappMessageDeliveries
+from modules.whatsapp import log_message_to_database, log_outbound_message
 from modules.whatsappAssistant import _sp as assistant_sp
 from observability.integrations import timed_integration
 from observability.logger import log_workflow_step
@@ -97,7 +98,7 @@ def send_text(channel: dict, to: str, body: str) -> Dict[str, Any]:
             raise RuntimeError(f"WhatsApp Cloud send failed ({resp.status_code}): {data}")
 
     message_id = (data.get("messages") or [{}])[0].get("id")
-    logger.info("[whatsappCloud] sent | to=%s id=%s", to_digits, message_id)
+    logger.info("[whatsappCloud] sent | to=…%s id=%s", to_digits[-4:], message_id)
     return {"channel": "whatsapp", "to": to_digits, "provider": "meta", "messageId": message_id}
 
 
@@ -233,7 +234,7 @@ def send_template(channel: dict, to: str, name: str, params: List[Any],
             raise RuntimeError(f"WhatsApp Cloud template {name} failed ({resp.status_code}): {data}")
 
     message_id = (data.get("messages") or [{}])[0].get("id")
-    logger.info("[whatsappCloud] template sent | to=%s template=%s id=%s", to_digits, name, message_id)
+    logger.info("[whatsappCloud] template sent | to=…%s template=%s id=%s", to_digits[-4:], name, message_id)
     return {"channel": "whatsapp", "to": to_digits, "provider": "meta", "messageId": message_id}
 
 
@@ -283,6 +284,38 @@ def _extract_inbound(payload: dict) -> List[Dict[str, Any]]:
     return out
 
 
+def _record_outbound(*, channel: dict, phone_number: str, message_body: str, response_body: str,
+                     status: str, wamid: str | None, sender_kind: str) -> None:
+    """After Meta accepted a send: log it to whatsappMessages (the POS bubble) and
+    open its delivery receipt (status 'accepted') linked to that row, so the
+    webhook's sent/delivered/read can turn into ticks. Never raises."""
+    message_id = log_outbound_message({"phoneNumber": phone_number, "messageBody": message_body,
+                                       "responseBody": response_body, "direction": "outbound",
+                                       "status": status})
+    if not wamid or not channel:
+        return
+    whatsappMessageDeliveries.upsert_delivery({
+        "providerMessageId": wamid, "whatsappMessageId": message_id,
+        "companyId": channel.get("companyId"), "channelId": channel.get("channelId"),
+        "senderKind": sender_kind, "status": "accepted",
+    })
+
+
+def _record_status(channel: dict | None, st: dict) -> None:
+    """One Meta receipt (value.statuses[]) -> whatsappMessageDeliveries. Receipts of
+    numbers we don't know are skipped (no company to file them under)."""
+    if not channel or st.get("status") not in ("sent", "delivered", "read", "failed"):
+        return
+    err = (st.get("errors") or [{}])[0]
+    whatsappMessageDeliveries.upsert_delivery({
+        "providerMessageId": st.get("id"), "companyId": channel.get("companyId"),
+        "channelId": channel.get("channelId"), "status": st.get("status"),
+        "statusTimestamp": st.get("timestamp"),
+        "errorCode": str(err["code"]) if err.get("code") is not None else None,
+        "errorTitle": err.get("title") or err.get("message"),
+    })
+
+
 def _log_statuses(payload: dict) -> None:
     """Outbound delivery receipts. A send that Meta accepted (200 + wamid) can
     still fail later — e.g. 131047 outside the 24h window, 131042 no payment
@@ -291,13 +324,27 @@ def _log_statuses(payload: dict) -> None:
         for change in entry.get("changes") or []:
             if change.get("field") != "messages":
                 continue
-            for st in (change.get("value") or {}).get("statuses") or []:
+            value = change.get("value") or {}
+            statuses = value.get("statuses") or []
+            channel = None
+            if statuses:
+                try:
+                    channel = whatsappChannels.get_channel((value.get("metadata") or {}).get("phone_number_id"))
+                except Exception:
+                    logger.exception("[whatsappCloud] status: channel lookup failed")
+            for st in statuses:
+                # Phone masked to its last 4 digits: the full number is PII.
+                to = "…" + str(st.get("recipient_id") or "")[-4:]
                 if st.get("status") == "failed":
                     logger.warning("[whatsappCloud] send failed | to=%s id=%s errors=%s",
-                                   st.get("recipient_id"), st.get("id"), st.get("errors"))
+                                   to, st.get("id"), st.get("errors"))
                 else:
                     logger.info("[whatsappCloud] status | to=%s id=%s status=%s",
-                                st.get("recipient_id"), st.get("id"), st.get("status"))
+                                to, st.get("id"), st.get("status"))
+                try:
+                    _record_status(channel, st)
+                except Exception:
+                    logger.exception("[whatsappCloud] delivery receipt not recorded | id=%s", st.get("id"))
                 err = (st.get("errors") or [{}])[0]
                 _update_dispatch(st.get("id"), st.get("status"),
                                  err.get("code"), err.get("title") or err.get("message"))
@@ -455,11 +502,11 @@ def _handle_message(msg: dict) -> None:
     if not reply:
         return
     try:
-        send_text(channel, phone, reply)
-        log_message_to_database(phone_number=phone, message_body=reply, response_body="",
-                                direction="outbound", status="sent", action=1)
+        sent = send_text(channel, phone, reply)
+        _record_outbound(channel=channel, phone_number=phone, message_body=reply, response_body="",
+                         status="sent", wamid=(sent or {}).get("messageId"), sender_kind="agent")
     except Exception:
-        logger.exception("[whatsappCloud] failed to send bot reply | to=%s", phone)
+        logger.exception("[whatsappCloud] failed to send bot reply | to=…%s", phone[-4:])
 
 
 def handle_webhook(payload: dict) -> None:
@@ -552,8 +599,9 @@ def staff_reply(json_file: dict) -> JSONResponse:
         return JSONResponse({"error": "send_failed", "attempts": attempts}, status_code=502)
 
     try:
-        log_message_to_database(phone_number=customer, message_body=body, response_body=f"userId={user_id}",
-                                direction="outbound", status="staff_sent", action=1)
+        _record_outbound(channel=channel, phone_number=customer, message_body=body,
+                         response_body=f"userId={user_id}", status="staff_sent",
+                         wamid=sent.get("messageId"), sender_kind="staff_pos")
     except Exception:
         logger.exception("[whatsappCloud] failed to log staff reply")
     # No message text or phone here: the logs stay free of PII.
@@ -631,9 +679,9 @@ def _staff_template(company_id: int, user_id: int, channel: dict | None, target:
                           entity="whatsappChannel", entity_id=sender.get("channelId"), message=reason)
         return JSONResponse({"error": "template_failed", "reason": reason}, status_code=502)
     try:
-        log_message_to_database(phone_number=customer, message_body=body,
-                                response_body=f"userId={user_id} template={STAFF_TEMPLATE}",
-                                direction="outbound", status="staff_sent", action=1)
+        _record_outbound(channel=sender, phone_number=customer, message_body=body,
+                         response_body=f"userId={user_id} template={STAFF_TEMPLATE}", status="staff_sent",
+                         wamid=(sent or {}).get("messageId"), sender_kind="staff_template")
     except Exception:
         logger.exception("[whatsappCloud] failed to log staff template")
     log_workflow_step("staff_template", workflow_name="whatsapp_chat", entity="whatsappChannel",

@@ -8,6 +8,48 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def log_outbound_message(json_file: dict) -> int | None:
+    """Logs ONE WhatsApp message to dbo.whatsappMessages (sp_whatsapp_messages action 1)
+    and returns its messageId, so the caller can link the Meta wamid to it
+    (whatsappMessageDeliveries). Same row as log_message_to_database writes;
+    that function keeps its TwiML return for the legacy Twilio callers.
+
+    json_file: { "phoneNumber", "messageBody", "responseBody"?, "direction", "status" }
+    Returns None on any error (never raises: a log hiccup must not stop a send).
+    Logs only the phone's last 4 digits, never the text."""
+    payload = json.dumps({"messages": [{
+        "phoneNumber": json_file.get("phoneNumber"),
+        "messageBody": json_file.get("messageBody"),
+        "responseBody": json_file.get("responseBody") or "",
+        "direction": json_file.get("direction"),
+        "status": json_file.get("status"),
+        "action": 1,
+    }]})
+    tail = str(json_file.get("phoneNumber") or "")[-4:]
+    conn = None
+    try:
+        conn = connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC sp_whatsapp_messages @pjsonfile = %s", (payload,))
+        row = cursor.fetchone()
+        conn.commit()
+        # Result columns: value (new messageId since 2026-11-12), msg, error.
+        if not row or (len(row) > 2 and row[2] == "1"):
+            logger.warning("[log_outbound_message] not logged | phone=…%s msg=%s",
+                           tail, row[1] if row and len(row) > 1 else None)
+            return None
+        try:
+            return int(row[0]) if row[0] not in (None, "") else None
+        except (TypeError, ValueError):
+            return None  # SP not yet redeployed with the id return: the row is still logged
+    except Exception:
+        logger.exception("[log_outbound_message] error | phone=…%s", tail)
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
 def log_message_to_database(phone_number, message_body, response_body, direction, status, action):
     """
     Log incoming or outgoing WhatsApp messages to the database using a stored procedure.
