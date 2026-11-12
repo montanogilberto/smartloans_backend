@@ -11,7 +11,11 @@
 --   "contactName"?, "contactRole"?, "addressText"?, "zoneName"?, "zoneLat"?,
 --   "zoneLng"?, "openingHours"?, "opensWeekends"?, "spaceType"?, "dailyVisitors"?,
 --   "hasParking"?, "contactOptIn"? }] }
--- Returns {"result":[{"locationHostId", "status"}]} or {"error": "..."}.
+-- The business is matched ignoring case, accents and extra spaces ("Farmacia
+-- Gómez" = "farmacia  gomez"), so one business is one row; the first spelling stays.
+-- Returns {"result":[{"locationHostId", "status", "newOptIn"}]} or {"error": "..."}.
+-- newOptIn is true only on the call that turned contactOptIn on, so the caller
+-- alerts the team once.
 -- =============================================================================
 CREATE OR ALTER PROC [dbo].[sp_locationHosts]
     @pjsonfile NVARCHAR(MAX)
@@ -71,12 +75,16 @@ BEGIN
             WHERE companyId = @companyId AND channelId = @channelId AND customerPhone = @phone
             ORDER BY referredAt DESC, marketingLeadAttributionId DESC;
 
-        DECLARE @id INT;
+        WHILE CHARINDEX('  ', @businessName) > 0
+            SET @businessName = REPLACE(@businessName, '  ', ' ');
+
+        DECLARE @id INT, @wasOptIn BIT, @newOptIn BIT = 0;
         BEGIN TRANSACTION;
 
-        SELECT @id = locationHostId
+        SELECT @id = locationHostId, @wasOptIn = contactOptIn
         FROM dbo.locationHosts WITH (UPDLOCK, HOLDLOCK)
-        WHERE companyId = @companyId AND contactPhone = @phone AND businessName = @businessName;
+        WHERE companyId = @companyId AND contactPhone = @phone
+          AND businessName COLLATE Latin1_General_CI_AI = @businessName COLLATE Latin1_General_CI_AI;
 
         IF @id IS NULL
         BEGIN
@@ -97,8 +105,11 @@ BEGIN
                 @zoneName, @lat, @lng, @openingHours, @opensWeekends, @spaceType, @dailyVisitors,
                 @hasParking, ISNULL(@optIn, 0), CASE WHEN @optIn = 1 THEN SYSUTCDATETIME() END);
             SET @id = SCOPE_IDENTITY();
+            IF @optIn = 1 SET @newOptIn = 1;
         END
         ELSE
+        BEGIN
+            IF @optIn = 1 AND ISNULL(@wasOptIn, 0) = 0 SET @newOptIn = 1;
             UPDATE dbo.locationHosts SET
                 channelId                  = @channelId,
                 marketingLeadAttributionId = COALESCE(@attributionId, marketingLeadAttributionId),
@@ -120,12 +131,14 @@ BEGIN
                 contactOptIn               = COALESCE(@optIn, contactOptIn),
                 updated_at                 = SYSUTCDATETIME()
             WHERE locationHostId = @id;
+        END;
 
         COMMIT TRANSACTION;
 
         DECLARE @status NVARCHAR(20) = (SELECT status FROM dbo.locationHosts WHERE locationHostId = @id);
         SELECT ('{"result":[{"locationHostId":' + CAST(@id AS NVARCHAR(12))
-                + ',"status":"' + @status + '"}]}') AS jsonResult;
+                + ',"status":"' + @status + '","newOptIn":'
+                + CASE WHEN @newOptIn = 1 THEN 'true' ELSE 'false' END + '}]}') AS jsonResult;
     END TRY
     BEGIN CATCH
         IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;

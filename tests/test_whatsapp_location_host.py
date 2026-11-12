@@ -48,7 +48,33 @@ class RecordLocationHostTest(unittest.TestCase):
         if self.error:
             raise self.error
         self.recorded.append(payload)
-        return {"locationHostId": 4}
+        return {"locationHostId": 4, "newOptIn": getattr(self, "new_opt_in", False)}
+
+    def test_new_contact_opt_in_alerts_the_team_once(self):
+        self.fields = {**self.fields, "contactOptIn": True, "contactName": "Lupita"}
+        self.new_opt_in = True
+        with mock.patch.object(wr, "pushNotifications_sp") as push, \
+                mock.patch.object(wr.asyncio, "run") as run:
+            self.assertEqual(self._reply(), REPLY)
+        push_payload = push.call_args.args[0]["pushNotifications"][0]
+        self.assertEqual((push_payload["companyId"], push_payload["targetCompanyId"]), (1, 1))
+        self.assertIn("Abarrotes Lupita (Pitic)", push_payload["message"])
+        self.assertNotIn(PHONE, push_payload["navigationRoute"])
+        run.assert_called_once()
+
+    def test_no_alert_when_opt_in_was_already_on_or_absent(self):
+        for fields in ({**self.fields, "contactOptIn": True}, self.fields):
+            self.fields, self.new_opt_in = fields, False
+            with mock.patch.object(wr, "pushNotifications_sp") as push, mock.patch.object(wr.asyncio, "run"):
+                self._reply()
+            push.assert_not_called()
+
+    def test_no_alert_when_the_write_failed(self):
+        self.fields = {**self.fields, "contactOptIn": True}
+        self.error = RuntimeError("db down")
+        with mock.patch.object(wr, "pushNotifications_sp") as push, mock.patch.object(wr.asyncio, "run"):
+            self.assertEqual(self._reply(), REPLY)
+        push.assert_not_called()
 
     def _reply(self):
         return wr.reply_to(CHANNEL, PHONE, "Lupita", "Abarrotes Lupita en la Pitic")

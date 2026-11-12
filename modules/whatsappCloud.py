@@ -260,6 +260,12 @@ def _extract_inbound(payload: dict) -> List[Dict[str, Any]]:
                     inter = msg.get("interactive") or {}
                     reply = inter.get("button_reply") or inter.get("list_reply") or {}
                     text = reply.get("title", "")
+                elif msg_type == "location":
+                    # A shared pin. The agent gets its place name/address as text;
+                    # the coordinates stay here (see whatsappReservations.reply_to).
+                    loc = msg.get("location") or {}
+                    label = ", ".join(x for x in (loc.get("name"), loc.get("address")) if x)
+                    text = f"[ubicación compartida] {label}".strip()
                 else:
                     text = f"[{msg_type}]"
                 out.append({
@@ -271,6 +277,7 @@ def _extract_inbound(payload: dict) -> List[Dict[str, Any]]:
                     "text": text,
                     "mediaId": (msg.get("image") or {}).get("id"),
                     "referral": msg.get("referral"),
+                    "location": msg.get("location") if msg_type == "location" else None,
                     "timestamp": msg.get("timestamp"),
                 })
     return out
@@ -442,7 +449,9 @@ def _handle_message(msg: dict) -> None:
             reply = whatsappEvidence.handle_image(channel, phone, msg.get("mediaId"))
         if reply is None:
             reply = whatsappReservations.reply_to(channel, phone, msg["name"], msg["text"],
-                                                  on_answering=lambda: show_typing(channel, msg["messageId"]))
+                                                  on_answering=lambda: show_typing(channel, msg["messageId"]),
+                                                  ad_referral=msg.get("referral"),
+                                                  location=msg.get("location"))
     if not reply:
         return
     try:

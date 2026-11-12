@@ -63,7 +63,8 @@ class ReplyToSendClientQrTest(unittest.TestCase):
     def test_found_sends_the_qr_the_pos_scanner_reads(self):
         out, send_image = self.reply()
         self.assertEqual(out, self.agent_reply)
-        self.assertEqual(self.sp_calls, [("sp_whatsappCustomerRewards",
+        # [-1:]: reply_to also looks the sender up once to tell the agent client vs new.
+        self.assertEqual(self.sp_calls[-1:], [("sp_whatsappCustomerRewards",
                                           {"customerRewards": [{"companyId": 1, "phone": PHONE}]})])
         channel, to, image, caption = send_image.call_args.args
         self.assertEqual((channel, to), (CHANNEL, PHONE))
