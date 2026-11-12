@@ -38,7 +38,7 @@ class StaffReplyTest(unittest.TestCase):
             "sp": mock.patch.object(wc, "assistant_sp", side_effect=lambda *_: self.lookup),
             "get_channel": mock.patch.object(wc.whatsappChannels, "get_channel", return_value=dict(CHANNEL)),
             "send": mock.patch.object(wc, "send_text", return_value={"messageId": "wamid.X"}),
-            "log_msg": mock.patch.object(wc, "log_message_to_database"),
+            "log_msg": mock.patch.object(wc, "_record_outbound"),
             "log_step": mock.patch.object(wc, "log_workflow_step"),
         }
         self.m = {k: p.start() for k, p in patches.items()}
@@ -49,7 +49,8 @@ class StaffReplyTest(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.m["send"].assert_called_once_with(CHANNEL, "+5216621234567", "Hola, ya está lista tu ropa")
         kw = self.m["log_msg"].call_args.kwargs
-        self.assertEqual((kw["direction"], kw["status"], kw["response_body"]), ("outbound", "staff_sent", "userId=9"))
+        self.assertEqual((kw["status"], kw["response_body"], kw["wamid"], kw["sender_kind"]),
+                         ("staff_sent", "userId=9", "wamid.X", "staff_pos"))
         # The workflow log carries no message text or phone.
         step = str(self.m["log_step"].call_args)
         self.assertNotIn("ropa", step)
@@ -100,7 +101,7 @@ class OtherNumberTest(unittest.TestCase):
             "list": mock.patch.object(wc.whatsappChannels, "company_channels",
                                       return_value=[dict(CHANNEL, isActive=True), self.other]),
             "send": mock.patch.object(wc, "send_text"),
-            "log_msg": mock.patch.object(wc, "log_message_to_database"),
+            "log_msg": mock.patch.object(wc, "_record_outbound"),
             "log_step": mock.patch.object(wc, "log_workflow_step"),
         }
         self.m = {k: p.start() for k, p in patches.items()}
@@ -147,7 +148,7 @@ class StaffTemplateTest(unittest.TestCase):
             "template": mock.patch.object(wc, "send_template", return_value={"messageId": "wamid.T"}),
             "outbound": mock.patch.object(wc, "outbound_channel", return_value={"phoneNumberId": "SENDER"}),
             "company": mock.patch("modules.companies.company_name", return_value="Lavanderia GMO"),
-            "log_msg": mock.patch.object(wc, "log_message_to_database"),
+            "log_msg": mock.patch.object(wc, "_record_outbound"),
             "log_step": mock.patch.object(wc, "log_workflow_step"),
         }
         self.m = {k: p.start() for k, p in patches.items()}
