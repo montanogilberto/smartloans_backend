@@ -86,6 +86,35 @@ class RecordDemandSignalTest(unittest.TestCase):
         self._reply()
         self.assertNotIn("frequency", self.recorded[0]["demandSignals"][0])
 
+    def test_zone_name_is_recorded_next_to_the_original_text(self):
+        self.fields = {**self.fields, "preferredZoneName": "Pitic"}
+        self._reply()
+        row = self.recorded[0]["demandSignals"][0]
+        self.assertEqual((row["preferredZoneText"], row["preferredZoneName"]), ("por la Pitic", "Pitic"))
+
+    def test_prospect_name_is_recorded(self):
+        self.fields = {**self.fields, "prospectName": "Ana López"}
+        self._reply()
+        self.assertEqual(self.recorded[0]["demandSignals"][0]["prospectName"], "Ana López")
+
+    def test_shared_pin_coordinates_come_from_meta_not_the_agent(self):
+        self.fields = {**self.fields, "preferredZoneLat": 1.0, "preferredZoneLng": 2.0}
+        pin = {"latitude": 29.0892345678, "longitude": -110.9612, "name": "Plaza Pitic"}
+        wr.reply_to(CHANNEL, PHONE, "Ana", "[ubicación compartida] Plaza Pitic", location=pin)
+        row = self.recorded[0]["demandSignals"][0]
+        self.assertEqual((row["preferredZoneLat"], row["preferredZoneLng"]), (29.089235, -110.9612))
+
+    def test_no_pin_means_no_coordinates(self):
+        self.fields = {**self.fields, "preferredZoneLat": 1.0, "preferredZoneLng": 2.0}
+        self._reply()
+        row = self.recorded[0]["demandSignals"][0]
+        self.assertNotIn("preferredZoneLat", row)
+        self.assertNotIn("preferredZoneLng", row)
+
+    def test_bad_pin_is_ignored(self):
+        wr.reply_to(CHANNEL, PHONE, "Ana", "x", location={"latitude": "abc", "longitude": 500})
+        self.assertNotIn("preferredZoneLat", self.recorded[0]["demandSignals"][0])
+
     def test_write_failure_still_replies(self):
         self.record_error = RuntimeError("sp_demandSignals: channel does not belong to company")
         self.assertEqual(self._reply(), REPLY)

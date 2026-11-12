@@ -3,7 +3,14 @@
 -- =============================================================================
 -- Filters (all optional but companyId): startDate/endDate (Hermosillo days, fixed
 -- UTC-7, default last 30 days), concept, origin, intentLevel, sourceId (the Meta ad
--- id from marketingLeadAttributions). Phones go out masked: last 4 digits only.
+-- id from marketingLeadAttributions). Phones go out masked (last 4 digits), except
+-- for people who said yes to being contacted (notifyOptIn = 1): full phone.
+-- clientStatus is computed now, by phone (same last-10-digit match as the
+-- WhatsApp points lookup), not from the clientId stored when the signal was made:
+--   'cliente'                = already a client of the company before the signal
+--   'registrado_por_campana' = became a client at or after the signal
+--   'prospecto'              = not a client
+-- isExistingClient (stored clientId) is kept as it was for older screens.
 -- { "demandSignals": [{ "companyId": int, "startDate"?, "endDate"?, "concept"?,
 --   "origin"?, "intentLevel"?, "sourceId"? }] }
 -- Returns {"result":[{"demandSignals":[...]}]} or {"error": "..."}.
@@ -46,9 +53,15 @@ BEGIN
                 ds.preferredZoneText, ds.preferredZoneName, ds.preferredZoneLat, ds.preferredZoneLng,
                 ds.residenceZoneText, ds.workZoneText, ds.frequency, ds.preferredTime,
                 ds.currentSolution, ds.painPoint, ds.wouldUse, ds.notifyOptIn, ds.intentLevel,
+                ds.prospectName,
+                CASE WHEN cl.clientId IS NULL THEN 'prospecto'
+                     WHEN cl.created_At < ds.created_at THEN 'cliente'
+                     ELSE 'registrado_por_campana' END AS clientStatus,
+                cl.clientId AS matchedClientId,
                 CAST(CASE WHEN ds.clientId IS NOT NULL THEN 1 ELSE 0 END AS BIT) AS isExistingClient,
                 mla.sourceId, mla.headline,
                 RIGHT(ds.customerPhone, 4) AS phoneLast4,
+                CASE WHEN ds.notifyOptIn = 1 THEN ds.customerPhone END AS phone,
                 CONVERT(NVARCHAR(19), ds.optInAt, 126)    AS optInAt,
                 CONVERT(NVARCHAR(19), ds.created_at, 126) AS created_at,
                 CONVERT(NVARCHAR(19), ds.updated_at, 126) AS updated_at
@@ -56,6 +69,16 @@ BEGIN
             LEFT JOIN dbo.marketingLeadAttributions AS mla
                    ON mla.marketingLeadAttributionId = ds.marketingLeadAttributionId
                   AND mla.companyId = ds.companyId
+            OUTER APPLY (
+                SELECT TOP 1 c.clientId, c.created_At
+                FROM dbo.clients AS c
+                WHERE c.companyId = ds.companyId
+                  AND c.isActive = 1
+                  AND c.first_name <> N'Desconocido'
+                  AND RIGHT(REPLACE(REPLACE(REPLACE(c.cellphone, '+', ''), ' ', ''), '-', ''), 10)
+                      = RIGHT(REPLACE(REPLACE(REPLACE(ds.customerPhone, '+', ''), ' ', ''), '-', ''), 10)
+                ORDER BY c.created_At, c.clientId
+            ) AS cl
             WHERE ds.companyId = @companyId
               AND ds.created_at >= @fromUtc AND ds.created_at < @toUtc
               AND (@concept IS NULL OR ds.concept = @concept)

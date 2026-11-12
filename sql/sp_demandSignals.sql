@@ -6,6 +6,7 @@
 -- phone and channel is linked (origin becomes 'anuncio').
 -- A later call overwrites only the fields it sends (NULL = keep), so the agent can
 -- record progressively. intentLevel is computed here; any value sent is ignored.
+-- preferredZoneText is optional (needs 2026-11-12_demandSignals_zoneOptional.sql).
 --   alta  = wouldUse 'si' AND frequency IN (semanal, quincenal) AND notifyOptIn = 1
 --   media = wouldUse IN (si, tal_vez) otherwise
 --   baja  = wouldUse 'no' or unknown
@@ -14,7 +15,7 @@
 --   "origin"?, "clientId"?, "marketingLeadAttributionId"?, "residenceZoneText"?,
 --   "workZoneText"?, "preferredZoneText"?, "preferredZoneName"?, "preferredZoneLat"?,
 --   "preferredZoneLng"?, "frequency"?, "preferredTime"?, "currentSolution"?,
---   "painPoint"?, "wouldUse"?, "notifyOptIn"? }] }
+--   "painPoint"?, "wouldUse"?, "notifyOptIn"?, "prospectName"? }] }
 -- Returns {"result":[{"demandSignalId", "intentLevel"}]} or {"error": "..."}.
 -- =============================================================================
 CREATE OR ALTER PROC [dbo].[sp_demandSignals]
@@ -28,7 +29,7 @@ BEGIN
                 @residence NVARCHAR(120), @work NVARCHAR(120), @zoneText NVARCHAR(120),
                 @zoneName NVARCHAR(120), @lat DECIMAL(9,6), @lng DECIMAL(9,6),
                 @frequency NVARCHAR(20), @preferredTime NVARCHAR(20), @currentSolution NVARCHAR(20),
-                @painPoint NVARCHAR(200), @wouldUse NVARCHAR(10), @optIn BIT;
+                @painPoint NVARCHAR(200), @wouldUse NVARCHAR(10), @optIn BIT, @prospectName NVARCHAR(120);
 
         SELECT TOP 1
             @companyId       = TRY_CONVERT(INT, JSON_VALUE(value, '$.companyId')),
@@ -49,7 +50,8 @@ BEGIN
             @currentSolution = NULLIF(JSON_VALUE(value, '$.currentSolution'), ''),
             @painPoint       = NULLIF(LTRIM(RTRIM(JSON_VALUE(value, '$.painPoint'))), ''),
             @wouldUse        = NULLIF(JSON_VALUE(value, '$.wouldUse'), ''),
-            @optIn           = TRY_CONVERT(BIT, JSON_VALUE(value, '$.notifyOptIn'))
+            @optIn           = TRY_CONVERT(BIT, JSON_VALUE(value, '$.notifyOptIn')),
+            @prospectName    = NULLIF(LTRIM(RTRIM(LEFT(JSON_VALUE(value, '$.prospectName'), 120))), '')
         FROM OPENJSON(@pjsonfile, '$.demandSignals');
 
         IF @companyId IS NULL OR @channelId IS NULL OR @customerPhone IS NULL OR @concept IS NULL
@@ -92,12 +94,8 @@ BEGIN
 
         IF @id IS NULL
         BEGIN
-            IF @zoneText IS NULL
-            BEGIN
-                ROLLBACK TRANSACTION;
-                SELECT '{"error":"preferredZoneText is required for a new signal"}' AS jsonResult;
-                RETURN;
-            END;
+            -- No zone yet is fine (2026-11-12): every campaign lead is stored as soon
+            -- as the concept is known; the zone is filled by a later call.
             SET @intent = CASE
                 WHEN @wouldUse = 'si' AND @frequency IN ('semanal', 'quincenal') AND ISNULL(@optIn, 0) = 1 THEN 'alta'
                 WHEN @wouldUse IN ('si', 'tal_vez') THEN 'media'
@@ -105,13 +103,14 @@ BEGIN
             INSERT INTO dbo.demandSignals (
                 companyId, channelId, customerPhone, clientId, marketingLeadAttributionId, concept, origin,
                 residenceZoneText, workZoneText, preferredZoneText, preferredZoneName, preferredZoneLat, preferredZoneLng,
-                frequency, preferredTime, currentSolution, painPoint, wouldUse, notifyOptIn, optInAt, intentLevel)
+                frequency, preferredTime, currentSolution, painPoint, wouldUse, notifyOptIn, optInAt, intentLevel,
+                prospectName)
             VALUES (
                 @companyId, @channelId, @customerPhone, @clientId, @attributionId, @concept,
                 COALESCE(@origin, CASE WHEN @attributionId IS NOT NULL THEN 'anuncio' ELSE 'organico' END),
                 @residence, @work, @zoneText, @zoneName, @lat, @lng,
                 @frequency, @preferredTime, @currentSolution, @painPoint, @wouldUse, ISNULL(@optIn, 0),
-                CASE WHEN @optIn = 1 THEN SYSUTCDATETIME() END, @intent);
+                CASE WHEN @optIn = 1 THEN SYSUTCDATETIME() END, @intent, @prospectName);
             SET @id = SCOPE_IDENTITY();
         END
         ELSE
@@ -134,6 +133,7 @@ BEGIN
                 wouldUse                   = COALESCE(@wouldUse, wouldUse),
                 optInAt                    = CASE WHEN notifyOptIn = 0 AND @optIn = 1 THEN SYSUTCDATETIME() ELSE optInAt END,
                 notifyOptIn                = COALESCE(@optIn, notifyOptIn),
+                prospectName               = COALESCE(@prospectName, prospectName),
                 updated_at                 = SYSUTCDATETIME()
             WHERE demandSignalId = @id;
 

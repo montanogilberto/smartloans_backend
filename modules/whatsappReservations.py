@@ -168,16 +168,30 @@ def _split_full_name(full_name: str) -> tuple[str, str]:
 # channelId, customerPhone, clientId and the ad attribution are set here or by
 # the SP, never taken from the agent.
 _DEMAND_FIELDS = ("concept", "preferredZoneText", "residenceZoneText", "workZoneText", "frequency",
-                  "preferredTime", "currentSolution", "painPoint", "wouldUse", "notifyOptIn")
+                  "preferredTime", "currentSolution", "painPoint", "wouldUse", "notifyOptIn",
+                  "prospectName", "preferredZoneName")
 
 
-def _record_demand_signal(channel: dict, phone: str, fields: dict) -> None:
+def _pin_coordinates(location: dict | None) -> dict:
+    """{preferredZoneLat, preferredZoneLng} from the pin the customer shared in
+    THIS message (Meta's messages[].location), or {} — never from the agent."""
+    try:
+        lat, lng = float(location["latitude"]), float(location["longitude"])
+    except (TypeError, KeyError, ValueError):
+        return {}
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return {}
+    return {"preferredZoneLat": round(lat, 6), "preferredZoneLng": round(lng, 6)}
+
+
+def _record_demand_signal(channel: dict, phone: str, fields: dict, location: dict | None = None) -> None:
     """Campaign (location validation): upserts the sender's interest in a
     service concept. Never changes what the customer gets on WhatsApp: any
     failure is logged and swallowed. sp_demandSignals links the latest ad
     attribution for this phone and channel by itself."""
     from modules.demandSignals import record_demand_signal  # lazy: keeps this module importable alone
     row = {k: fields[k] for k in _DEMAND_FIELDS if fields.get(k) is not None}
+    row.update(_pin_coordinates(location))
     row.update({"companyId": channel["companyId"], "channelId": channel["channelId"],
                 "customerPhone": phone})
     try:
@@ -201,7 +215,8 @@ def _record_demand_signal(channel: dict, phone: str, fields: dict) -> None:
 # and staffNotes are staff-only; tenant, channel, phone and attribution are set
 # here or by the SP.
 _HOST_FIELDS = ("businessName", "zoneText", "businessType", "contactName", "contactRole", "addressText",
-                "openingHours", "opensWeekends", "spaceType", "dailyVisitors", "hasParking", "contactOptIn")
+                "openingHours", "opensWeekends", "spaceType", "dailyVisitors", "hasParking", "contactOptIn",
+                "zoneName")
 
 
 def _record_location_host(channel: dict, phone: str, fields: dict) -> None:
@@ -217,6 +232,37 @@ def _record_location_host(channel: dict, phone: str, fields: dict) -> None:
                     channel["channelId"], result.get("locationHostId"))
     except Exception:
         logger.exception("[whatsappReservations] location host failed | channel=%s", channel["channelId"])
+        return
+    if result.get("newOptIn") is True:
+        _push_host_lead_to_staff(channel, phone, row, result.get("locationHostId"))
+
+
+def _push_host_lead_to_staff(channel: dict, phone: str, row: dict, host_id) -> None:
+    """A business said yes to being contacted about a GMO locker (Red GMO): the
+    company's POS users get a push, once (sp_locationHosts newOptIn), so the
+    lead isn't left sitting in the table. Failures are logged and swallowed."""
+    who = row.get("contactName") or "El contacto"
+    where = f" ({row['zoneText']})" if row.get("zoneText") else ""
+    try:
+        asyncio.run(pushNotifications_sp({"pushNotifications": [{
+            "action": 1,
+            "companyId": channel["companyId"],
+            "title": "🏪 Negocio quiere un locker GMO",
+            "message": f"{row.get('businessName')}{where}: {who} ({phone}) pidió que el equipo lo contacte. "
+                       "Escríbele en el POS › Conversaciones.",
+            "notificationType": "Info",
+            "priority": "High",
+            "targetType": "Company",
+            "targetCompanyId": channel["companyId"],
+            # Opens the POS inbox; the phone stays out of the route (no PII in URLs).
+            "navigationRoute": "/whatsapp-agent/conversations",
+            "payloadJson": json.dumps({"type": "LocationHostLead", "locationHostId": host_id,
+                                       "phone": phone, "channelId": channel["channelId"]}),
+        }]}))
+    except Exception:
+        logger.exception("[whatsappReservations] host lead push failed | host=%s", host_id)
+    logger.info("[whatsappReservations] host lead pushed to staff | channel=%s host=%s",
+                channel["channelId"], host_id)
 
 
 def _register_client(channel: dict, phone: str, fields: dict) -> str:
@@ -374,8 +420,41 @@ def _book(channel: dict, phone: str, profile_name: str | None, fields: dict) -> 
             f"Te esperamos. Si necesitas cambiarla, escríbenos aquí.")
 
 
+def _ad_context(referral: dict | None) -> dict | None:
+    """What the customer saw in the ad that opened the chat (Meta sends it only
+    on the first message after the click). The agent needs it because the
+    greeting is often Meta's default ("Can I learn more about your business?"),
+    which says nothing about the service the ad was for. Only the ad's own
+    text goes out: no ids, no click ids."""
+    if not referral:
+        return None
+    return {
+        "headline": (referral.get("headline") or "")[:255] or None,
+        "body": (referral.get("body") or "")[:1000] or None,
+        "sourceType": referral.get("source_type"),
+    }
+
+
+def _client_status(company_id: int, phone: str) -> dict:
+    """Is the sender a client of this company? Same phone match as points and
+    QR (sp_whatsappCustomerRewards). Sent with every message so the agent's
+    route — not the model — decides between the client and the prospect
+    instructions. Only status and firstName leave this function."""
+    try:
+        row = (assistant_sp("sp_whatsappCustomerRewards", {"customerRewards": [
+            {"companyId": company_id, "phone": phone}]}).get("result") or [{}])[0]
+    except Exception:
+        logger.exception("[whatsappReservations] client status lookup failed | phone=%s", phone)
+        return {"status": "unavailable"}
+    status = row.get("status")
+    if status == "found":
+        return {"status": "found", "firstName": row.get("firstName")}
+    return {"status": status if status in ("not_found", "ambiguous") else "unavailable"}
+
+
 def _ask_agent(channel: dict, phone: str, profile_name: str | None, text: str,
-               last_booked: dict | None) -> tuple[str, dict | None]:
+               last_booked: dict | None, ad_referral: dict | None = None,
+               location: dict | None = None, client: dict | None = None) -> tuple[str, dict | None]:
     request_body = {
         "companyId": channel["companyId"],
         "companyName": channel.get("companyName"),
@@ -385,6 +464,12 @@ def _ask_agent(channel: dict, phone: str, profile_name: str | None, text: str,
         "customerName": profile_name,
         "message": text,
         "recentReservation": last_booked,
+        "adReferral": _ad_context(ad_referral),
+        # Only the place's name/address: the coordinates never go to the model
+        # (or to this call's log); they're attached when the signal is recorded.
+        "sharedLocation": ({"name": location.get("name"), "address": location.get("address")}
+                           if location else None),
+        "client": client,
     }
     with timed_integration("loanagents_smartloans", "whatsapp_reservations", request=request_body,
                            company_id=channel["companyId"]) as span:
@@ -410,9 +495,13 @@ def _changes_booking(text: str) -> bool:
 
 
 def reply_to(channel: dict, phone: str, profile_name: str | None, text: str,
-             on_answering=None) -> str | None:
+             on_answering=None, ad_referral: dict | None = None,
+             location: dict | None = None) -> str | None:
     """Returns the text to send back, or None to stay silent. on_answering()
-    runs once the bot knows it will answer (whatsappCloud shows "escribiendo…")."""
+    runs once the bot knows it will answer (whatsappCloud shows "escribiendo…").
+    ad_referral is Meta's messages[].referral when this message came from an
+    ad click, so the agent knows which campaign the lead is for. location is
+    Meta's messages[].location when the customer shared a pin."""
     if not AGENT_URL:
         return None
     channel_id = channel["channelId"]
@@ -441,7 +530,9 @@ def reply_to(channel: dict, phone: str, profile_name: str | None, text: str,
             return "Cancelado, no se hizo la reservación. ¿Te ayudo con otro horario?"
 
     try:
-        reply, pending_action = _ask_agent(channel, phone, profile_name, text, state["lastBooked"])
+        reply, pending_action = _ask_agent(channel, phone, profile_name, text, state["lastBooked"],
+                                           ad_referral, location,
+                                           _client_status(channel["companyId"], phone))
     except Exception:
         logger.exception("[whatsappReservations] agent call failed | phone=%s", phone)
         _push_agent_failure_to_staff(channel, phone, profile_name, text)
@@ -466,7 +557,7 @@ def reply_to(channel: dict, phone: str, profile_name: str | None, text: str,
     elif capability == "RECORD_DEMAND_SIGNAL":
         # No "sí": it only records what the customer just told us (campaign,
         # location validation). The agent's reply goes out either way.
-        _record_demand_signal(channel, phone, pending_action.get("fields") or {})
+        _record_demand_signal(channel, phone, pending_action.get("fields") or {}, location)
     elif capability == "RECORD_LOCATION_HOST":
         # Red GMO partner side, same no-confirmation rule.
         _record_location_host(channel, phone, pending_action.get("fields") or {})
