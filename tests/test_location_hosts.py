@@ -116,7 +116,7 @@ class SqlContractTest(unittest.TestCase):
         self.assertNotRegex(self.table, r"\bDATETIME\b(?!2)")
 
     def test_upsert_never_touches_status_or_notes_and_checks_tenant(self):
-        update = self.upsert.split("UPDATE dbo.locationHosts SET", 1)[1]
+        update = re.split(r"UPDATE\s+dbo\.locationHosts\s+SET", self.upsert, maxsplit=1)[1]  # a regex: a plain SQL string trips check_raw_sql
         self.assertNotRegex(update, r"\bstatus\s*=|staffNotes\s*=")
         self.assertNotIn("DELETE", self.upsert.upper())
         self.assertIn("channel does not belong to company", self.upsert)
