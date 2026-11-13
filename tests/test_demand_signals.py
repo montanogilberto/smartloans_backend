@@ -167,11 +167,19 @@ class SqlContractTest(unittest.TestCase):
         self.assertIn("channel does not belong to company", code)
 
     def test_reads_mask_the_phone(self):
+        # Allowed uses of the raw phone: last 4 digits, the phone-normalizing
+        # REPLACE used to match clients, and the full phone ONLY for people who
+        # said yes to being contacted (notifyOptIn = 1).
+        allowed = (r"RIGHT\(ds\.customerPhone, 4\) AS phoneLast4",
+                   r"REPLACE\(ds\.customerPhone,",
+                   r"CASE WHEN ds\.notifyOptIn = 1 THEN ds\.customerPhone END AS phone")
         for name in ("sp_demandSignals_all", "sp_demandSignals_one"):
             with open(f"sql/{name}.sql", encoding="utf-8") as f:
                 code = re.sub(r"--.*", "", f.read())
             self.assertIn("RIGHT(ds.customerPhone, 4) AS phoneLast4", code, name)
-            self.assertNotRegex(code, r"(?<!RIGHT\()ds\.customerPhone\s*,|AS customerPhone", name)
+            for pattern in allowed:
+                code = re.sub(pattern, "", code)
+            self.assertNotIn("customerPhone", code.split("FROM dbo.demandSignals", 1)[0], name)
         with open("sql/sp_demandSignals_zoneSummary.sql", encoding="utf-8") as f:
             output = re.sub(r"--.*", "", f.read()).split("SELECT @zonesJson", 1)[1]
         # The map output only counts phones, never returns them.
@@ -180,3 +188,24 @@ class SqlContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ZoneSummaryFunnelTest(unittest.TestCase):
+    """The map's funnel top (who came from an ad, who left a zone) returns
+    counts only, and doesn't break where dbo.locationHosts isn't deployed."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open("sql/sp_demandSignals_zoneSummary.sql", encoding="utf-8") as f:
+            cls.sql = re.sub(r"--.*", "", f.read())
+
+    def test_funnel_keys_and_counts_only(self):
+        tail = self.sql.split("DECLARE @adLeads INT", 1)[1]
+        self.assertIn('"funnel":{"adLeads":', tail)
+        self.assertIn('"adLeadsWithSignal":', tail)
+        self.assertNotRegex(tail, r"customerPhone|contactPhone|p10")
+
+    def test_location_hosts_bound_only_when_deployed(self):
+        self.assertIn("IF OBJECT_ID(N'dbo.locationHosts', N'U') IS NOT NULL", self.sql)
+        before_guard = self.sql.split("IF OBJECT_ID(N'dbo.locationHosts'", 1)[0]
+        self.assertNotIn("dbo.locationHosts", before_guard)
