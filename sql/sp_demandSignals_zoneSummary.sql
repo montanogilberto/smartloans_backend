@@ -7,7 +7,10 @@
 -- could not be located yet (preferredZoneName NULL) go to 'sin ubicar'.
 -- { "demandSignals": [{ "companyId": int, "startDate"?, "endDate"?, "concept"?, "origin"? }] }
 -- Returns {"result":[{"zones":[{zoneName, lat, lng, concept, people, alta, media,
---   baja, pctRecurring, topPreferredTime, newProspects, existingClients, optIns}]}]}
+--   baja, pctRecurring, topPreferredTime, newProspects, existingClients, optIns}],
+--   "funnel":{"adLeads", "adLeadsWithSignal"}}]}
+--   adLeads = distinct people who reached WhatsApp from an ad in the period;
+--   adLeadsWithSignal = how many of them left a demand signal or a host offer.
 -- =============================================================================
 CREATE OR ALTER PROC [dbo].[sp_demandSignals_zoneSummary]
     @pjsonfile NVARCHAR(MAX)
@@ -88,7 +91,40 @@ BEGIN
             ORDER BY COUNT(DISTINCT fo.customerPhone) DESC
             FOR JSON PATH, INCLUDE_NULL_VALUES
         );
-        SELECT ('{"result":[{"zones":' + ISNULL(@zonesJson, '[]') + '}]}') AS jsonResult;
+        -- Funnel top: people who reached WhatsApp from an ad in the period (distinct
+        -- phones, last 10 digits), and how many of them left a demand signal or a
+        -- host offer. Lets the map tell "nobody came" from "they came and the
+        -- agent didn't record them". Not affected by the concept/origin filters.
+        CREATE TABLE #adPhones (p10 NVARCHAR(10) PRIMARY KEY);
+        INSERT INTO #adPhones (p10)
+        SELECT DISTINCT RIGHT(REPLACE(REPLACE(REPLACE(customerPhone, '+', ''), ' ', ''), '-', ''), 10)
+        FROM dbo.marketingLeadAttributions
+        WHERE companyId = @companyId AND referredAt >= @fromUtc AND referredAt < @toUtc;
+
+        CREATE TABLE #withSignal (p10 NVARCHAR(10) PRIMARY KEY);
+        INSERT INTO #withSignal (p10)
+        SELECT a.p10 FROM #adPhones AS a
+        WHERE EXISTS (SELECT 1 FROM dbo.demandSignals AS ds
+                      WHERE ds.companyId = @companyId
+                        AND RIGHT(REPLACE(REPLACE(REPLACE(ds.customerPhone, '+', ''), ' ', ''), '-', ''), 10) = a.p10);
+        -- dbo.locationHosts may not be deployed yet: bind it only when it exists
+        -- (dynamic SQL sees the caller's #temp tables).
+        IF OBJECT_ID(N'dbo.locationHosts', N'U') IS NOT NULL
+            EXEC sp_executesql N'
+                INSERT INTO #withSignal (p10)
+                SELECT a.p10 FROM #adPhones AS a
+                WHERE NOT EXISTS (SELECT 1 FROM #withSignal AS w WHERE w.p10 = a.p10)
+                  AND EXISTS (SELECT 1 FROM dbo.locationHosts AS lh
+                              WHERE lh.companyId = @c
+                                AND RIGHT(REPLACE(REPLACE(REPLACE(lh.contactPhone, ''+'', ''''), '' '', ''''), ''-'', ''''), 10) = a.p10)',
+                N'@c INT', @c = @companyId;
+
+        DECLARE @adLeads INT = (SELECT COUNT(*) FROM #adPhones);
+        DECLARE @adLeadsWithSignal INT = (SELECT COUNT(*) FROM #withSignal);
+
+        SELECT ('{"result":[{"zones":' + ISNULL(@zonesJson, '[]')
+                + ',"funnel":{"adLeads":' + CAST(@adLeads AS NVARCHAR(12))
+                + ',"adLeadsWithSignal":' + CAST(@adLeadsWithSignal AS NVARCHAR(12)) + '}}]}') AS jsonResult;
     END TRY
     BEGIN CATCH
         SELECT ('{"error":"' + REPLACE(ERROR_MESSAGE(), '"', '''') + '"}') AS jsonResult;

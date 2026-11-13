@@ -452,9 +452,48 @@ def _client_status(company_id: int, phone: str) -> dict:
     return {"status": status if status in ("not_found", "ambiguous") else "unavailable"}
 
 
+STAFF_CONTEXT_MAX = 3
+STAFF_CONTEXT_HOURS = 24
+
+
+def _recent_staff_messages(company_id: int, phone: str) -> list[dict]:
+    """What the team wrote to this customer (POS or WhatsApp Business app)
+    since the agent's last reply, in the last 24 h, newest 3 — so the agent
+    knows the customer may be answering the team ("Enrique Vizcaino /
+    662…" after staff asked for name and phone, 2026-11-12). Read through
+    sp_whatsappAgentConversations "thread" (the POS inbox's own view). Any
+    failure → [] : it must never cost the customer their reply."""
+    from datetime import datetime, timedelta, timezone
+    digits = re.sub(r"\D", "", phone or "")[-10:]
+    if len(digits) < 10:
+        return []
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(hours=7) - timedelta(days=1)).date().isoformat()  # Hermosillo, UTC-7
+    try:
+        found = (assistant_sp("sp_whatsappAgentConversations", {"whatsappAgentConversations": [
+            {"action": "thread", "companyId": company_id, "phone10": digits, "startDate": since}]})
+            .get("result") or [{}])[0]
+    except Exception:
+        logger.exception("[whatsappReservations] staff context lookup failed | phone=%s", phone)
+        return []
+    staff = []
+    for item in found.get("items") or []:  # oldest first
+        if item.get("kind") == "bot":
+            staff = []  # only what came after the agent's last reply
+        elif item.get("kind") in ("staff", "staff_app") and (item.get("text") or "").strip():
+            try:
+                at = datetime.fromisoformat(str(item.get("atUtc")).replace("Z", "")).replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if now - at <= timedelta(hours=STAFF_CONTEXT_HOURS):
+                staff.append({"text": item["text"].strip()[:500], "atUtc": item.get("atUtc")})
+    return staff[-STAFF_CONTEXT_MAX:]
+
+
 def _ask_agent(channel: dict, phone: str, profile_name: str | None, text: str,
                last_booked: dict | None, ad_referral: dict | None = None,
-               location: dict | None = None, client: dict | None = None) -> tuple[str, dict | None]:
+               location: dict | None = None, client: dict | None = None,
+               staff_messages: list | None = None) -> tuple[str, dict | None]:
     request_body = {
         "companyId": channel["companyId"],
         "companyName": channel.get("companyName"),
@@ -470,6 +509,8 @@ def _ask_agent(channel: dict, phone: str, profile_name: str | None, text: str,
         "sharedLocation": ({"name": location.get("name"), "address": location.get("address")}
                            if location else None),
         "client": client,
+        # The team's messages since the agent's last reply: the customer may be answering them.
+        "staffMessages": staff_messages or None,
     }
     with timed_integration("loanagents_smartloans", "whatsapp_reservations", request=request_body,
                            company_id=channel["companyId"]) as span:
@@ -532,7 +573,8 @@ def reply_to(channel: dict, phone: str, profile_name: str | None, text: str,
     try:
         reply, pending_action = _ask_agent(channel, phone, profile_name, text, state["lastBooked"],
                                            ad_referral, location,
-                                           _client_status(channel["companyId"], phone))
+                                           _client_status(channel["companyId"], phone),
+                                           _recent_staff_messages(channel["companyId"], phone))
     except Exception:
         logger.exception("[whatsappReservations] agent call failed | phone=%s", phone)
         _push_agent_failure_to_staff(channel, phone, profile_name, text)
