@@ -61,17 +61,17 @@ BEGIN
         WHERE companyId = @companyId AND clientId = @clientId;
 
         -- Points rewards are judged on the balance; stamp cards (free_product)
-        -- on units bought of that product (fn_posRewardStampStatus, the rule
-        -- the POS redeems with). Coupons are typed at checkout,
+        -- on units bought of that product, per cycle (fn_posRewardStampStatus:
+        -- the client's best cycle — cycle "Básico" — the rule the POS redeems with). Coupons are typed at checkout,
         -- not redeemed, so they're not listed here (see get_promotions).
         DECLARE @redeemable NVARCHAR(MAX) = (
             SELECT s.name, s.rewardType, s.requiredPoints, s.discountValue, s.description,
-                   s.requiredUnits, s.unitsAvailable,
+                   s.requiredUnits, s.unitsAvailable, s.cycle,
                    CAST(CASE WHEN s.rewardType = 'free_product' THEN CASE WHEN s.unitsAvailable >= s.requiredUnits THEN 1 ELSE 0 END
                              WHEN s.requiredPoints <= ISNULL(@balance, 0) THEN 1 ELSE 0 END AS BIT) AS canRedeemNow
             FROM (
                 SELECT c.name, c.rewardType, c.requiredPoints, c.discountValue, c.description,
-                       st.requiredUnits, st.unitsAvailable
+                       st.requiredUnits, st.unitsAvailable, st.choiceName AS cycle
                 FROM [dbo].[posRewardCatalogItems] c
                 LEFT JOIN [dbo].[fn_posRewardStampStatus](@companyId, @clientId, NULL) st
                        ON st.catalogItemId = c.catalogItemId

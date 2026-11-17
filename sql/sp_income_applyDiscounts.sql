@@ -17,9 +17,13 @@
 --                 line (same product + options). firstPurchaseOnly = the
 --                 client has no other sale at this company (deleted sales
 --                 are gone from dbo.income, so they don't count).
---   free_product  one unit of freeProductId free, if fn_posRewardStampStatus
---                 (purchases before this sale, free units excluded) covers
---                 requiredUnits.
+--   free_product  one unit of freeProductId free, of a CYCLE the client has
+--                 completed (fn_posRewardStampVariants: purchases of that cycle
+--                 before this sale, free units excluded, cover requiredUnits).
+--                 The first such cycle in the sale (line order, then option
+--                 row order) is free; its discount is that cycle's choice price
+--                 (products without cycles: the line's unit price). The
+--                 redemption records the cycle (productOptionChoiceId).
 --   discount_*    $ (capped at the total) or % off the discounted total;
 --                 debits requiredPoints from the balance.
 -- Everything runs in one transaction under the client's rewards lock (the
@@ -68,7 +72,9 @@ BEGIN
 
         DECLARE @rejected TABLE (catalogItemId INT NULL, code VARCHAR(30) NULL, reason VARCHAR(40));
         DECLARE @applied  TABLE (catalogItemId INT, rewardType NVARCHAR(20), discount DECIMAL(12,2));
-        DECLARE @lines    TABLE (incomeDetailId INT PRIMARY KEY, productId INT, qty INT, lineTotal DECIMAL(12,2), payQty INT);
+        -- freeAmt: the stamp-card free unit taken off this line (0 = none).
+        DECLARE @lines    TABLE (incomeDetailId INT PRIMARY KEY, productId INT, qty INT, lineTotal DECIMAL(12,2), payQty INT,
+                                 freeAmt DECIMAL(12,2) NOT NULL DEFAULT 0);
 
         BEGIN TRAN;
         IF @isClient = 1
@@ -145,7 +151,8 @@ BEGIN
 
         DECLARE @rewardId INT = (SELECT catalogItemId FROM @rewardIds WHERE seq = 1);
         DECLARE @rewardType NVARCHAR(20), @requiredPoints DECIMAL(12,2), @discountValue DECIMAL(12,2),
-                @freeProductId INT, @freeLine INT, @redeemReward BIT = 0;
+                @freeProductId INT, @freeLine INT, @redeemReward BIT = 0,
+                @freeCycleId INT = NULL, @freeAmt DECIMAL(12,2) = 0;
         IF @rewardId IS NOT NULL
         BEGIN
             SELECT @rewardType = rewardType, @requiredPoints = requiredPoints, @discountValue = discountValue,
@@ -161,19 +168,52 @@ BEGIN
                 INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'needs_client');
             ELSE IF @rewardType = 'free_product'
             BEGIN
-                SET @freeLine = (SELECT TOP 1 incomeDetailId FROM @lines
-                                 WHERE productId = @freeProductId AND payQty >= 1 ORDER BY incomeDetailId);
-                IF @freeLine IS NULL
+                IF NOT EXISTS (SELECT 1 FROM @lines WHERE productId = @freeProductId AND payQty >= 1)
                     INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'product_not_in_sale');
                 ELSE IF @subtotal <= 0
                     INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'no_line_prices');
-                ELSE IF NOT EXISTS (SELECT 1 FROM [dbo].[fn_posRewardStampStatus](@companyId, @clientId, @incomeId)
-                                    WHERE catalogItemId = @rewardId AND unitsAvailable >= requiredUnits)
-                    INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'insufficient_product_units');
                 ELSE
                 BEGIN
-                    UPDATE @lines SET payQty = payQty - 1 WHERE incomeDetailId = @freeLine;
-                    SET @redeemReward = 1;
+                    -- The product's cycle option (same rule as fn_posRewardStampVariants).
+                    DECLARE @cycleOptionId INT = (SELECT TOP 1 productOptionId FROM [dbo].[productOptions]
+                                                  WHERE productId = @freeProductId AND isRequired = 1 AND isActive = 1
+                                                  ORDER BY productOptionId);
+                    -- First cycle in the sale the client has completed.
+                    SELECT TOP 1 @freeLine = l.incomeDetailId, @freeCycleId = cy.choiceId,
+                           @freeAmt = CASE WHEN cy.choiceId IS NULL THEN ROUND(l.lineTotal / NULLIF(l.qty, 0), 2)
+                                           ELSE cy.price END
+                    FROM @lines l
+                    CROSS APPLY (
+                        SELECT ido.productOptionChoiceId AS choiceId, CAST(ch.price AS DECIMAL(12,2)) AS price,
+                               ido.incomeDetailOptionId AS ord
+                        FROM [dbo].[incomeDetailOptions] ido
+                        JOIN [dbo].[productOptionChoices] ch ON ch.productOptionChoiceId = ido.productOptionChoiceId
+                        WHERE ido.incomeDetailId = l.incomeDetailId AND ido.productOptionId = @cycleOptionId
+                        UNION ALL
+                        SELECT NULL, NULL, 0
+                        WHERE NOT EXISTS (SELECT 1 FROM [dbo].[incomeDetailOptions] ido
+                                          WHERE ido.incomeDetailId = l.incomeDetailId AND ido.productOptionId = @cycleOptionId)
+                    ) cy
+                    JOIN [dbo].[fn_posRewardStampVariants](@companyId, @clientId, @incomeId) st
+                         ON st.catalogItemId = @rewardId
+                        AND ISNULL(st.productOptionChoiceId, 0) = ISNULL(cy.choiceId, 0)
+                        AND st.unitsAvailable >= st.requiredUnits
+                    WHERE l.productId = @freeProductId AND l.payQty >= 1
+                    ORDER BY l.incomeDetailId, cy.ord;
+
+                    IF @freeLine IS NULL
+                        INSERT INTO @rejected (catalogItemId, reason) VALUES (@rewardId, 'insufficient_product_units');
+                    ELSE
+                    BEGIN
+                        -- Never more than what the line still costs after the coupon.
+                        UPDATE @lines SET
+                            @freeAmt = freeAmt = CASE
+                                WHEN ISNULL(@freeAmt, 0) > CASE WHEN qty > 0 AND payQty < qty THEN ROUND(lineTotal * payQty / qty, 2) ELSE lineTotal END
+                                THEN CASE WHEN qty > 0 AND payQty < qty THEN ROUND(lineTotal * payQty / qty, 2) ELSE lineTotal END
+                                ELSE ISNULL(@freeAmt, 0) END
+                        WHERE incomeDetailId = @freeLine;
+                        SET @redeemReward = 1;
+                    END
                 END
             END
             ELSE -- discount_fixed / discount_pct: debited below, only if the balance still covers it
@@ -210,7 +250,7 @@ BEGIN
 
         -- ── New total ──
         DECLARE @lineTotal DECIMAL(12,2) = (
-            SELECT ISNULL(SUM(CASE WHEN qty > 0 AND payQty < qty THEN ROUND(lineTotal * payQty / qty, 2) ELSE lineTotal END), 0)
+            SELECT ISNULL(SUM(CASE WHEN qty > 0 AND payQty < qty THEN ROUND(lineTotal * payQty / qty, 2) ELSE lineTotal END - freeAmt), 0)
             FROM @lines);
         -- No line prices: discounts come off the total as charged.
         DECLARE @base DECIMAL(12,2) = CASE WHEN @subtotal > 0 THEN @lineTotal ELSE @oldTotal END;
@@ -229,8 +269,9 @@ BEGIN
         IF @redeemReward = 1
         BEGIN
             INSERT INTO [dbo].[posRewardRedemptions]
-                (companyId, clientId, catalogItemId, pointsSpent, status, incomeId, redeemedByUserId)
-            VALUES (@companyId, @clientId, @rewardId, @pointsSpent, 'applied', @incomeId, ISNULL(@userId, 0));
+                (companyId, clientId, catalogItemId, pointsSpent, status, incomeId, redeemedByUserId, productOptionChoiceId)
+            VALUES (@companyId, @clientId, @rewardId, @pointsSpent, 'applied', @incomeId, ISNULL(@userId, 0),
+                    CASE WHEN @rewardType = 'free_product' THEN @freeCycleId END);
             DECLARE @redemptionId INT = SCOPE_IDENTITY();
 
             IF @pointsSpent > 0
@@ -241,9 +282,7 @@ BEGIN
 
             INSERT INTO @applied (catalogItemId, rewardType, discount)
             VALUES (@rewardId, @rewardType,
-                    CASE WHEN @rewardType = 'free_product'
-                         THEN (SELECT ROUND(lineTotal / NULLIF(qty, 0), 2) FROM @lines WHERE incomeDetailId = @freeLine)
-                         ELSE @pointsDiscount END);
+                    CASE WHEN @rewardType = 'free_product' THEN @freeAmt ELSE @pointsDiscount END);
         END
 
         UPDATE [dbo].[income] SET
@@ -263,7 +302,7 @@ BEGIN
                                           ELSE 0 END
             FROM [dbo].[incomeDetails] d
             JOIN (SELECT incomeDetailId,
-                         CASE WHEN qty > 0 AND payQty < qty THEN ROUND(lineTotal * payQty / qty, 2) ELSE lineTotal END AS paid
+                         CASE WHEN qty > 0 AND payQty < qty THEN ROUND(lineTotal * payQty / qty, 2) ELSE lineTotal END - freeAmt AS paid
                   FROM @lines) lv ON lv.incomeDetailId = d.incomeDetailId;
 
         UPDATE [dbo].[cashRegisterMovements] SET

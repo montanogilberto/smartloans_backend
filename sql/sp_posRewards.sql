@@ -134,11 +134,16 @@ CREATE TABLE [dbo].[posRewardRedemptions] (
     status           NVARCHAR(20)   NOT NULL DEFAULT 'applied',  -- applied | cancelled
     incomeId         INT            NULL,
     redeemedByUserId INT            NOT NULL,
+    productOptionChoiceId INT       NULL,     -- free_product: the cycle consumed (NULL = product without cycles)
     created_At       DATETIME2      NOT NULL DEFAULT GETUTCDATE(),
     CONSTRAINT CK_posRewardRedemptions_status CHECK (status IN ('applied','cancelled')),
     CONSTRAINT FK_posRewardRedemptions_catalogItem
         FOREIGN KEY (catalogItemId) REFERENCES [dbo].[posRewardCatalogItems](catalogItemId)
 )
+GO
+-- 2026-11-17 stamp cards per cycle (sql/migrations/2026-11-17_posRewardRedemptions_cycle.sql)
+IF COL_LENGTH('dbo.posRewardRedemptions', 'productOptionChoiceId') IS NULL
+    ALTER TABLE dbo.posRewardRedemptions ADD productOptionChoiceId INT NULL;
 GO
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_posRewardRedemptions_client_date')
     CREATE INDEX IX_posRewardRedemptions_client_date
@@ -146,53 +151,133 @@ IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_posRewardRedemptions_c
 GO
 
 -- ============================================================
--- fn_posRewardStampStatus — THE stamp-card rule, used by every SP that
--- decides or shows whether a free_product reward can be redeemed
--- (redeem, sp_income_applyDiscounts, FreeProductStatus, ProductCounts,
--- sp_whatsappCustomerRewards). Per free_product catalog item of a client:
---   requiredUnits  = catalog requiredUnits; legacy rows: requiredPoints /
---                    pointsPerUnit (active rate), else requiredPoints
---   unitsPurchased = units of freeProductId bought at this company, minus the
---                    free units given in sales (one per applied redemption
---                    linked to a sale) — a free unit is not a purchase
---   unitsAvailable = unitsPurchased - applied redemptions of the item * requiredUnits
+-- fn_posRewardStampVariants — THE stamp-card rule (2026-11-17: per cycle),
+-- used by every SP that decides or shows whether a free_product reward can be
+-- redeemed (redeem, sp_income_applyDiscounts, ProductCounts, and through
+-- fn_posRewardStampStatus: FreeProductStatus, the dashboard and
+-- sp_whatsappCustomerRewards).
+--
+-- A card fills per CYCLE of its product: the choice of the product's required
+-- option (lowest productOptionId among isRequired = 1 AND isActive = 1 —
+-- "Ciclo", "Tamaño"). 4 Servicio Completo Básico earn 1 free Básico,
+-- separately from Medio / Carga Alta. A product without a required option has
+-- one cycle (productOptionChoiceId NULL) = the whole product, as before.
+--
+-- One row per (catalog item, cycle): every active choice of the cycle option
+-- (0 / 4 rows too), plus any cycle with purchases or redemptions.
+--   unitsPurchased = units of that cycle bought at this company, minus the
+--                    free units of that cycle given in sales (applied
+--                    redemptions linked to a sale) — a free unit is not a purchase.
+--                    A sale line with ONE cycle row counts the line quantity;
+--                    with several, each row's own quantity. A line with no
+--                    cycle row (old sales) counts in the NULL cycle.
+--   unitsAvailable = unitsPurchased - applied redemptions of the item in that
+--                    cycle * requiredUnits, never below 0 (redemptions made
+--                    before cycles existed may exceed one cycle's purchases).
 -- Cancelled redemptions consume nothing. @excludeIncomeId leaves one sale out
 -- (the sale being priced: its units can't earn its own free unit).
--- Redemptions with no sale (old Rewards Dashboard) gave no unit through a
--- ticket, so they only consume requiredUnits.
 -- ============================================================
 IF OBJECT_ID('dbo.fn_posRewardStampStatus', 'IF') IS NOT NULL DROP FUNCTION dbo.fn_posRewardStampStatus;
 GO
+IF OBJECT_ID('dbo.fn_posRewardStampVariants', 'IF') IS NOT NULL DROP FUNCTION dbo.fn_posRewardStampVariants;
+GO
+CREATE FUNCTION [dbo].[fn_posRewardStampVariants] (@companyId INT, @clientId INT, @excludeIncomeId INT)
+RETURNS TABLE
+AS
+RETURN
+    WITH items AS (
+        SELECT c.catalogItemId, c.freeProductId, c.isActive, u.requiredUnits, so.productOptionId AS cycleOptionId
+        FROM [dbo].[posRewardCatalogItems] c
+        OUTER APPLY (SELECT TOP 1 pr.pointsPerUnit FROM [dbo].[posRewardProductRates] pr
+                     WHERE pr.companyId = c.companyId AND pr.productId = c.freeProductId AND pr.isActive = 1) rt
+        CROSS APPLY (SELECT CAST(COALESCE(c.requiredUnits,
+                         CASE WHEN ISNULL(rt.pointsPerUnit, 0) > 0 THEN c.requiredPoints / rt.pointsPerUnit
+                              ELSE c.requiredPoints END) AS DECIMAL(12,2)) AS requiredUnits) u
+        OUTER APPLY (SELECT TOP 1 o.productOptionId FROM [dbo].[productOptions] o
+                     WHERE o.productId = c.freeProductId AND o.isRequired = 1 AND o.isActive = 1
+                     ORDER BY o.productOptionId) so
+        WHERE c.companyId = @companyId AND c.rewardType = 'free_product' AND c.freeProductId IS NOT NULL
+    ),
+    bought AS (
+        SELECT it.catalogItemId, ISNULL(cy.choiceId, 0) AS cycleKey, SUM(cy.units) AS units
+        FROM items it
+        JOIN [dbo].[incomeDetails] d ON d.productId = it.freeProductId
+        JOIN [dbo].[income] i ON i.incomeId = d.incomeId
+        CROSS APPLY (
+            SELECT ido.productOptionChoiceId AS choiceId,
+                   CAST(CASE WHEN COUNT(*) OVER () = 1 THEN ISNULL(d.quantity, 1) ELSE ISNULL(ido.quantity, 1) END
+                        AS DECIMAL(12,2)) AS units
+            FROM [dbo].[incomeDetailOptions] ido
+            WHERE ido.incomeDetailId = d.incomeDetailId AND ido.productOptionId = it.cycleOptionId
+            UNION ALL
+            SELECT NULL, CAST(ISNULL(d.quantity, 1) AS DECIMAL(12,2))
+            WHERE NOT EXISTS (SELECT 1 FROM [dbo].[incomeDetailOptions] ido
+                              WHERE ido.incomeDetailId = d.incomeDetailId AND ido.productOptionId = it.cycleOptionId)
+        ) cy
+        WHERE i.clientId = @clientId AND i.companyId = @companyId
+          AND (@excludeIncomeId IS NULL OR i.incomeId <> @excludeIncomeId)
+        GROUP BY it.catalogItemId, ISNULL(cy.choiceId, 0)
+    ),
+    freeGiven AS (
+        SELECT it.catalogItemId, ISNULL(rd.productOptionChoiceId, 0) AS cycleKey, COUNT(*) AS units
+        FROM items it
+        JOIN [dbo].[posRewardRedemptions] rd ON rd.companyId = @companyId AND rd.clientId = @clientId AND rd.status = 'applied'
+        JOIN [dbo].[posRewardCatalogItems] fc ON fc.catalogItemId = rd.catalogItemId
+             AND fc.rewardType = 'free_product' AND fc.freeProductId = it.freeProductId
+        JOIN [dbo].[income] fi ON fi.incomeId = rd.incomeId AND fi.companyId = @companyId
+        WHERE (@excludeIncomeId IS NULL OR rd.incomeId <> @excludeIncomeId)
+        GROUP BY it.catalogItemId, ISNULL(rd.productOptionChoiceId, 0)
+    ),
+    redeemed AS (
+        SELECT rd.catalogItemId, ISNULL(rd.productOptionChoiceId, 0) AS cycleKey, COUNT(*) AS redemptions
+        FROM [dbo].[posRewardRedemptions] rd
+        WHERE rd.companyId = @companyId AND rd.clientId = @clientId AND rd.status = 'applied'
+        GROUP BY rd.catalogItemId, ISNULL(rd.productOptionChoiceId, 0)
+    ),
+    cycles AS (
+        SELECT it.catalogItemId, ch.productOptionChoiceId AS cycleKey
+        FROM items it JOIN [dbo].[productOptionChoices] ch ON ch.productOptionId = it.cycleOptionId AND ch.isActive = 1
+        UNION SELECT catalogItemId, 0 FROM items WHERE cycleOptionId IS NULL
+        UNION SELECT catalogItemId, cycleKey FROM bought
+        UNION SELECT catalogItemId, cycleKey FROM freeGiven
+        UNION SELECT catalogItemId, cycleKey FROM redeemed
+    )
+    SELECT it.catalogItemId, it.freeProductId, it.isActive, it.requiredUnits,
+           it.cycleOptionId AS productOptionId,
+           NULLIF(cy.cycleKey, 0) AS productOptionChoiceId,
+           ch.name AS choiceName,
+           ISNULL(b.units, 0) - ISNULL(f.units, 0) AS unitsPurchased,
+           CASE WHEN ISNULL(b.units, 0) - ISNULL(f.units, 0) - ISNULL(r.redemptions, 0) * it.requiredUnits > 0
+                THEN ISNULL(b.units, 0) - ISNULL(f.units, 0) - ISNULL(r.redemptions, 0) * it.requiredUnits
+                ELSE 0 END AS unitsAvailable
+    FROM cycles cy
+    JOIN items it ON it.catalogItemId = cy.catalogItemId
+    LEFT JOIN [dbo].[productOptionChoices] ch ON ch.productOptionChoiceId = NULLIF(cy.cycleKey, 0)
+    LEFT JOIN bought    b ON b.catalogItemId = cy.catalogItemId AND b.cycleKey = cy.cycleKey
+    LEFT JOIN freeGiven f ON f.catalogItemId = cy.catalogItemId AND f.cycleKey = cy.cycleKey
+    LEFT JOIN redeemed  r ON r.catalogItemId = cy.catalogItemId AND r.cycleKey = cy.cycleKey;
+GO
+
+-- ============================================================
+-- fn_posRewardStampStatus — one row per free_product catalog item: its BEST
+-- cycle (most units available, then most purchased) from
+-- fn_posRewardStampVariants. "Can this client redeem the card?" = the best
+-- cycle covers requiredUnits. Used where one line per card is enough
+-- (FreeProductStatus → sale message, dashboard, WhatsApp agent);
+-- productOptionChoiceId / choiceName say which cycle.
+-- ============================================================
 CREATE FUNCTION [dbo].[fn_posRewardStampStatus] (@companyId INT, @clientId INT, @excludeIncomeId INT)
 RETURNS TABLE
 AS
 RETURN
-    SELECT c.catalogItemId, c.freeProductId, c.isActive, u.requiredUnits,
-           b.unitsBought - f.freeUnits AS unitsPurchased,
-           b.unitsBought - f.freeUnits - r.redemptions * u.requiredUnits AS unitsAvailable
-    FROM [dbo].[posRewardCatalogItems] c
-    OUTER APPLY (SELECT TOP 1 pr.pointsPerUnit FROM [dbo].[posRewardProductRates] pr
-                 WHERE pr.companyId = c.companyId AND pr.productId = c.freeProductId AND pr.isActive = 1) rt
-    CROSS APPLY (SELECT CAST(COALESCE(c.requiredUnits,
-                     CASE WHEN ISNULL(rt.pointsPerUnit, 0) > 0 THEN c.requiredPoints / rt.pointsPerUnit
-                          ELSE c.requiredPoints END) AS DECIMAL(12,2)) AS requiredUnits) u
-    CROSS APPLY (SELECT CAST(ISNULL(SUM(d.quantity), 0) AS DECIMAL(12,2)) AS unitsBought
-                 FROM [dbo].[incomeDetails] d
-                 JOIN [dbo].[income] i ON i.incomeId = d.incomeId
-                 WHERE d.productId = c.freeProductId AND i.clientId = @clientId AND i.companyId = @companyId
-                   AND (@excludeIncomeId IS NULL OR i.incomeId <> @excludeIncomeId)) b
-    CROSS APPLY (SELECT COUNT(*) AS freeUnits
-                 FROM [dbo].[posRewardRedemptions] rd
-                 JOIN [dbo].[posRewardCatalogItems] fc ON fc.catalogItemId = rd.catalogItemId
-                 JOIN [dbo].[income] fi ON fi.incomeId = rd.incomeId AND fi.companyId = @companyId
-                 WHERE rd.companyId = @companyId AND rd.clientId = @clientId AND rd.status = 'applied'
-                   AND fc.rewardType = 'free_product' AND fc.freeProductId = c.freeProductId
-                   AND (@excludeIncomeId IS NULL OR rd.incomeId <> @excludeIncomeId)) f
-    CROSS APPLY (SELECT COUNT(*) AS redemptions
-                 FROM [dbo].[posRewardRedemptions] rd
-                 WHERE rd.companyId = @companyId AND rd.clientId = @clientId
-                   AND rd.catalogItemId = c.catalogItemId AND rd.status = 'applied') r
-    WHERE c.companyId = @companyId AND c.rewardType = 'free_product' AND c.freeProductId IS NOT NULL;
+    SELECT c.catalogItemId, c.freeProductId, c.isActive, c.requiredUnits,
+           best.unitsPurchased, best.unitsAvailable, best.productOptionChoiceId, best.choiceName
+    FROM (SELECT DISTINCT catalogItemId, freeProductId, isActive, requiredUnits
+          FROM [dbo].[fn_posRewardStampVariants](@companyId, @clientId, @excludeIncomeId)) c
+    CROSS APPLY (SELECT TOP 1 v.unitsPurchased, v.unitsAvailable, v.productOptionChoiceId, v.choiceName
+                 FROM [dbo].[fn_posRewardStampVariants](@companyId, @clientId, @excludeIncomeId) v
+                 WHERE v.catalogItemId = c.catalogItemId
+                 ORDER BY v.unitsAvailable DESC, v.unitsPurchased DESC, v.productOptionChoiceId) best;
 GO
 
 -- ============================================================
@@ -829,6 +914,9 @@ BEGIN
         DECLARE @catalogItemId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.posRewardRedemptions[0].catalogItemId'));
         DECLARE @redeemedByUserId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.posRewardRedemptions[0].redeemedByUserId'));
         DECLARE @incomeId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.posRewardRedemptions[0].incomeId'));
+        -- free_product: the cycle to redeem (productOptionChoiceId); omitted = the client's best ready cycle.
+        DECLARE @cycleChoiceId INT = TRY_CONVERT(INT, JSON_VALUE(@pjsonfile, '$.posRewardRedemptions[0].productOptionChoiceId'));
+        DECLARE @redeemCycleId INT = NULL;
 
         IF @companyId IS NULL OR @clientId IS NULL OR @catalogItemId IS NULL OR @redeemedByUserId IS NULL
             RAISERROR('companyId, clientId, catalogItemId y redeemedByUserId son requeridos.', 16, 1);
@@ -857,9 +945,12 @@ BEGIN
         IF @isFreeProduct = 1
         BEGIN
             DECLARE @requiredUnits DECIMAL(12,2), @unitsPurchased DECIMAL(12,2), @unitsAvailable DECIMAL(12,2);
-            SELECT @requiredUnits = requiredUnits, @unitsPurchased = unitsPurchased, @unitsAvailable = unitsAvailable
-            FROM [dbo].[fn_posRewardStampStatus](@companyId, @clientId, @incomeId)
-            WHERE catalogItemId = @catalogItemId;
+            SELECT TOP 1 @requiredUnits = requiredUnits, @unitsPurchased = unitsPurchased, @unitsAvailable = unitsAvailable,
+                   @redeemCycleId = productOptionChoiceId
+            FROM [dbo].[fn_posRewardStampVariants](@companyId, @clientId, @incomeId)
+            WHERE catalogItemId = @catalogItemId
+              AND (@cycleChoiceId IS NULL OR productOptionChoiceId = @cycleChoiceId)
+            ORDER BY unitsAvailable DESC, unitsPurchased DESC;
 
             IF ISNULL(@unitsAvailable, 0) < ISNULL(@requiredUnits, 0) OR @requiredUnits IS NULL
             BEGIN
@@ -885,9 +976,9 @@ BEGIN
         DECLARE @pointsSpent DECIMAL(12,2) = CASE WHEN @isFreeProduct = 1 THEN 0 ELSE @requiredPoints END;
 
         INSERT INTO [dbo].[posRewardRedemptions]
-            (companyId, clientId, catalogItemId, pointsSpent, status, incomeId, redeemedByUserId)
+            (companyId, clientId, catalogItemId, pointsSpent, status, incomeId, redeemedByUserId, productOptionChoiceId)
         VALUES
-            (@companyId, @clientId, @catalogItemId, @pointsSpent, 'applied', @incomeId, @redeemedByUserId);
+            (@companyId, @clientId, @catalogItemId, @pointsSpent, 'applied', @incomeId, @redeemedByUserId, @redeemCycleId);
 
         DECLARE @redemptionId INT = SCOPE_IDENTITY();
         DECLARE @newBalance DECIMAL(12,2) = @currentBalance;
@@ -924,11 +1015,16 @@ GO
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- sp_posRewardProductCounts
--- Returns available units per stamp-card product for a client
--- (fn_posRewardStampStatus): purchased (free units excluded) - consumed.
--- Used by the stamp-card UI to show accurate per-product progress.
+-- Stamp-card progress of a client per card and CYCLE (fn_posRewardStampVariants):
+-- purchased (free units excluded) - consumed. Drives the client page's stamp
+-- cards and the cart's "free unit" eligibility.
 -- Input:  { "posRewardProductCounts": [{ "companyId": int, "clientId": int }] }
--- Output: { "result": [{ "posRewardProductCounts": [{ "productId", "unitsPurchased", "unitsConsumed", "unitsAvailable" }] }] }
+-- Output: { "result": [{ "posRewardProductCounts": [{ "productId", "catalogItemId",
+--           "productOptionId", "productOptionChoiceId", "choiceName", "requiredUnits",
+--           "unitsPurchased", "unitsConsumed", "unitsAvailable" }] }] }
+--   productOptionId = the cycle option (NULL = product without cycles). Rows of a
+--   product come best cycle first (an old client reading the first row per
+--   productId sees the cycle closest to a free unit).
 -- ─────────────────────────────────────────────────────────────────────────────
 IF OBJECT_ID('dbo.sp_posRewardProductCounts', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_posRewardProductCounts;
 GO
@@ -947,17 +1043,18 @@ BEGIN
             RETURN;
         END
 
-        -- Same rule as redeem / checkout (fn_posRewardStampStatus): purchases
+        -- Same rule as redeem / checkout (fn_posRewardStampVariants): purchases
         -- at this company, free units excluded, applied redemptions consumed.
-        -- One row per stamp-card product (items of the same product add up).
         SELECT (
-            SELECT st.freeProductId AS productId,
-                   MAX(st.unitsPurchased) AS unitsPurchased,
-                   SUM(st.unitsPurchased - st.unitsAvailable) AS unitsConsumed,
-                   MAX(st.unitsPurchased) - SUM(st.unitsPurchased - st.unitsAvailable) AS unitsAvailable
-            FROM [dbo].[fn_posRewardStampStatus](@companyId, @clientId, NULL) st
-            GROUP BY st.freeProductId
-            FOR JSON PATH, ROOT('posRewardProductCounts')
+            SELECT st.freeProductId AS productId, st.catalogItemId,
+                   st.productOptionId, st.productOptionChoiceId, st.choiceName, st.requiredUnits,
+                   st.unitsPurchased,
+                   st.unitsPurchased - st.unitsAvailable AS unitsConsumed,
+                   st.unitsAvailable
+            FROM [dbo].[fn_posRewardStampVariants](@companyId, @clientId, NULL) st
+            WHERE st.isActive = 1
+            ORDER BY st.freeProductId, st.unitsAvailable DESC, st.unitsPurchased DESC, st.productOptionChoiceId
+            FOR JSON PATH, ROOT('posRewardProductCounts'), INCLUDE_NULL_VALUES
         ) AS [jsonResult];
 
     END TRY

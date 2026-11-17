@@ -316,8 +316,10 @@ def _with_free_product_units(catalog: list, company_id: int, client_id: int) -> 
             out.append(item)
         elif item.get("catalogItemId") in status:
             st = status[item["catalogItemId"]]
+            # Stamp cards fill per cycle: the row is the client's best cycle ("Básico").
             out.append({**item, "unitsRequired": float(st.get("requiredUnits") or 0),
-                        "unitsAvailable": float(st.get("unitsAvailable") or 0)})
+                        "unitsAvailable": float(st.get("unitsAvailable") or 0),
+                        "cycle": (st.get("choiceName") or "").strip() or None})
     return out
 
 
@@ -328,6 +330,12 @@ def _stamp_product(item: dict) -> str | None:
     return m.group(1).strip() if m and m.group(1).strip() else None
 
 
+def _with_cycle(text: str, item: dict) -> str:
+    """'Servicio Completo' + cycle 'Básico' -> 'Servicio Completo Básico'."""
+    cycle = item.get("cycle")
+    return f"{text} {cycle}" if cycle else text
+
+
 def _falta(missing: float) -> str:
     return "Te falta" if missing == 1 else "Te faltan"
 
@@ -336,14 +344,14 @@ def rewards_label(summary: dict | None) -> str:
     """The rewards block of the sale message, one goal per line, e.g.
         Puntos: +4.50 · Saldo: 4.50 pts
         Te faltan 5.50 pts para $10 de descuento
-        Te faltan 2 Servicio Completo para el siguiente gratis
+        Te faltan 2 Servicio Completo Básico para el siguiente gratis
     Line 1: points earned and balance. Then, at most:
       - rewards ready now (stamp cards first, then points rewards, most
         valuable first): '¡Ya puedes canjear: X y N más!'
       - the next points reward, if none is ready yet (judged on the balance)
       - the closest stamp card the client has started and not completed
-        (judged on units bought of that product — unitsRequired/unitsAvailable,
-        the redeem rule)
+        (judged on units bought of that product's cycle — unitsRequired/
+        unitsAvailable of the best cycle, the redeem rule; named with the cycle)
     '' when there is nothing to say (walk-in, rewards error, no points)."""
     if not summary:
         return ""
@@ -366,7 +374,9 @@ def rewards_label(summary: dict | None) -> str:
     ready = [i for i in free if i["unitsAvailable"] >= i["unitsRequired"]] + points_ready
     if ready:
         more = len(ready) - 1
-        lines.append(f"¡Ya puedes canjear: {ready[0].get('name')}" + (f" y {more} más" if more else "") + "!")
+        first = ready[0]
+        name = f"{first.get('name')} ({first['cycle']})" if first.get("cycle") else first.get("name")
+        lines.append(f"¡Ya puedes canjear: {name}" + (f" y {more} más" if more else "") + "!")
 
     if not points_ready and by_points:
         nxt = by_points[0]
@@ -379,7 +389,7 @@ def rewards_label(summary: dict | None) -> str:
         missing = nxt["unitsRequired"] - nxt["unitsAvailable"]
         product = _stamp_product(nxt)
         if product:
-            lines.append(f"{_falta(missing)} {_fmt_points(missing)} {product} para el siguiente gratis")
+            lines.append(f"{_falta(missing)} {_fmt_points(missing)} {_with_cycle(product, nxt)} para el siguiente gratis")
         else:
             lines.append(f"{_falta(missing)} {_fmt_points(missing)} {'compra' if missing == 1 else 'compras'} para: {nxt.get('name')}")
     return "\n".join(lines)
