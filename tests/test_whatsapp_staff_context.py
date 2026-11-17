@@ -59,5 +59,17 @@ class StaffContextTest(unittest.TestCase):
         self.assertEqual(post.call_args.kwargs["json"]["staffMessages"][0]["text"], "¿Su nombre?")
 
 
+
+class NotificationContextTest(unittest.TestCase):
+    def test_receipts_come_with_their_kind(self):
+        items = [{"kind": "bot", "text": "hola", "atUtc": _at(3)},
+                 {"kind": "notification", "text": "Gracias por su compra. Total: $250.00 MXN", "atUtc": _at(1)},
+                 {"kind": "staff", "text": "Ya está lista", "atUtc": _at(0.5)}]
+        with mock.patch.object(wr, "assistant_sp", return_value={"result": [{"items": items}]}):
+            out = wr._recent_staff_messages(1, PHONE)
+        self.assertEqual([(m["kind"], m["text"][:8]) for m in out],
+                         [("notification", "Gracias "), ("team", "Ya está ")])
+
+
 if __name__ == "__main__":
     unittest.main()

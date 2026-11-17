@@ -42,7 +42,7 @@
 --   numbers), newest activity first, max 200. needsReply = the customer wrote last, or the
 --   agent handed off / failed and nobody from the team wrote after.
 -- action "thread"  { companyId, phone10, startDate?, endDate? }   (default: last 90 days)
---   → { result: [{ phone10, customerName, source: "messages"|"agent_log",
+--   → { result: [{ phone10, customerName, clientId, source: "messages"|"agent_log",
 --        lastInboundUtc, staffPausedUntilUtc,
 --        items: [{ atUtc, kind, text, detail, channel, status, error }] }] }
 --   kind: client | bot | staff | staff_app | agent_failed | action | booking | notification
@@ -427,6 +427,8 @@ BEGIN
             JOIN [dbo].[whatsappChannels] ch ON ch.channelId = wc.channelId
             WHERE ch.companyId = @companyId AND wc.staffPausedUntil > SYSUTCDATETIME()
               AND RIGHT(REPLACE(REPLACE(REPLACE(wc.customerPhone, '+', ''), ' ', ''), '-', ''), 10) = @phone10);
+        -- The company's client with this phone (newest record when duplicated) → POS link.
+        DECLARE @clientId INT = (SELECT MAX(clientId) FROM @clients);
         DECLARE @name NVARCHAR(200) = (SELECT TOP 1 customerName FROM @turns
                                        WHERE ISNULL(customerName, '') <> '' ORDER BY atUtc DESC);
 
@@ -438,6 +440,7 @@ BEGIN
         SELECT ('{"result":[{'
               + '"phone10":"' + @phone10 + '"'
               + ',"customerName":' + ISNULL('"' + STRING_ESCAPE(@name, 'json') + '"', 'null')
+              + ',"clientId":' + ISNULL(CONVERT(NVARCHAR(20), @clientId), 'null')
               + ',"source":"' + CASE WHEN @useMessages = 1 THEN 'messages' ELSE 'agent_log' END + '"'
               + ',"lastInboundUtc":' + ISNULL('"' + CONVERT(NVARCHAR(19), @lastInbound, 126) + '"', 'null')
               + ',"staffPausedUntilUtc":' + ISNULL('"' + CONVERT(NVARCHAR(19), @pausedUntil, 126) + '"', 'null')
