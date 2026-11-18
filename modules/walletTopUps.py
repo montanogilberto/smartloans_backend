@@ -4,13 +4,19 @@ money is credited when a staff member says they saw it in the company's account.
 Crediting, keeping the evidence and posting the accounting entry happen here so
 none of the three is left to the app.
 """
+import asyncio
+import html
 import json
 import re
+import uuid
+from datetime import datetime
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 from fastapi.responses import JSONResponse
 from databases import connection
 from modules.companies import company_name
 from modules.journalEntries import post_wallet_topup_journal_entry
+from modules.ticket_receipts import save_receipt_html
 from modules.transferEvidence import transfer_evidence_sp
 from modules.walletTransactions import post_entry
 from observability.logger import log_audit, log_workflow_step
@@ -50,19 +56,84 @@ def _client_phone(client_id) -> str | None:
         conn.close()
 
 
+def _money(amount) -> str:
+    return f"${float(amount or 0):,.2f} MXN"
+
+
+def top_up_ticket_html(json_file: dict) -> str:
+    """The top-up ticket as one self-contained HTML page (no external CSS or
+    images), the same kind of page the POS stores for a sale."""
+    esc = lambda v: html.escape(str(v or ""))
+    label = METHOD_LABELS.get(json_file.get("method"), json_file.get("method") or "")
+    when = datetime.now(ZoneInfo("America/Hermosillo")).strftime("%d/%m/%Y %H:%M")
+    rows = [("Monto abonado", _money(json_file.get("amountMXN")))]
+    if label:
+        rows.append(("Forma de pago", label))
+    if isinstance(json_file.get("balanceAfter"), (int, float)):
+        rows.append(("Saldo disponible", _money(json_file["balanceAfter"])))
+    rows += [("Fecha", when), ("Folio", json_file.get("entryId"))]
+    table = "".join(
+        f'<tr><td style="padding:8px 0;color:#6b7280">{esc(k)}</td>'
+        f'<td style="padding:8px 0;text-align:right;font-weight:700">{esc(v)}</td></tr>' for k, v in rows)
+    company = esc(json_file.get("companyName") or "Lavandería y Auto-Servicio")
+    return f"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Abono de saldo — {company}</title></head>
+<body style="margin:0;padding:16px;background:#f0f4fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 10px rgba(20,20,60,.08)">
+    <div style="background:linear-gradient(160deg,#1E3A8A,#2563EB 50%,#3B82F6);color:#fff;padding:22px">
+      <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.85">{company}</div>
+      <div style="font-size:22px;font-weight:800;margin-top:4px">Abono de saldo</div>
+    </div>
+    <div style="padding:18px 22px">
+      <table style="width:100%;border-collapse:collapse;font-size:15px">{table}</table>
+      <div style="margin-top:16px;padding:12px;border-radius:12px;background:#eff6ff;color:#1e3a8a;font-size:13px;line-height:1.5">
+        Tu saldo se usa al escanear tu código QR en la lavadora o la secadora.
+      </div>
+    </div>
+  </div>
+</body></html>"""
+
+
+def _store_ticket(json_file: dict) -> str | None:
+    """Upload the ticket to the 'ticketspos' container like the POS receipts.
+    Random name, not the folio: the container is publicly readable, so a
+    predictable name could be counted through. None when it can't be stored."""
+    try:
+        entry_id = int(json_file.get("entryId") or 0)
+        if entry_id <= 0:
+            return None
+        file_name = f"topup_{datetime.utcnow():%Y%m%d}_{uuid.uuid4().hex}.html"
+        result = save_receipt_html(income_id=entry_id, branch_id=int(json_file.get("companyId") or 0),
+                                   html=top_up_ticket_html(json_file), file_name=file_name)
+        return result.get("receiptUrl") or result.get("url")
+    except Exception as e:
+        print(f"[walletTopUps] ticket upload failed entry={json_file.get('entryId')}: {type(e).__name__}: {e}")
+        return None
+
+
 async def notify_top_up(json_file: dict) -> None:
     """Best-effort ticket to the client: push, then WhatsApp, then SMS. Runs after
     the response; a failure here never undoes or blocks the credit. One ticket
-    per ledger entry (the dispatcher dedupes on sourceId)."""
+    per ledger entry (the dispatcher dedupes on sourceId).
+
+    Like a POS sale, the ticket is an HTML page stored in ADLS and the link goes
+    in the message: WhatsApp uses comprobante_listo (detail + link), SMS and push
+    get "Ver su ticket: <link>". If the page can't be stored, the text-only
+    abono_saldo ticket goes out instead."""
     try:
         from modules.notificationDispatch import dispatch_notification_connector  # lazy: avoids a cycle
         company_id, client_id = json_file.get("companyId"), json_file.get("clientId")
-        message = top_up_message({**json_file, "companyName": company_name({"companyId": company_id})})
+        data = {**json_file, "companyName": company_name({"companyId": company_id})}
+        message = top_up_message(data)
+        receipt_url = await asyncio.to_thread(_store_ticket, data)
         response = await dispatch_notification_connector({
             "companyId": company_id, "sourceType": "walletTransaction", "sourceId": json_file.get("entryId"),
             "recipientType": "client", "recipientId": client_id, "eventName": TOPUP_EVENT,
             "phone": _client_phone(client_id), "pushTitle": "Abono recibido", "messagePreview": message,
-            "waTemplate": TOPUP_TEMPLATE, "navigationRoute": "/my-qr",
+            "navigationRoute": "/my-qr",
+            **({"receiptUrl": receipt_url} if receipt_url else {"waTemplate": TOPUP_TEMPLATE}),
         })
         print(f"[walletTopUps] ticket entry={json_file.get('entryId')} → HTTP {response.status_code}")
     except Exception as e:

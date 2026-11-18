@@ -50,14 +50,15 @@ IF NOT EXISTS (
     ALTER TABLE [dbo].[roles] ADD [emoji] NVARCHAR(20) NULL;
 GO
 
-UPDATE [dbo].[roles] SET name = N'Administrator', description = N'Full access to the system.',            emoji = N'👑'      WHERE code = 'admin';
-UPDATE [dbo].[roles] SET name = N'Manager',       description = N'Management, reports and operations.',    emoji = N'🧑‍💼'    WHERE code = 'manager';
-UPDATE [dbo].[roles] SET name = N'Employee',      description = N'Basic POS operations.',                  emoji = N'👷'      WHERE code = 'employee';
-UPDATE [dbo].[roles] SET name = N'Borrower',      description = N'Request loans and view my status.',      emoji = N'🙋'      WHERE code = 'borrower';
-UPDATE [dbo].[roles] SET name = N'Lender',        description = N'Offer loans and receive payments.',      emoji = N'💼'      WHERE code = 'lender';
-UPDATE [dbo].[roles] SET name = N'Business',      description = N'POS, sales and reward points.',          emoji = N'🏪'      WHERE code = 'business';
-UPDATE [dbo].[roles] SET name = N'Viewer',        description = N'Read-only access to reports.',           emoji = N'👁️'      WHERE code = 'viewer';
-UPDATE [dbo].[roles] SET name = N'POS Customer',  description = N'View my account, purchases and rewards.', emoji = N'🛍️'      WHERE code = 'pos';
+-- Spanish (es-MX) since 2026-11-17: these names are shown in the app as-is.
+UPDATE [dbo].[roles] SET name = N'Administrador', description = N'Acceso total al sistema.',              emoji = N'👑'      WHERE code = 'admin';
+UPDATE [dbo].[roles] SET name = N'Gerente',       description = N'Gestión, reportes y operaciones.',      emoji = N'🧑‍💼'    WHERE code = 'manager';
+UPDATE [dbo].[roles] SET name = N'Empleado',      description = N'Operaciones básicas del POS.',          emoji = N'👷'      WHERE code = 'employee';
+UPDATE [dbo].[roles] SET name = N'Prestatario',   description = N'Solicitar préstamos y ver mi estado.',  emoji = N'🙋'      WHERE code = 'borrower';
+UPDATE [dbo].[roles] SET name = N'Prestamista',   description = N'Ofrecer préstamos y recibir pagos.',    emoji = N'💼'      WHERE code = 'lender';
+UPDATE [dbo].[roles] SET name = N'Negocio',       description = N'POS, ventas y puntos de recompensa.',   emoji = N'🏪'      WHERE code = 'business';
+UPDATE [dbo].[roles] SET name = N'Lector',        description = N'Solo lectura de reportes.',             emoji = N'👁️'      WHERE code = 'viewer';
+UPDATE [dbo].[roles] SET name = N'Cliente',       description = N'Ver mi cuenta, compras y recompensas.', emoji = N'🛍️'      WHERE code = 'pos';
 GO
 
 -- ── Table: uiFeatures (catalog -- replaces free-form ROLE_UI strings) ──

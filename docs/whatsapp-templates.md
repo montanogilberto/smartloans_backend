@@ -92,7 +92,7 @@ Sample: `{{1}}` = `Gracias por su compra. Total: $250.00 MXN · Descuento aplica
 
 ---
 
-## abono_saldo — Utility
+## abono_saldo — Utility (submitted 2026-11-17, in review)
 
 ```
 Registramos tu abono de saldo.

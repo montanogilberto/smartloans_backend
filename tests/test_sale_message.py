@@ -105,6 +105,15 @@ class RewardsLabelTest(unittest.TestCase):
         self.assertEqual(pr.rewards_label(summary(2, 2, [units(LAVADO, 1), units(SECADO, 2)])),
                          "Puntos: +2 · Saldo: 2 pts\nTe falta 1 Servicio de secado para el siguiente gratis")
 
+    def test_closest_stamp_card_names_its_cycle(self):
+        # Stamp cards fill per cycle (2026-11-17): the status row is the best cycle.
+        self.assertEqual(pr.rewards_label(summary(2, 2, [{**units(LAVADO, 1), "cycle": "Básico"}])),
+                         "Puntos: +2 · Saldo: 2 pts\nTe faltan 2 Servicio de lavado Básico para el siguiente gratis")
+
+    def test_ready_stamp_card_names_its_cycle(self):
+        self.assertEqual(pr.rewards_label(summary(1, 1, [{**units(LAVADO, 3), "cycle": "Carga Alta"}])),
+                         "Puntos: +1 · Saldo: 1 pts\n¡Ya puedes canjear: Servicio de lavado gratis (3x1) (Carga Alta)!")
+
     def test_stamp_card_name_without_gratis_falls_back_to_purchases(self):
         odd = {"catalogItemId": 9, "name": "Tarjeta lavado", "rewardType": "free_product", "requiredPoints": 3.0}
         self.assertEqual(pr.rewards_label(summary(1, 1, [units(odd, 1)])),
@@ -147,7 +156,8 @@ class EarnAndSummarizeTest(unittest.TestCase):
             "sp_posRewardTransactions_earnFromTicket": {"pointsEarned": 2.0, "newBalance": 2.0, "transactionId": 9},
             "sp_posRewardCatalogItems": {"result": [{"posRewardCatalogItems": CATALOG}]},
             "sp_posRewardFreeProductStatus": {"result": [{"posRewardFreeProductStatus": [
-                {"catalogItemId": 5, "freeProductId": 1002, "requiredUnits": 3.0, "unitsPurchased": 4.0, "unitsAvailable": 1.0},
+                {"catalogItemId": 5, "freeProductId": 1002, "requiredUnits": 3.0, "unitsPurchased": 4.0, "unitsAvailable": 1.0,
+                 "productOptionChoiceId": 1004, "choiceName": "Basico"},
                 {"catalogItemId": 6, "freeProductId": 1003, "requiredUnits": 3.0, "unitsPurchased": 0.0, "unitsAvailable": 0.0},
             ]}]},
         })
@@ -161,7 +171,9 @@ class EarnAndSummarizeTest(unittest.TestCase):
         names = [i["name"] for i in out["catalog"]]
         self.assertNotIn("Garrafon gratis (3x1)", names)  # inactive dropped
         lavado = next(i for i in out["catalog"] if i["catalogItemId"] == 5)
-        self.assertEqual((lavado["unitsRequired"], lavado["unitsAvailable"]), (3.0, 1.0))
+        self.assertEqual((lavado["unitsRequired"], lavado["unitsAvailable"], lavado["cycle"]), (3.0, 1.0, "Basico"))
+        secado = next(i for i in out["catalog"] if i["catalogItemId"] == 6)
+        self.assertIsNone(secado["cycle"])  # no choiceName = product without cycles
 
     def test_free_product_status_failure_drops_free_products_only(self):
         fake, _ = self._sp({

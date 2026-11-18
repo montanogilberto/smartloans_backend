@@ -7,7 +7,10 @@
 -- message's rewards line (modules/posRewards.py).
 -- Input:  { "posRewardFreeProductStatus": [{ "companyId": int, "clientId": int }] }
 -- Output: { "result": [{ "posRewardFreeProductStatus": [{ "catalogItemId", "freeProductId",
---           "requiredUnits", "unitsPurchased", "unitsAvailable" }] }] }
+--           "requiredUnits", "unitsPurchased", "unitsAvailable",
+--           "productOptionChoiceId", "choiceName" }] }] }
+--   Stamp cards fill per cycle (2026-11-17): the row is the client's best cycle
+--   (choiceName "Básico"; null = product without cycles).
 -- ─────────────────────────────────────────────────────────────────────────────
 IF OBJECT_ID('dbo.sp_posRewardFreeProductStatus', 'P') IS NOT NULL DROP PROCEDURE dbo.sp_posRewardFreeProductStatus;
 GO
@@ -27,11 +30,12 @@ BEGIN
         END
 
         DECLARE @listJson NVARCHAR(MAX) = (
-            SELECT catalogItemId, freeProductId, requiredUnits, unitsPurchased, unitsAvailable
+            SELECT catalogItemId, freeProductId, requiredUnits, unitsPurchased, unitsAvailable,
+                   productOptionChoiceId, choiceName
             FROM [dbo].[fn_posRewardStampStatus](@companyId, @clientId, NULL)
             WHERE isActive = 1
             ORDER BY catalogItemId
-            FOR JSON PATH
+            FOR JSON PATH, INCLUDE_NULL_VALUES
         );
         SELECT ('{"result":[{"posRewardFreeProductStatus":' + ISNULL(@listJson, '[]') + '}]}') AS [jsonResult];
 

@@ -457,7 +457,8 @@ STAFF_CONTEXT_HOURS = 24
 
 
 def _recent_staff_messages(company_id: int, phone: str) -> list[dict]:
-    """What the team wrote to this customer (POS or WhatsApp Business app)
+    """What the business sent this customer — the team (POS or WhatsApp
+    Business app) or an automatic notification (receipt, "servicio listo") —
     since the agent's last reply, in the last 24 h, newest 3 — so the agent
     knows the customer may be answering the team ("Enrique Vizcaino /
     662…" after staff asked for name and phone, 2026-11-12). Read through
@@ -480,13 +481,16 @@ def _recent_staff_messages(company_id: int, phone: str) -> list[dict]:
     for item in found.get("items") or []:  # oldest first
         if item.get("kind") == "bot":
             staff = []  # only what came after the agent's last reply
-        elif item.get("kind") in ("staff", "staff_app") and (item.get("text") or "").strip():
+        elif item.get("kind") in ("staff", "staff_app", "notification") and (item.get("text") or "").strip():
             try:
                 at = datetime.fromisoformat(str(item.get("atUtc")).replace("Z", "")).replace(tzinfo=timezone.utc)
             except ValueError:
                 continue
             if now - at <= timedelta(hours=STAFF_CONTEXT_HOURS):
-                staff.append({"text": item["text"].strip()[:500], "atUtc": item.get("atUtc")})
+                staff.append({"text": item["text"].strip()[:500], "atUtc": item.get("atUtc"),
+                              # A receipt / "servicio listo" vs a person: "Ok" to a receipt
+                              # got the whole menu back (2026-11-14).
+                              "kind": "notification" if item.get("kind") == "notification" else "team"})
     return staff[-STAFF_CONTEXT_MAX:]
 
 
