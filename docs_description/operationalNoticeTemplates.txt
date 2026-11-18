@@ -1,0 +1,6 @@
+Create, update or retire a template of the platform library (Biblioteca GMO). Only a SmartLoans admin (companyId 1008, role admin).
+
+Body: {"operationalNoticeTemplates": [{"action": 1|2|3, "operationalNoticeTemplateId": int (2/3), "templateKey": "falta_agua" (1 only), "name": str, "description": str, "icon": "waterOutline", "noticeType": "cierre"|"horario_especial"|"aviso", "defaultTitle": str, "defaultMessage": "... {motivo} ... {fecha_reapertura} ... {horario}", "variables": "motivo,fecha_reapertura,horario", "blocksReservations": 0|1, "sortOrder": int}]}
+
+Update changes only the keys sent. Retire (3) hides it from the library; it is never deleted.
+Returns {"status": "success", "message": str, "value": operationalNoticeTemplateId} or 400 {"status": "error", "message": str}.

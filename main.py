@@ -78,6 +78,8 @@ from routes_ import (
     demandSignal,
     agent,
     agentCompanySetting,
+    operationalNoticeTemplate,
+    operationalNotice,
     locationHost,
     laundryDevices,
     voiceCalls,
@@ -280,6 +282,8 @@ app.include_router(marketingLeadAttribution.router)
 app.include_router(demandSignal.router)
 app.include_router(agent.router)
 app.include_router(agentCompanySetting.router)
+app.include_router(operationalNoticeTemplate.router)
+app.include_router(operationalNotice.router)
 app.include_router(locationHost.router)
 app.include_router(laundryDevices.router)
 app.include_router(voiceCalls.router)

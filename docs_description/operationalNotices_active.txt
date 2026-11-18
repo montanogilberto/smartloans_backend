@@ -1,0 +1,4 @@
+Notices the agents must honor: status activo, applying today or starting within daysAhead days. X-Worker-Key (LoanAgents_SmartLoans) or a staff session of that companyId.
+
+Body: {"operationalNotices": [{"companyId": int, "branchId": int (optional; omitted = every notice of the company), "daysAhead": int (default 7, max 60)}]}
+Returns {"operationalNotices": [{operationalNoticeId, branchId, title, noticeType, customerMessage, startDate, endDate, startTime, endTime, blocksReservations, appliesToday}]} — [] when there are none (use the regular schedule).

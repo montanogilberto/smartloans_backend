@@ -1,0 +1,5 @@
+Notices of one company for the POS. Staff session of that companyId (or SmartLoans admin).
+
+Body: {"operationalNotices": [{"companyId": int, "includePast": 0|1}]}
+includePast = 1 adds notices that ended or were finalized in the last 90 days.
+Returns {"operationalNotices": [{..., "state": "vigente"|"programado"|"vencido"|"finalizado"}]}

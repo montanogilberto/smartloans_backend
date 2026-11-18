@@ -1,0 +1,6 @@
+Publish (1), update / extend (2) or finalize early (3) an operational notice of one company. Admin or manager of that companyId (or SmartLoans admin). updatedByUserId is taken from the access token.
+
+Body: {"operationalNotices": [{"action": 1|2|3, "companyId": int, "operationalNoticeId": int (2/3), "templateId": int|null, "branchId": int|null (null = every branch), "title": str, "noticeType": "cierre"|"horario_especial"|"aviso", "customerMessage": str (final text, no {placeholders}), "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD", "startTime": "HH:MM"|"" , "endTime": "HH:MM"|"", "blocksReservations": 0|1}]}
+
+Dates are Hermosillo calendar days. Update changes only the keys sent; "" clears the hours. Notices are never deleted.
+Returns {"status": "success", "message": str, "value": operationalNoticeId} or 400 {"status": "error", "message": str}.
