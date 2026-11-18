@@ -68,9 +68,19 @@ BEGIN
                     GETDATE(),
                     TRY_CONVERT(INT, JSON_VALUE(value, '$.clientId'))  AS clientId
                 FROM OPENJSON(@pjsonfile, '$.users')
+                SET @user_id = SCOPE_IDENTITY()
+
+                -- Every user belongs to a company (users.companyId is NOT NULL,
+                -- FK → companies). POS signup creates the owner's company first
+                -- and sends its companyId here; without it the column keeps its
+                -- default (the legacy "stuck on company 1" accounts). A bad id
+                -- fails the FK and rolls the whole insert back.
+                DECLARE @newCompanyId INT =
+                    (SELECT TRY_CONVERT(INT, JSON_VALUE(value, '$.companyId')) FROM OPENJSON(@pjsonfile, '$.users'))
+                IF @newCompanyId IS NOT NULL AND @newCompanyId > 0
+                    UPDATE [dbo].[users] SET companyId = @newCompanyId WHERE [userId] = @user_id
             COMMIT TRAN
 
-            SET @user_id = SCOPE_IDENTITY()
             SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].value', CAST(@user_id AS VARCHAR(20)));
             SET @Outputmessage = JSON_MODIFY(@Outputmessage, '$.result[0].msg',   'Inserted Successfully');
         END
