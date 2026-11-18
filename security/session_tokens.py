@@ -239,3 +239,79 @@ def require_wallet_ledger_access(write: bool):
                            "write" if write else "read", claims.get("sub"))
             raise HTTPException(status_code=403, detail="Forbidden")
     return guard
+
+
+# Platform-wide catalogs (dbo.agents): one list for every company, owned by
+# SmartLoans. Only an admin of the SmartLoans company may change them.
+PLATFORM_COMPANY_ID = 1008
+
+
+def _staff_companies(claims: dict, roles: set[str]) -> set[int]:
+    ids = {_as_int(c.get("companyId")) for c in claims.get("companies") or []
+           if str(c.get("role") or "").strip().lower() in roles}
+    ids.discard(0)
+    return ids
+
+
+def is_platform_admin(claims: dict | None) -> bool:
+    return bool(claims) and PLATFORM_COMPANY_ID in _staff_companies(claims, {"admin"})
+
+
+async def require_platform_admin_session(request: Request) -> dict:
+    """Writes to a platform catalog: an access token of an admin of SmartLoans
+    (companyId 1008). No worker key: the agents service only reads."""
+    claims = decode(_bearer(request), "access")
+    if claims is None:
+        raise HTTPException(status_code=401, detail="Session expired")
+    if not is_platform_admin(claims):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return claims
+
+
+async def require_staff_session_or_worker_key(request: Request, x_worker_key: str | None = Header(default=None)) -> None:
+    """Reads of a platform catalog: any POS staff session, or the worker key."""
+    token = _bearer(request)
+    if not token:
+        require_worker_key(x_worker_key)
+        return
+    claims = decode(token, "access")
+    if claims is None:
+        raise HTTPException(status_code=401, detail="Session expired")
+    if not _staff_companies(claims, _COMPANY_STAFF_ROLES):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def require_company_rows_or_platform_admin(key: str, roles: set[str], allow_worker_key: bool):
+    """Per-company settings over a platform catalog (dbo.agentCompanySettings):
+    body {key: [{companyId, ...}]}. Every row's companyId must be a company the
+    signed token holds with one of `roles`, or the token is a SmartLoans admin
+    (who may act for any company). The company comes from the token, never from
+    X-Company-Id. allow_worker_key: the agents service may call without a token.
+    Returns the token claims (None for the worker key) so the route can stamp
+    updatedByUserId from `sub`."""
+    wanted = {r.strip().lower() for r in roles}
+
+    async def guard(request: Request, x_worker_key: str | None = Header(default=None)) -> dict | None:
+        token = _bearer(request)
+        if not token:
+            if not allow_worker_key:
+                raise HTTPException(status_code=401, detail="Session required")
+            require_worker_key(x_worker_key)
+            return None
+        claims = decode(token, "access")
+        if claims is None:
+            raise HTTPException(status_code=401, detail="Session expired")
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        rows = body.get(key) if isinstance(body, dict) else None
+        if not isinstance(rows, list) or not rows or not all(isinstance(r, dict) for r in rows):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        if is_platform_admin(claims):
+            return claims
+        allowed = _staff_companies(claims, wanted)
+        if any(_as_int(r.get("companyId")) not in allowed for r in rows):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        return claims
+    return guard

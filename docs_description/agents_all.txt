@@ -1,0 +1,5 @@
+List the agents catalog. Any POS staff session, or X-Worker-Key.
+Stored procedure: EXEC [dbo].[sp_agents_all] @pjsonfile = '<json>'
+
+{ "agents": [{ "area"?: "whatsapp", "status"?: "activo", "search"?: "texto" }] }
+→ { "agents": [{ agentId, agentKey, name, description, area, endpoint, model, customerFacing (0|1), status, created_At, updated_at }] }
