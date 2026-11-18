@@ -1,0 +1,5 @@
+One company's settings for one agent. X-Worker-Key (LoanAgents_SmartLoans), or a staff session of that company.
+Stored procedure: EXEC [dbo].[sp_agentCompanySettings_one] @pjsonfile = '<json>'
+
+{ "agentCompanySettings": [{ "companyId": 1, "agentKey": "whatsapp_reservations" }] }   (or "agentId")
+→ { "agentCompanySettings": [{ ...same fields as /all_agentCompanySettings }] }   ([] = no settings: the agent uses its defaults)

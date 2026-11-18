@@ -1,0 +1,5 @@
+Every agent setting of one company. Staff session of that company (or SmartLoans admin).
+Stored procedure: EXEC [dbo].[sp_agentCompanySettings_all] @pjsonfile = '<json>'
+
+{ "agentCompanySettings": [{ "companyId": 1 }] }
+→ { "agentCompanySettings": [{ agentCompanySettingId, companyId, agentId, agentKey, agentName, displayName, extraInstructions, updatedByUserId, created_At, updated_at }] }

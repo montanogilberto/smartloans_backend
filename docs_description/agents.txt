@@ -1,0 +1,9 @@
+Platform catalog of the LoanAgents_SmartLoans agents (dbo.agents, no companyId). Admin of SmartLoans (companyId 1008) only: Authorization: Bearer <access token>.
+Stored procedure: EXEC [dbo].[sp_agents] @pjsonfile = '<json>'
+
+action 1 — insert: { "agents": [{ "action": 1, "agentKey": "whatsapp_reservations", "name": "...", "description"?: "...",
+  "area": "whatsapp|pos_support|loans|extraction|other", "endpoint": "/support/whatsapp-reservations", "model"?: "gemini-2.5-flash",
+  "customerFacing": 0|1 }] }
+action 2 — update (only keys sent; agentKey never changes): { "agents": [{ "action": 2, "agentId": 1, ...fields }] }
+action 3 — retire (status = 'retirado', never deleted): { "agents": [{ "action": 3, "agentId": 1 }] }
+→ { "status": "success", "message": "...", "value": agentId }  |  400 { "status": "error", "message": "..." }

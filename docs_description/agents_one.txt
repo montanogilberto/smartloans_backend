@@ -1,0 +1,5 @@
+One agent by agentId or agentKey. Any POS staff session, or X-Worker-Key.
+Stored procedure: EXEC [dbo].[sp_agents_one] @pjsonfile = '<json>'
+
+{ "agents": [{ "agentKey": "whatsapp_reservations" }] }  or  { "agents": [{ "agentId": 1 }] }
+→ { "agents": [{ ...same fields as /all_agents }] }   ([] when not found)

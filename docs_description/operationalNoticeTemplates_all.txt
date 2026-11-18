@@ -1,0 +1,4 @@
+The template library. Any staff session.
+
+Body (optional): {"operationalNoticeTemplates": [{"status": "activo" (default) | "retirado" | "all"}]}
+Returns {"operationalNoticeTemplates": [{operationalNoticeTemplateId, templateKey, name, description, icon, noticeType, defaultTitle, defaultMessage, variables, blocksReservations, sortOrder, status}]}

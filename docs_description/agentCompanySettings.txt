@@ -1,0 +1,7 @@
+Upsert one company's settings for a catalog agent. Admin or manager of that company (or SmartLoans admin): Authorization: Bearer <access token>.
+updatedByUserId is taken from the token. Rejected when the agent is 'retirado'. No delete.
+Stored procedure: EXEC [dbo].[sp_agentCompanySettings] @pjsonfile = '<json>'
+
+{ "agentCompanySettings": [{ "companyId": 1, "agentId": 1, "displayName"?: "Lupita", "extraInstructions"?: "Tono amable; quejas → gerente." }] }
+displayName max 80, extraInstructions max 1000 (behavior notes only — prices, hours, address live in businessInfo). Empty string = NULL.
+→ { "status": "success", "message": "...", "value": agentCompanySettingId }  |  400 { "status": "error", "message": "..." }
