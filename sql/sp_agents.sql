@@ -238,5 +238,5 @@ BEGIN
 END;
 
 -- Register the 'agents' UI feature (posgmo-factory feature_registry stage)
-EXEC [dbo].[sp_uiFeatures_register] @pjsonfile = N'{"uiFeatures": [{"featureCode": "agents", "displayName": "Agent", "label": "Agentes AI", "section": "Administración", "icon": "bulbOutline", "route": "/ai-agents", "roles": ["admin", "manager"]}]}';
+EXEC [dbo].[sp_uiFeatures_register] @pjsonfile = N'{"uiFeatures": [{"featureCode": "agents", "displayName": "AI agents", "label": "Agentes IA", "moduleCode": "pos", "section": "Catálogo", "icon": "sparklesOutline", "route": "/ai-agents", "sortOrder": 95, "roles": ["admin", "manager"]}]}';
 GO
