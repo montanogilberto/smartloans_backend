@@ -132,6 +132,7 @@ class TicketTest(unittest.TestCase):
         import modules.notificationDispatch as dispatch
         with mock.patch.object(topups, "company_name", return_value="Lavanderia GMO"), \
              mock.patch.object(topups, "_client_phone", return_value="+526621806214"), \
+             mock.patch.object(topups, "_store_ticket", return_value=None), \
              mock.patch.object(dispatch, "dispatch_notification_connector",
                                new=mock.AsyncMock(return_value=JSONResponse({}))) as send:
             asyncio.run(topups.notify_top_up({"companyId": 1, "clientId": 9, "entryId": 5, "amountMXN": 50,
@@ -140,6 +141,42 @@ class TicketTest(unittest.TestCase):
         self.assertEqual((payload["eventName"], payload["sourceType"], payload["sourceId"], payload["waTemplate"]),
                          ("wallet_topup_credited", "walletTransaction", 5, "abono_saldo"))
         self.assertEqual(payload["navigationRoute"], "/my-qr")
+        self.assertNotIn("receiptUrl", payload)
+
+    def test_a_stored_ticket_is_sent_as_a_link_like_a_pos_sale(self):
+        import asyncio
+        import modules.notificationDispatch as dispatch
+        url = "https://imageprofile.blob.core.windows.net/ticketspos/receipts/2026/11/topup_x.html"
+        with mock.patch.object(topups, "company_name", return_value="Lavanderia GMO"), \
+             mock.patch.object(topups, "_client_phone", return_value="+526621806214"), \
+             mock.patch.object(topups, "_store_ticket", return_value=url), \
+             mock.patch.object(dispatch, "dispatch_notification_connector",
+                               new=mock.AsyncMock(return_value=JSONResponse({}))) as send:
+            asyncio.run(topups.notify_top_up({"companyId": 1, "clientId": 9, "entryId": 5, "amountMXN": 100,
+                                              "method": "tarjeta", "balanceAfter": 920}))
+        payload = send.call_args.args[0]
+        self.assertEqual(payload["receiptUrl"], url)
+        self.assertNotIn("waTemplate", payload)  # the dispatcher then uses comprobante_listo
+
+    def test_the_ticket_page_is_stored_with_a_random_name(self):
+        with mock.patch.object(topups, "save_receipt_html",
+                               return_value={"receiptUrl": "https://blob/x.html"}) as save:
+            url = topups._store_ticket({"companyId": 1, "entryId": 5, "amountMXN": 100, "method": "tarjeta",
+                                        "balanceAfter": 920, "companyName": "Lavanderia GMO"})
+        self.assertEqual(url, "https://blob/x.html")
+        kwargs = save.call_args.kwargs
+        self.assertRegex(kwargs["file_name"], r"^topup_\d{8}_[0-9a-f]{32}\.html$")
+        self.assertIn("$100.00 MXN", kwargs["html"])
+        self.assertIn("$920.00 MXN", kwargs["html"])
+        self.assertIn("tarjeta", kwargs["html"])
+
+    def test_a_failed_upload_returns_no_link(self):
+        with mock.patch.object(topups, "save_receipt_html", side_effect=RuntimeError("no blob")):
+            self.assertIsNone(topups._store_ticket({"companyId": 1, "entryId": 5, "amountMXN": 100}))
+
+    def test_the_ticket_page_escapes_the_company_name(self):
+        page = topups.top_up_ticket_html({"companyName": "<b>x</b>", "amountMXN": 1, "entryId": 2})
+        self.assertNotIn("<b>x</b>", page)
 
     def test_a_failed_ticket_never_raises(self):
         with mock.patch.object(topups, "company_name", side_effect=RuntimeError("db down")):

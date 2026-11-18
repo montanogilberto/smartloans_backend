@@ -33,6 +33,27 @@ def _session_fields(user_id, company_id, client_id, role_code: str) -> dict:
     return {"session": session} if session else {}
 
 
+# clientId 1 is each company's generic walk-in record ("Desconocido"), not a person.
+WALK_IN_CLIENT_ID = 1
+
+
+def _greeting_fields(client: dict) -> dict:
+    """Name of the client matched by the phone, for the PIN screen's
+    "Bienvenido de nuevo, <nombre>". Empty for the walk-in record -- the app
+    then shows the masked phone. Never logged."""
+    client_id = client.get("clientId")
+    try:
+        if client_id is None or int(client_id) == WALK_IN_CLIENT_ID:
+            return {}
+    except (TypeError, ValueError):
+        return {}
+    return {
+        "clientId": client_id,
+        "firstName": (client.get("first_name") or "").strip(),
+        "lastName": (client.get("last_name") or "").strip(),
+    }
+
+
 def _client_login_codes_sp(payload: dict) -> dict:
     conn = None
     try:
@@ -70,7 +91,10 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
         # leads to set_client_password, which overwrites the old PIN.
         reset_pin = bool(payload.get("resetPin"))
         if status_client.get("firstLoginCompleted") and not reset_pin:
-            return JSONResponse(content={"found": True, "firstLoginCompleted": True}, status_code=200)
+            return JSONResponse(
+                content={"found": True, "firstLoginCompleted": True, **_greeting_fields(status_client)},
+                status_code=200,
+            )
 
         code = "".join(random.choices(string.digits, k=6))
         expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
@@ -99,7 +123,10 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
             message=f"channel={sent_by}",
         )
         return JSONResponse(
-            content={"found": True, "firstLoginCompleted": False, "message": "Código enviado", "channel": sent_by},
+            content={
+                "found": True, "firstLoginCompleted": False, "message": "Código enviado", "channel": sent_by,
+                **_greeting_fields(status_client),
+            },
             status_code=200,
         )
     except Exception as e:
