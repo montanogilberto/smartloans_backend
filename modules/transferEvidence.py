@@ -1,6 +1,7 @@
 from fastapi.responses import JSONResponse
 from databases import connection
 import json
+import threading
 import uuid
 from datetime import datetime
 
@@ -41,6 +42,42 @@ async def upload_transfer_evidence_connector(payload: dict) -> JSONResponse:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+REVIEW_STATUSES = {"NEEDS_REVIEW", "INVALID"}
+
+
+def _maybe_push_evidence_review(json_file: dict, result) -> None:
+    """RFC-014 core push: when the AI verdict saved by action 'validate' is not
+    VALID, tell the borrower to check the receipt before confirming. Background,
+    never raises. Was sent by the app (P2PLendingPage / LoanDetailPage) before."""
+    item = (json_file.get("transferEvidence") or [{}])[0] if isinstance(json_file, dict) else {}
+    if item.get("action") != "validate" or str(item.get("validationStatus") or "").upper() not in REVIEW_STATUSES:
+        return
+    if isinstance(result, dict) and result.get("error"):
+        return
+    threading.Thread(target=_send_evidence_review, args=(item.get("companyId"), item.get("transferEvidenceId")),
+                     daemon=True).start()
+
+
+def _send_evidence_review(company_id, evidence_id) -> None:
+    try:
+        import asyncio
+        from modules.fundingTransactions import _sp_raw
+        from modules.loanPush import push_to_client
+        evidence = json.loads(transfer_evidence_sp({"transferEvidence": [{
+            "action": "one", "companyId": company_id, "transferEvidenceId": evidence_id}]}).body)
+        if not isinstance(evidence, dict) or evidence.get("referenceType") != "FUNDING":
+            return
+        ft = _sp_raw({"fundingTransactions": [{
+            "action": "one", "companyId": company_id, "fundingTransactionId": evidence.get("referenceId")}]})
+        if not ft.get("borrowerClientId"):
+            return
+        asyncio.run(push_to_client(company_id, ft["borrowerClientId"], "funding_evidence_review",
+                                   amount=ft.get("amountMXN"), loanId=ft.get("loanId"),
+                                   fundingTransactionId=ft.get("fundingTransactionId")))
+    except Exception as e:
+        print(f"[transferEvidence] review push failed: {e}")
+
+
 def transfer_evidence_sp(json_file: dict):
     """create | list | one via sp_transferEvidence. Stores PROOF a direct
     SPEI transfer happened outside SmartLoans (clave de rastreo, bank,
@@ -56,7 +93,9 @@ def transfer_evidence_sp(json_file: dict):
         )
         row = cursor.fetchone()
         json_result = row[0] if row and row[0] else '{"error":"no result"}'
-        return JSONResponse(content=json.loads(json_result), status_code=200)
+        result = json.loads(json_result)
+        _maybe_push_evidence_review(json_file, result)
+        return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
     finally:

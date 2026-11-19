@@ -2,6 +2,9 @@ import json
 from fastapi.responses import JSONResponse
 from databases import connection
 from modules.azure_notifications import send_azure_push
+from modules.pushNotifications import resolve_push_user_ids
+from modules.loanTickets import notify_funding_event_async
+from modules.loanPush import push_in_background
 from modules.automatedPayments import generate_installment_schedule
 
 
@@ -106,6 +109,60 @@ def funding_transactions_sp(json_file: dict):
     return JSONResponse(content=_sp_raw(json_file), status_code=200)
 
 
+def funding_transactions_declare(json_file: dict):
+    """sp_fundingTransactions 'declare' + the RFC-014 ticket to both parties
+    (lender: "Fondeo declarado"; borrower: "Confirma tu fondeo"). The ticket
+    runs in the background and never changes this response."""
+    result = _sp_raw(json_file)
+    funding_id = result.get("fundingTransactionId") if isinstance(result, dict) else None
+    if funding_id and "error" not in result:
+        company_id = result.get("companyId") or (json_file.get("fundingTransactions") or [{}])[0].get("companyId")
+        try:
+            # Core push to the borrower: confirm whether the SPEI arrived.
+            push_in_background(company_id, result.get("borrowerClientId"), "funding_declared",
+                               amount=result.get("amountMXN"), loanId=result.get("loanId"),
+                               fundingTransactionId=funding_id)
+            # Ticket (email always; WhatsApp/SMS only for parties without the app).
+            notify_funding_event_async(company_id, funding_id, "declared")
+        except Exception as e:
+            print(f"[fundingTransactions] declare notices not started: {e}")
+    return JSONResponse(content=result, status_code=200)
+
+
+async def _push_loan_active(ft: dict, loan_id) -> None:
+    """Core push (send_azure_push) "Préstamo activo" to borrower and lender.
+    Hub tags are user_{userId}; the funding row has CLIENT ids — resolve first
+    (RFC-014 P1). Best-effort: never changes the confirm response."""
+    parties = [(ft.get("borrowerClientId"), "borrower"), (ft.get("lenderClientId"), "lender")]
+    client_ids = [cid for cid, _ in parties if cid]
+    if not client_ids:
+        return
+    try:
+        conn = _conn()
+        try:
+            user_ids = resolve_push_user_ids(conn.cursor(), client_ids)
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[fundingTransactions] confirm push: resolve users failed: {e}")
+        return
+    amount = float(ft.get("amountMXN") or 0)
+    for client_id, role in parties:
+        user_id = user_ids.get(client_id) or user_ids.get(str(client_id)) if client_id else None
+        if not user_id:
+            print(f"[fundingTransactions] confirm push skipped ({role}): no app user")
+            continue
+        try:
+            await send_azure_push(
+                "✅ Préstamo activo",
+                f"El fondeo de ${amount:,.2f} fue confirmado. El préstamo está activo.",
+                user_id,
+                data={"navigationRoute": f"/loan-detail/{loan_id}"},
+            )
+        except Exception as e:
+            print(f"[fundingTransactions] confirm push failed ({role}): {e}")
+
+
 async def funding_transactions_confirm(json_file: dict):
     """Orchestrates fundingTransactions.confirm -> sp_loans transition ->
     PaymentSchedule generation -> loan active (D13, payment-domain-state-
@@ -131,6 +188,7 @@ async def funding_transactions_confirm(json_file: dict):
     loan = _sp_loans_one(loan_id, company_id)
 
     if "error" in ft or not loan:
+        notify_funding_event_async(company_id, funding_id, "confirmed", None)
         # Funding IS confirmed at this point (the SP call above already
         # committed) — a failure here is an orchestration problem, not a
         # funding problem. Surface it distinctly so it isn't mistaken for a
@@ -142,6 +200,7 @@ async def funding_transactions_confirm(json_file: dict):
 
     transition_result = _sp_loans_transition(loan_id, company_id, "funded")
     if "error" in transition_result:
+        notify_funding_event_async(company_id, funding_id, "confirmed", None)
         return JSONResponse(content={
             "fundingTransactionId": funding_id, "loanId": loan_id, "status": "CONFIRMED",
             "warning": f"Fondeo confirmado, pero la transición del préstamo a 'funded' falló: {transition_result['error']}",
@@ -169,21 +228,20 @@ async def funding_transactions_confirm(json_file: dict):
         activate_result = _sp_loans_transition(loan_id, company_id, "active")
         if "error" not in activate_result:
             response["loanStatus"] = "active"
-            for uid, role in [(ft.get("borrowerClientId"), "borrower"), (ft.get("lenderClientId"), "lender")]:
-                if uid:
-                    try:
-                        await send_azure_push(
-                            "✅ Préstamo activo",
-                            f"El fondeo de ${ft.get('amountMXN', 0):,.2f} fue confirmado. El préstamo está activo.",
-                            uid,
-                        )
-                    except Exception as e:
-                        print(f"[fundingTransactions] confirm push failed ({role}): {e}")
+            await _push_loan_active(ft, loan_id)
         else:
             response["warning"] = f"Calendario generado pero la activación falló: {activate_result['error']}"
     else:
         response["warning"] = "Calendario de pagos no se pudo generar — préstamo queda en 'funded', requiere revisión manual."
         print(f"[fundingTransactions] schedule generation failed for loanId={loan_id}: {schedule_body}")
+
+    # RFC-014: ticket to both parties through notificationDispatch (push ->
+    # WhatsApp -> SMS, resolving clientId -> userId for the push) + email.
+    # Replaces the direct "Préstamo activo" push (RFC-014 P1). Background only.
+    try:
+        notify_funding_event_async(company_id, funding_id, "confirmed", response["loanStatus"])
+    except Exception as e:
+        print(f"[fundingTransactions] confirm ticket not started: {e}")
 
     return JSONResponse(content=response, status_code=200)
 
