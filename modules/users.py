@@ -206,7 +206,8 @@ def _normalize_phone(phone: str) -> str:
     return phone  # pass through; Twilio will reject if still wrong
 
 
-def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str = "GMO"):
+def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str = "GMO",
+                  expires_minutes: int = 10):
     """Send OTP via Twilio SMS or WhatsApp, reusing the same Twilio module
     that sends ticket/income receipts (modules/ticket_notifications.py).
     `brand` lets callers with a known companyId (e.g. client_login.py) show
@@ -214,7 +215,7 @@ def _send_sms_otp(phone: str, code: str, via_whatsapp: bool = False, brand: str 
     Returns the channel that actually carried the code: "whatsapp" or "sms"."""
     from modules.ticket_notifications import send_sms, send_whatsapp
     normalized = _normalize_phone(phone)
-    message = f"Tu código {brand} es: {code}. Expira en 10 min."
+    message = f"Tu código {brand} es: {code}. Expira en {expires_minutes} min."
     logger.info("[_send_sms_otp] whatsapp=%s", via_whatsapp)
     if via_whatsapp:
         # AUTHENTICATION template: Meta fixes its text, so no brand there.

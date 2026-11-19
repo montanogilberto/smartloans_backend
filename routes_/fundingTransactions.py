@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from modules.fundingTransactions import (
     funding_transactions_sp,
+    funding_transactions_declare,
     funding_transactions_confirm,
     funding_transactions_resolve_escalation,
 )
@@ -52,6 +53,8 @@ action "one": { "fundingTransactions": [{ "action": "one", "companyId": int, "fu
 )
 async def funding_transactions(json: dict):
     action = ((json.get("fundingTransactions") or [{}])[0]).get("action")
+    if action == "declare":
+        return funding_transactions_declare(json)
     if action == "confirm":
         return await funding_transactions_confirm(json)
     if action == "resolve_escalation":

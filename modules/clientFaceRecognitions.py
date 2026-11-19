@@ -1,11 +1,105 @@
 from fastapi.responses import JSONResponse
 from databases import connection
 import json
+import re
 import os
 from azure.storage.blob import BlobServiceClient, ContentSettings
 import base64
 import uuid
 from datetime import datetime
+
+
+CIC_LENGTH, OCR_LENGTH = 9, 13
+
+
+def clean_ine_ids(cic, ocr) -> dict:
+    """RFC-015: {cic?, ocr?} — only values with the exact digit count (CIC 9,
+    OCR 13), digits only. Wrong or empty values are left out, so a bad read
+    never overwrites a good stored one. Same rule as the agent's ine_ids.py."""
+    out = {}
+    for key, value, length in (("cic", cic, CIC_LENGTH), ("ocr", ocr, OCR_LENGTH)):
+        digits = re.sub(r"\D", "", str(value or ""))
+        if len(digits) == length:
+            out[key] = digits
+    return out
+
+
+def _save_ine_ids(item: dict, client_face_recognition_id: int) -> None:
+    """Writes CIC/OCR on the KYC row via sp_clientFaceRecognitions_ineIds
+    (sql/migrations/2026-11-19_kyc_ine_cic_ocr.sql). Best-effort: logs ids only
+    (these are personal identifiers) and never fails the KYC save."""
+    if not isinstance(item, dict) or not ("cic" in item or "ocr" in item):
+        return
+    ids = clean_ine_ids(item.get("cic"), item.get("ocr"))
+    if not ids:
+        return
+    conn = None
+    try:
+        conn = connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC [dbo].[sp_clientFaceRecognitions_ineIds] @pjsonfile = %s", (json.dumps(
+            {"clientFaceRecognitions": [{
+                "action": "set", "companyId": item.get("companyId"), "clientId": item.get("clientId"),
+                "clientFaceRecognitionId": client_face_recognition_id, **ids}]}),))
+        row = cursor.fetchone()
+        print(f"[clientFaceRecognitions] INE ids saved for record {client_face_recognition_id} "
+              f"({', '.join(sorted(ids))}): {row[0] if row else 'no result'}")
+    except Exception as e:
+        print(f"[clientFaceRecognitions] INE ids not saved for record {client_face_recognition_id}: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+
+def _resguardo_sp(payload: dict):
+    """Runs sp_clientFaceRecognitions_resguardo (sql/migrations/
+    2026-11-19_kyc_resguardo_pdf.sql) and returns its parsed JSON, or None when
+    it fails (e.g. the migration is not applied yet in this environment)."""
+    conn = None
+    try:
+        conn = connection()
+        cursor = conn.cursor()
+        cursor.execute("EXEC [dbo].[sp_clientFaceRecognitions_resguardo] @pjsonfile = %s",
+                       (json.dumps({"clientFaceRecognitions": [payload]}),))
+        row = cursor.fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+    except Exception as e:
+        print(f"[clientFaceRecognitions] resguardo SP failed ({payload.get('action')}): {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def _save_resguardo_url(company_id, client_id, client_face_recognition_id: int, url: str) -> None:
+    """Stores the 'Constancia de resguardo del pagaré físico' PDF URL on the KYC
+    row. Best-effort: logs ids only and never fails the contract save."""
+    if not url or not client_face_recognition_id:
+        return
+    result = _resguardo_sp({
+        "action": "set", "companyId": company_id, "clientId": client_id,
+        "clientFaceRecognitionId": client_face_recognition_id, "resguardoPdfBlobUrl": url,
+    })
+    print(f"[clientFaceRecognitions] resguardo PDF saved for record {client_face_recognition_id}: {result}")
+
+
+def _with_resguardo_urls(result: dict, json_file: dict) -> dict:
+    """Adds resguardoPdfBlobUrl to each row of an all/one read. The column is
+    written by its own SP (see _save_resguardo_url), so the drifting
+    sp_clientFaceRecognitions_all/_one don't have to know about it."""
+    rows = result.get("clientFaceRecognitions") if isinstance(result, dict) else None
+    if not rows:
+        return result
+    query = ((json_file or {}).get("clientFaceRecognitions") or [{}])[0] if isinstance(json_file, dict) else {}
+    company_id = query.get("companyId") or rows[0].get("companyId")
+    if not company_id:
+        return result
+    listing = _resguardo_sp({"action": "list", "companyId": company_id, "clientId": query.get("clientId")})
+    urls = {r.get("clientFaceRecognitionId"): r.get("resguardoPdfBlobUrl")
+            for r in ((listing or {}).get("resguardos") or [])}
+    for row in rows:
+        row.setdefault("resguardoPdfBlobUrl", urls.get(row.get("clientFaceRecognitionId")))
+    return result
 
 
 def clientFaceRecognitions_sp(json_file: dict):
@@ -30,6 +124,9 @@ def clientFaceRecognitions_sp(json_file: dict):
         content = {"msg": msg, "error": bool(error)}
         if client_face_recognition_id is not None:
             content["clientFaceRecognitionId"] = client_face_recognition_id
+            if not error:
+                items = json_file.get("clientFaceRecognitions") if isinstance(json_file, dict) else None
+                _save_ine_ids((items or [{}])[0], client_face_recognition_id)
         return JSONResponse(content=content, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
@@ -48,7 +145,7 @@ def all_clientFaceRecognitions_sp(json_file: dict):
         json_result = "".join(row[0] for row in rows if row and row[0])
         if not json_result:
             return JSONResponse(content={"clientFaceRecognitions": []}, status_code=200)
-        result = json.loads(json_result)
+        result = _with_resguardo_urls(json.loads(json_result), json_file)
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
@@ -67,7 +164,7 @@ def one_clientFaceRecognitions_sp(json_file: dict):
         json_result = "".join(row[0] for row in rows if row and row[0])
         if not json_result:
             return JSONResponse(content={"clientFaceRecognitions": []}, status_code=200)
-        result = json.loads(json_result)
+        result = _with_resguardo_urls(json.loads(json_result), json_file)
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
@@ -255,8 +352,8 @@ async def upload_presence_capture_connector(payload: dict) -> JSONResponse:
 
 async def contract_clientFaceRecognition_connector(payload: dict) -> JSONResponse:
     """
-    Optionally uploads base64 contract/pagaré PDFs to blob storage (clients
-    container), then persists the final verification + contract record via
+    Optionally uploads base64 contract / pagaré / resguardo PDFs to blob
+    storage (clients container), then persists the final verification + contract record via
     the standard CRUD SP.
 
     When clientFaceRecognitionId is provided (the row already created by the
@@ -291,6 +388,18 @@ async def contract_clientFaceRecognition_connector(payload: dict) -> JSONRespons
             pagare_url = _upload_base64_to_blob(
                 pagare_b64, blob_path, "application/pdf",
                 {"companyId": company_id, "clientId": str(client_id), "type": "pagare"},
+            )
+
+        # Third document: "Constancia de resguardo del pagaré físico". Kept in
+        # the pagarés folder since it is about the same physical pagaré.
+        resguardo_url = payload.get("resguardoPdfBlobUrl", "")
+        resguardo_b64 = payload.get("resguardoPdfBase64", "")
+        if resguardo_b64 and not resguardo_url:
+            uid = str(uuid.uuid4())[:8]
+            blob_path = client_blob_path(client_id, BLOB_FOLDER_PAGARES, f"resguardo_{ts}_{uid}.pdf")
+            resguardo_url = _upload_base64_to_blob(
+                resguardo_b64, blob_path, "application/pdf",
+                {"companyId": company_id, "clientId": str(client_id), "type": "pagare_resguardo"},
             )
 
         # Signature match: crop from the front ID photo (client-side, only
@@ -352,6 +461,8 @@ async def contract_clientFaceRecognition_connector(payload: dict) -> JSONRespons
             "domicilio":           payload.get("domicilio"),
             "curp":                payload.get("curp"),
             "claveElector":        payload.get("claveElector"),
+            "cic":                 payload.get("cic"),
+            "ocr":                 payload.get("ocr"),
             "rfc":                 payload.get("rfc"),
             "fechaNacimiento":     payload.get("fechaNacimiento"),
             "contractAccepted":    payload.get("contractAccepted", False),
@@ -373,15 +484,23 @@ async def contract_clientFaceRecognition_connector(payload: dict) -> JSONRespons
 
         json_file = {"clientFaceRecognitions": [record]}
         sp_response = clientFaceRecognitions_sp(json_file)   # reuse CRUD SP for persistence
+        content = json.loads(sp_response.body)
+
+        saved_id = content.get("clientFaceRecognitionId") or client_face_recognition_id
+        if sp_response.status_code == 200 and not content.get("error"):
+            _save_resguardo_url(payload.get("companyId"), payload.get("clientId"), saved_id, resguardo_url)
+
+        # The three signed documents, so the app can link them right away.
+        content["contractPdfBlobUrl"] = contract_url
+        content["pagarePdfBlobUrl"] = pagare_url
+        content["resguardoPdfBlobUrl"] = resguardo_url
 
         if match_result is not None:
             # Surface the match result in this same response so the
             # frontend can show it without a second round trip — advisory
             # only, doesn't affect whether the SP call above succeeded.
-            content = json.loads(sp_response.body)
             content["signatureMatch"] = match_result
-            return JSONResponse(content=content, status_code=sp_response.status_code)
 
-        return sp_response
+        return JSONResponse(content=content, status_code=sp_response.status_code)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)

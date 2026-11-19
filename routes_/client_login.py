@@ -14,7 +14,12 @@ router = APIRouter()
 def send_code(json: dict):
     return send_client_login_code(json)
 
-@router.post("/verify_client_login_code", summary="Verify POS client OTP, auto-provisioning users/userCompanies on first login")
+# RFC-013: the code and the PIN are 4 digits, so guessing must be throttled per
+# phone. Codes also lock after 3 wrong tries in sp_clientLoginCodes; the PIN had
+# no limit at all before this.
+@router.post("/verify_client_login_code", summary="Verify POS client OTP, auto-provisioning users/userCompanies on first login",
+             dependencies=[Depends(rate_limit("otp_verify", per_ip=60, per_target=10, window=900,
+                                              target=row_field("clientLoginCodes", "phone")))])
 def verify_code(json: dict):
     return verify_client_login_code(json)
 
@@ -22,6 +27,8 @@ def verify_code(json: dict):
 def set_password(json: dict):
     return set_client_password(json)
 
-@router.post("/verify_client_password", summary="Returning-client login: phone+password, no OTP")
+@router.post("/verify_client_password", summary="Returning-client login: phone+password, no OTP",
+             dependencies=[Depends(rate_limit("pin", per_ip=30, per_target=5, window=900,
+                                              target=row_field("clientPasswordLogin", "phone")))])
 def verify_password(json: dict):
     return verify_client_password(json)

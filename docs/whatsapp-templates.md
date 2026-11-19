@@ -17,7 +17,7 @@ templates**. Register each one below in **WhatsApp Manager → Message templates
 |---|---|---|
 | `codigo_verificacion` | Authentication | `users._send_sms_otp` |
 | `cuenta_creada` | Utility | `users.send_account_created` |
-| `comprobante_listo` | Utility | `notificationDispatch` (with receiptUrl), `send_ticket_whatsapp` |
+| `comprobante_listo` | Utility | `notificationDispatch` (with receiptUrl), `send_ticket_whatsapp`, `loanTickets` (RFC-014 funding tickets) |
 | `detalle_compra` | Utility | `notificationDispatch` (no receiptUrl, e.g. income_created), `send_ticket_whatsapp` |
 | `abono_saldo` | Utility | `walletTopUps.notify_top_up` (saldo top-up ticket) |
 | `mensaje_negocio` | Marketing | `whatsappCloud.staff_reply` with asTemplate (staff write first, outside 24 h) |
