@@ -16,13 +16,15 @@ lookup/comparison here goes through sp_clientLoginCodes (actions 1-4, see
 sql/migration_history/migrations/2026-09-12_add_client_login_codes.sql) -- this file never
 runs a raw SELECT against dbo.clients/dbo.users itself.
 """
+import asyncio
 import json
-import random
+import secrets
 import string
 from datetime import datetime, timedelta
 from fastapi.responses import JSONResponse
 from databases import connection
 from observability import log_workflow_step
+from modules.azure_notifications import has_push_device, send_azure_push
 
 from modules.users import _normalize_phone, _send_sms_otp, _users_sp_raw
 from security.session_tokens import decode, issue_session, issue_set_pin_token, set_pin_token_required
@@ -35,6 +37,52 @@ def _session_fields(user_id, company_id, client_id, role_code: str) -> dict:
 
 # clientId 1 is each company's generic walk-in record ("Desconocido"), not a person.
 WALK_IN_CLIENT_ID = 1
+
+# RFC-013 (POSVending docs/rfcs): the SMS/WhatsApp code has the same 4 digits as
+# the PIN, so the app captures both in the same 4 boxes. Safe only together with
+# the guards around it: 3 tries per code and 10 codes per phone per day
+# (sp_clientLoginCodes), plus the per-route rate limits (routes_/client_login.py).
+# The response carries codeLength so the apps never hard-code it.
+CLIENT_LOGIN_CODE_LENGTH = 4
+CLIENT_LOGIN_CODE_TTL_MINUTES = 5
+
+
+async def _push_login_code(user_id, brand: str, code: str) -> bool:
+    """Send the code to the GMO app when this account has a registered device.
+    False = no device or the hub refused; the caller moves on to WhatsApp.
+    A True only means the hub accepted it (not that the phone showed it), so
+    the app keeps its "Reenviar por SMS / WhatsApp" buttons on the code step."""
+    device = await has_push_device(user_id)
+    if not device.get("registered"):
+        return False
+    result = await send_azure_push(
+        f"Tu código {brand}",
+        f"Tu código {brand} es: {code}. Expira en {CLIENT_LOGIN_CODE_TTL_MINUTES} min.",
+        target_user_id=user_id,
+        data={"navigationRoute": "/login"},
+    )
+    return bool(result.get("sent"))
+
+
+def _deliver_login_code(phone: str, code: str, brand: str, channel: str, user_id) -> str:
+    """Where the code goes, cheapest first (RFC-013):
+      channel "auto" (default): 1) push to the app if the account has a
+      registered device, 2) WhatsApp, 3) SMS (WhatsApp falls back to SMS by itself).
+      channel "whatsapp" / "sms": the client asked for that one on the code step.
+    Apps released before "auto" always send channel "sms", so they keep getting SMS.
+    Returns the channel that carried it: "push", "whatsapp" or "sms". The code
+    itself is never logged."""
+    if channel == "auto" and user_id:
+        try:
+            if asyncio.run(_push_login_code(user_id, brand, code)):
+                return "push"
+        except Exception as e:
+            log_workflow_step(
+                "Client Login Code Push Error", workflow_name="client_login",
+                status="FAILED", message=type(e).__name__,
+            )
+    return _send_sms_otp(phone, code, via_whatsapp=channel in ("auto", "whatsapp"), brand=brand,
+                         expires_minutes=CLIENT_LOGIN_CODE_TTL_MINUTES)
 
 
 def _greeting_fields(client: dict) -> dict:
@@ -96,14 +144,23 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
                 status_code=200,
             )
 
-        code = "".join(random.choices(string.digits, k=6))
-        expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+        # secrets, not random: a login code must not be predictable from earlier ones.
+        code = "".join(secrets.choice(string.digits) for _ in range(CLIENT_LOGIN_CODE_LENGTH))
+        expires_at = (datetime.utcnow() + timedelta(minutes=CLIENT_LOGIN_CODE_TTL_MINUTES)).isoformat()
 
         result = _client_login_codes_sp({
             "clientLoginCodes": [{"action": 1, "phone": phone, "code": code, "expiresAt": expires_at}]
         })
         first = (result.get("result") or [{}])[0]
         if str(first.get("error") or "") == "1":
+            # Daily cap (sp_clientLoginCodes action 1, RFC-013): a limit the client
+            # must read, not a server failure.
+            if str(first.get("value") or "") == "DAILY_LIMIT":
+                log_workflow_step(
+                    "Client Login Code Daily Limit", workflow_name="client_login",
+                    action="SEND", status="REJECTED", entity="clientLoginCodes",
+                )
+                return JSONResponse(content={"error": first.get("msg")}, status_code=429)
             return JSONResponse(content={"error": first.get("msg") or "No se pudo generar el código"}, status_code=500)
 
         # This client's own company, not the _send_sms_otp default of
@@ -112,10 +169,12 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
         # ClientLogin.tsx) is the fallback if companies.name is ever missing,
         # not "SmartLoans" -- equally wrong for this audience.
         brand = status_client.get("companyName") or "GMO"
-        # channel "whatsapp" is the client's choice; _send_sms_otp falls back to
-        # SMS on its own when Meta isn't set up, and says which one went out.
-        via_whatsapp = str(payload.get("channel") or "").lower() == "whatsapp"
-        sent_by = _send_sms_otp(phone, code, via_whatsapp=via_whatsapp, brand=brand)
+        # "auto" = push → WhatsApp → SMS; "whatsapp"/"sms" = the client's explicit
+        # choice on the code step. An unknown value is treated as "sms".
+        channel = str(payload.get("channel") or "auto").lower()
+        if channel not in ("auto", "whatsapp", "sms"):
+            channel = "sms"
+        sent_by = _deliver_login_code(phone, code, brand, channel, status_client.get("existingUserId"))
 
         log_workflow_step(
             "Client Login Code Sent", workflow_name="client_login",
@@ -125,6 +184,7 @@ def send_client_login_code(json_file: dict) -> JSONResponse:
         return JSONResponse(
             content={
                 "found": True, "firstLoginCompleted": False, "message": "Código enviado", "channel": sent_by,
+                "codeLength": CLIENT_LOGIN_CODE_LENGTH,
                 **_greeting_fields(status_client),
             },
             status_code=200,
