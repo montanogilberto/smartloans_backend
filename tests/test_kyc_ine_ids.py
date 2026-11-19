@@ -16,6 +16,11 @@ class CleanIneIdsTests(unittest.TestCase):
         self.assertEqual(cfr.clean_ine_ids("1234567890", "123"), {})
         self.assertEqual(cfr.clean_ine_ids("", None), {})
 
+    def test_vigencia_keeps_the_last_year(self):
+        self.assertEqual(cfr.clean_ine_ids("", "", "2023 - 2033"), {"vigencia": "2033"})
+        self.assertEqual(cfr.clean_ine_ids("", "", "1999"), {})
+        self.assertEqual(cfr.clean_ine_ids("", "", "??"), {})
+
     def test_keeps_one_when_the_other_is_bad(self):
         self.assertEqual(cfr.clean_ine_ids("123456789", "12"), {"cic": "123456789"})
 
@@ -42,6 +47,12 @@ class SaveHookTests(unittest.TestCase):
         sent = json.loads(params[0])["clientFaceRecognitions"][0]
         self.assertEqual(sent, {"action": "set", "companyId": 1, "clientId": 3371,
                                 "clientFaceRecognitionId": 42, "cic": "123456789", "ocr": "1234567890123"})
+
+    def test_vigencia_alone_is_written(self):
+        _, _, ids_cursor = self.run_save({**self.BASE, "vigencia": "2033"})
+        sent = json.loads(ids_cursor.execute.call_args.args[1][0])["clientFaceRecognitions"][0]
+        self.assertEqual(sent["vigencia"], "2033")
+        self.assertNotIn("cic", sent)
 
     def test_no_ids_in_payload_means_no_extra_call(self):
         main_cursor = mock.Mock()

@@ -5,22 +5,31 @@ import re
 import os
 from azure.storage.blob import BlobServiceClient, ContentSettings
 import base64
+import threading
 import uuid
 from datetime import datetime
+
+from modules.profileAvatar import (
+    AVATAR_FILENAME, AVATAR_SOURCE_SIDE, BLOB_FOLDER_PROFILE, NoPersonFound, build_avatar,
+)
 
 
 CIC_LENGTH, OCR_LENGTH = 9, 13
 
 
-def clean_ine_ids(cic, ocr) -> dict:
-    """RFC-015: {cic?, ocr?} — only values with the exact digit count (CIC 9,
-    OCR 13), digits only. Wrong or empty values are left out, so a bad read
+def clean_ine_ids(cic, ocr, vigencia=None) -> dict:
+    """RFC-015: {cic?, ocr?, vigencia?} — CIC/OCR only with the exact digit count
+    (9 / 13), digits only; vigencia only as a 4-digit year 2000–2100. Wrong or empty values are left out, so a bad read
     never overwrites a good stored one. Same rule as the agent's ine_ids.py."""
     out = {}
     for key, value, length in (("cic", cic, CIC_LENGTH), ("ocr", ocr, OCR_LENGTH)):
         digits = re.sub(r"\D", "", str(value or ""))
         if len(digits) == length:
             out[key] = digits
+    # Last year of the front's "VIGENCIA" (valid through Dec 31 of that year).
+    years = [int(y) for y in re.findall(r"\d{4}", str(vigencia or ""))]
+    if years and 2000 <= max(years) <= 2100:
+        out["vigencia"] = str(max(years))
     return out
 
 
@@ -28,9 +37,9 @@ def _save_ine_ids(item: dict, client_face_recognition_id: int) -> None:
     """Writes CIC/OCR on the KYC row via sp_clientFaceRecognitions_ineIds
     (sql/migrations/2026-11-19_kyc_ine_cic_ocr.sql). Best-effort: logs ids only
     (these are personal identifiers) and never fails the KYC save."""
-    if not isinstance(item, dict) or not ("cic" in item or "ocr" in item):
+    if not isinstance(item, dict) or not ("cic" in item or "ocr" in item or "vigencia" in item):
         return
-    ids = clean_ine_ids(item.get("cic"), item.get("ocr"))
+    ids = clean_ine_ids(item.get("cic"), item.get("ocr"), item.get("vigencia"))
     if not ids:
         return
     conn = None
@@ -184,7 +193,8 @@ def _blob_service_client() -> BlobServiceClient:
     return BlobServiceClient.from_connection_string(conn_str)
 
 
-def _upload_to_blob(raw_bytes: bytes, blob_path: str, content_type: str, metadata: dict) -> str:
+def _upload_to_blob(raw_bytes: bytes, blob_path: str, content_type: str, metadata: dict,
+                    cache_control: str = None) -> str:
     """
     Same pattern as ticket_receipts.py — upload bytes, return public URL.
     Uses service_client.url (falls back to AZURE_STORAGE_ACCOUNT_URL_FALLBACK).
@@ -195,18 +205,51 @@ def _upload_to_blob(raw_bytes: bytes, blob_path: str, content_type: str, metadat
     blob_client.upload_blob(
         raw_bytes,
         overwrite=True,
-        content_settings=ContentSettings(content_type=content_type),
+        content_settings=ContentSettings(content_type=content_type, cache_control=cache_control),
         metadata=metadata,
     )
     account_url = getattr(service_client, "url", None) or _ACCOUNT_URL_FALLBACK
     return account_url.rstrip("/") + "/" + _CLIENTS_CONTAINER + "/" + blob_path
 
 
-def _upload_base64_to_blob(b64_data: str, blob_path: str, content_type: str, metadata: dict) -> str:
-    """Strip optional data-URI prefix then upload."""
+def _decode_base64(b64_data: str) -> bytes:
+    """Strip optional data-URI prefix then decode."""
     if "," in b64_data:
         b64_data = b64_data.split(",", 1)[1]
-    return _upload_to_blob(base64.b64decode(b64_data), blob_path, content_type, metadata)
+    return base64.b64decode(b64_data)
+
+
+def _upload_base64_to_blob(b64_data: str, blob_path: str, content_type: str, metadata: dict) -> str:
+    return _upload_to_blob(_decode_base64(b64_data), blob_path, content_type, metadata)
+
+
+def save_profile_avatar(company_id, client_id, selfie_bytes: bytes) -> str:
+    """Builds the retouched avatar from the front selfie and uploads it to
+    {clientId}/profile/avatar.jpg. Never touches the KYC selfie itself.
+    no-cache: the name is stable across KYC retries, so clients must revalidate."""
+    avatar = build_avatar(selfie_bytes)
+    return _upload_to_blob(
+        avatar,
+        client_blob_path(client_id, BLOB_FOLDER_PROFILE, AVATAR_FILENAME),
+        "image/jpeg",
+        {"companyId": str(company_id), "clientId": str(client_id), "side": "avatar",
+         "source": AVATAR_SOURCE_SIDE},
+        cache_control="no-cache",
+    )
+
+
+def save_profile_avatar_in_background(company_id, client_id, selfie_bytes: bytes) -> None:
+    """Fire-and-forget: the KYC upload response never waits on, or fails because
+    of, the avatar. Logs the client id and error type only — never image data."""
+    def run():
+        try:
+            save_profile_avatar(company_id, client_id, selfie_bytes)
+            print(f"[profileAvatar] avatar saved for client {client_id}")
+        except NoPersonFound:
+            print(f"[profileAvatar] no person found in front selfie of client {client_id}; skipped")
+        except Exception as e:
+            print(f"[profileAvatar] avatar failed for client {client_id}: {type(e).__name__}")
+    threading.Thread(target=run, daemon=True).start()
 
 
 # Asset folders under a client's prefix. Kept as constants so a typo can't
@@ -305,10 +348,15 @@ async def upload_id_image_connector(payload: dict) -> JSONResponse:
         # stays valid across retries instead of going stale.
         blob_path = client_blob_path(client_id, folder, f"{side}.jpg")
 
-        blob_url = _upload_base64_to_blob(
-            image_b64, blob_path, "image/jpeg",
+        raw = _decode_base64(image_b64)
+        blob_url = _upload_to_blob(
+            raw, blob_path, "image/jpeg",
             {"companyId": str(company_id), "clientId": str(client_id), "side": side},
         )
+        # The front liveness frame is the sharpest capture of the face (the
+        # final 'selfie' is often motion-blurred) — it feeds the display avatar.
+        if side == AVATAR_SOURCE_SIDE:
+            save_profile_avatar_in_background(company_id, client_id, raw)
 
         return JSONResponse(content={"blobUrl": blob_url}, status_code=200)
     except Exception as e:
@@ -463,6 +511,7 @@ async def contract_clientFaceRecognition_connector(payload: dict) -> JSONRespons
             "claveElector":        payload.get("claveElector"),
             "cic":                 payload.get("cic"),
             "ocr":                 payload.get("ocr"),
+            "vigencia":            payload.get("vigencia"),
             "rfc":                 payload.get("rfc"),
             "fechaNacimiento":     payload.get("fechaNacimiento"),
             "contractAccepted":    payload.get("contractAccepted", False),
