@@ -85,6 +85,7 @@ from routes_ import (
     voiceCalls,
     serviceCompletionNotices,
     address,
+    loanPayments,
 )
 
 @asynccontextmanager
@@ -291,6 +292,7 @@ app.include_router(laundryDevices.router)
 app.include_router(voiceCalls.router)
 app.include_router(address.router)
 app.include_router(serviceCompletionNotices.router)
+app.include_router(loanPayments.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job
