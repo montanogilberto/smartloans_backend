@@ -77,6 +77,29 @@ TEMPLATES: dict[str, tuple[str, str, str, str]] = {
         "Tu prestamista declaró que te transfirió {amount} (préstamo #{loanId}). Revisa tu banco y "
         "confirma en la app si llegó.",
         "/loan-detail/{loanId}"),
+    # Lender platform fee (RFC-016 fase 3b): 5% + IVA, by card, before the SPEI.
+    "platform_fee_card_needed": (
+        "Warning", "💳 Registra tu tarjeta para la comisión",
+        "Para fondear el préstamo #{loanId} registra la tarjeta con la que pagarás la comisión de la "
+        "plataforma ({amount}).",
+        "/p2p-lending"),
+    "platform_fee_action_required": (
+        "Warning", "🔐 Confirma el pago de tu comisión",
+        "Tu banco pide confirmar el pago de la comisión de {amount} del préstamo #{loanId}, o la tarjeta "
+        "fue rechazada. Ábrelo en la app para completarlo.",
+        "/p2p-lending"),
+    "platform_fee_paid": (
+        "Success", "✅ Comisión pagada",
+        "Recibimos tu comisión de {amount} del préstamo #{loanId}. Ya puedes transferir el préstamo por SPEI.",
+        "/p2p-lending"),
+    "platform_fee_refunded_requested": (
+        "Info", "↩️ Reembolso de comisión en proceso",
+        "El préstamo #{loanId} no se desembolsó: te reembolsamos la comisión completa.",
+        "/p2p-lending"),
+    "platform_fee_refunded": (
+        "Success", "↩️ Comisión reembolsada",
+        "Se reembolsó tu comisión de {amount} del préstamo #{loanId}. Puede tardar unos días en verse en tu tarjeta.",
+        "/p2p-lending"),
     # The AI check of the receipt didn't pass: the borrower should look before confirming.
     "funding_evidence_review": (
         "Warning", "🔎 Revisa el comprobante de fondeo",

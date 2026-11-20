@@ -1466,12 +1466,13 @@ async def handle_webhook(request: Request):
     Register in Stripe Dashboard → Developers → Webhooks:
       URL: https://smartloansbackend.azurewebsites.net/stripe/webhook
       Events: payment_intent.succeeded, payment_intent.payment_failed,
-              account.updated
+              account.updated, charge.refunded (platform fee refunds)
     """
     payload_bytes = await request.body()
     sig_header    = request.headers.get("stripe-signature", "")
 
     secrets = [s for s in (WEBHOOK_SECRET, CONNECT_WEBHOOK_SECRET) if s and not s.startswith("whsec_YOUR")]
+    verified = bool(secrets)
     if not secrets:
         # Webhook secret not configured — parse without verification (dev only)
         event = json.loads(payload_bytes)
@@ -1506,6 +1507,28 @@ async def handle_webhook(request: Request):
         return JSONResponse({"received": True}, status_code=200)
 
     print(f"[stripe][webhook] Received event: {event_type}")
+
+    # Lender platform fee (RFC-016 fase 3b): GMO's own revenue, not wallet money —
+    # it never touches stripeTransactions or the ledger. Only a signature-verified
+    # event may mark a fee PAID/REFUNDED (it unlocks funding).
+    # charge.refunded is routed whatever its metadata (Stripe doesn't promise the
+    # PaymentIntent's metadata on the Charge); it is matched by payment_intent id,
+    # and no other flow here handles refunds.
+    if (not connected_account
+            and (event_type == "charge.refunded"
+                 or (event_type in ("payment_intent.succeeded", "payment_intent.payment_failed")
+                     and (data_obj.get("metadata") or {}).get("type") == "platform_fee"))):
+        if not verified:
+            print("[stripe][webhook] platform fee event rejected: no webhook secret configured")
+            return JSONResponse({"error": "Webhook secret not configured"}, status_code=400)
+        from modules.platformFees import handle_fee_webhook_event
+        try:
+            await handle_fee_webhook_event(event_type, data_obj)
+        except Exception as e:
+            # 500 so Stripe retries the delivery; mark_webhook is idempotent.
+            print(f"[stripe][webhook] platform fee event {event_type} failed: {e}")
+            return JSONResponse({"error": "platform fee update failed"}, status_code=500)
+        return JSONResponse({"received": True}, status_code=200)
 
     if event_type == "payment_intent.succeeded":
         intent_id = data_obj.get("id")

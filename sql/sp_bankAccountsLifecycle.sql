@@ -105,20 +105,16 @@ BEGIN
                 SELECT '{"error":"Esta CLABE ya está registrada por otro cliente."}' AS [jsonResult]
                 RETURN
             END
-            -- ¿Primera cuenta del cliente? → nace PRIMARY directo
-            DECLARE @hasPrimary BIT = CASE WHEN EXISTS (
-                SELECT 1 FROM dbo.bankAccounts
-                WHERE companyId = @companyId AND clientId = @clientId
-                  AND accountStatus = 'PRIMARY' AND isActive = 1) THEN 1 ELSE 0 END
-
+            -- RFC-017: toda CLABE nueva nace PENDING_VERIFICATION, también la
+            -- primera del cliente. Pasa a PRIMARY al verificarse
+            -- (sp_bankAccounts acción 2) o con promote_primary.
             INSERT INTO dbo.bankAccounts
                 (companyId, clientId, clabe, clabeHash, bankCode, bankName,
                  holderName, rfc, accountStatus, isDefault, isVerified)
             VALUES
                 (@companyId, @clientId, @clabe, @hash, @bankCode, @bankName,
                  @holderName, @rfc,
-                 CASE WHEN @hasPrimary = 1 THEN 'PENDING_VERIFICATION' ELSE 'PRIMARY' END,
-                 CASE WHEN @hasPrimary = 1 THEN 0 ELSE 1 END, 0)
+                 'PENDING_VERIFICATION', 0, 0)
 
             SELECT (SELECT TOP 1 bankAccountId, accountStatus, clabeLast4 = RIGHT(clabe,4),
                            bankName, holderName
@@ -150,11 +146,12 @@ BEGIN
               AND accountStatus = 'PRIMARY' AND bankAccountId <> @pendingId;
             UPDATE dbo.bankAccounts SET accountStatus = 'PRIMARY', isDefault = 1, updated_at = GETUTCDATE()
             WHERE companyId = @companyId AND clientId = @clientId AND bankAccountId = @pendingId
-              AND accountStatus = 'PENDING_VERIFICATION';
+              AND accountStatus = 'PENDING_VERIFICATION'
+              AND isVerified = 1;   -- RFC-017: nunca una CLABE sin verificar
             IF @@ROWCOUNT = 0
             BEGIN
                 ROLLBACK TRANSACTION;
-                SELECT '{"error":"La cuenta a promover no existe o no está pendiente de verificación."}' AS [jsonResult]
+                SELECT '{"error":"La cuenta a promover no existe, no está pendiente o aún no está verificada."}' AS [jsonResult]
                 RETURN
             END
             COMMIT TRANSACTION;
@@ -188,6 +185,7 @@ BEGIN
                 FROM dbo.bankAccounts b
                 WHERE b.companyId = @companyId AND b.isActive = 1
                   AND b.accountStatus = 'PRIMARY'
+                  AND b.isVerified = 1   -- RFC-017: jamás congelar una CLABE sin verificar
                   AND b.clientId IN (@borrowerClientId, @lenderClientId)
             )
             INSERT INTO dbo.bankAccountSnapshots
