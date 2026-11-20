@@ -1,4 +1,3 @@
-# security/session_tokens.py
 """Signed session tokens (HS256, SESSION_JWT_SECRET).
 
 Three kinds, told apart by the `typ` claim so one can never stand in for another:
@@ -11,7 +10,7 @@ Without a usable secret nothing is issued and every token is rejected.
 import logging
 import os
 import time
-from typing import Optional
+from typing import Any, Iterable, Optional
 
 import jwt
 from fastapi import Header, HTTPException, Request
@@ -49,6 +48,51 @@ def _as_int(value: object) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def resolve_push_user_ids(*args: Any, **kwargs: Any) -> list[int]:
+    """Normalize candidate user IDs into a deduplicated list of positive ints.
+
+    Replace or extend this implementation once you confirm the exact payload or
+    database lookup expected by `modules/loanPayments.py`.
+    """
+    candidates: list[Any] = []
+
+    for key in ("user_ids", "userIds", "recipient_ids", "recipientIds", "user_id", "userId"):
+        if key in kwargs and kwargs[key] is not None:
+            candidates.append(kwargs[key])
+
+    for arg in args:
+        if arg is not None:
+            candidates.append(arg)
+
+    resolved: list[int] = []
+    seen: set[int] = set()
+
+    def _collect(item: Any) -> None:
+        if item is None:
+            return
+        if isinstance(item, dict):
+            for field in ("userId", "user_id", "id", "targetUserId", "target_user_id"):
+                if field in item:
+                    _collect(item[field])
+            for list_field in ("userIds", "user_ids", "recipientIds", "recipient_ids"):
+                if list_field in item:
+                    _collect(item[list_field])
+            return
+        if isinstance(item, (list, tuple, set)) or (isinstance(item, Iterable) and not isinstance(item, (str, bytes))):
+            for sub in item:
+                _collect(sub)
+            return
+        uid = _as_int(item)
+        if uid > 0 and uid not in seen:
+            seen.add(uid)
+            resolved.append(uid)
+
+    for entry in candidates:
+        _collect(entry)
+
+    return resolved
 
 
 def issue_session(user_id: object, company_id: object = 0, client_id: object = 0, role: object = "") -> Optional[dict]:
