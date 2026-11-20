@@ -315,3 +315,37 @@ def require_company_rows_or_platform_admin(key: str, roles: set[str], allow_work
             raise HTTPException(status_code=403, detail="Forbidden")
         return claims
     return guard
+
+
+def require_client_rows_access(key: str, client_may_access: bool):
+    """Personal data of one client (dbo.addresses): body {key: [{companyId,
+    clientId, ...}]}, exactly one row. Needs the worker key, or an access token
+    that is staff of that row's company (or a SmartLoans admin), or — when
+    client_may_access — the client themself (token clientId == row clientId, in
+    a company the token holds). The ids come from the signed token, never from
+    the X-* observability headers."""
+    async def guard(request: Request, x_worker_key: str | None = Header(default=None)) -> None:
+        token = _bearer(request)
+        if not token:
+            require_worker_key(x_worker_key)
+            return
+        claims = decode(token, "access")
+        if claims is None:
+            raise HTTPException(status_code=401, detail="Session expired")
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        rows = body.get(key) if isinstance(body, dict) else None
+        row = rows[0] if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict) else None
+        if row is None:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        company_id = _as_int(row.get("companyId"))
+        if is_platform_admin(claims) or (company_id and company_id in _staff_companies(claims, _COMPANY_STAFF_ROLES)):
+            return
+        own_companies = {_as_int(c.get("companyId")) for c in claims.get("companies") or []}
+        if (client_may_access and company_id and company_id in own_companies
+                and _as_int(claims.get("clientId")) and _as_int(claims.get("clientId")) == _as_int(row.get("clientId"))):
+            return
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return guard
