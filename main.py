@@ -86,6 +86,7 @@ from routes_ import (
     serviceCompletionNotices,
     address,
     loanPayments,
+    notificationAudience,
 )
 
 @asynccontextmanager
@@ -294,6 +295,7 @@ app.include_router(voiceCalls.router)
 app.include_router(address.router)
 app.include_router(serviceCompletionNotices.router)
 app.include_router(loanPayments.router)
+app.include_router(notificationAudience.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job
@@ -302,7 +304,7 @@ app.include_router(loanPayments.router)
 # process idles between requests and this scheduler stops running silently.
 # --------------------------------------------------
 from modules.companies import all_companies_sp
-from modules.automatedPayments import charge_due_installments
+from modules.automatedPayments import charge_due_installments, accrue_post_term_interest
 from modules.onboardingReminders import check_onboarding_completeness
 from modules.registrationReminders import check_registration_completeness
 from modules.offerReminders import check_active_offers
@@ -330,6 +332,17 @@ async def _run_daily_charge_due():
             print(f"[scheduler] charge-due: ran for companyId={company_id}")
         except Exception as e:
             print(f"[scheduler] charge-due: failed for companyId={company_id}: {e}")
+
+
+# RFC-019: cobra los periodos cerrados de interés posterior al plazo de los
+# préstamos 'interest_free' (barrido global, idempotente; sólo registra el
+# monto adeudado — nunca mueve ni confirma dinero).
+async def _run_daily_post_term_interest():
+    try:
+        await accrue_post_term_interest({})
+        print("[scheduler] post-term-interest: ran")
+    except Exception as e:
+        print(f"[scheduler] post-term-interest: failed: {e}")
 
 
 async def _run_daily_onboarding_reminders():
@@ -397,6 +410,8 @@ async def start_scheduler():
     writer.start()
     # 07:00 UTC ≈ early morning in Mexico (UTC-6/-5) — off-peak for billing.
     scheduler.add_job(_run_daily_charge_due, "cron", hour=7, minute=0, id="daily_charge_due")
+    # 06:30 UTC — antes de charge-due (que de todos modos excluye estas filas).
+    scheduler.add_job(_run_daily_post_term_interest, "cron", hour=6, minute=30, id="daily_post_term_interest")
     # 15:00 UTC ≈ mid-morning in Mexico — a time a client is likely to see
     # and act on the notification, unlike the pre-dawn billing run above.
     scheduler.add_job(_run_daily_onboarding_reminders, "cron", hour=15, minute=0, id="daily_onboarding_reminders")

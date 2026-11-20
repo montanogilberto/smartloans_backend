@@ -60,6 +60,10 @@ CREATE TABLE [dbo].[loanProposals] (
     counteredRate       DECIMAL(5,2)   NULL,
     counteredTermMonths INT            NULL,
     counteredAt         DATETIME2      NULL,
+    -- 'standard' = amortización con interés | 'interest_free' = tipo tarjeta:
+    -- 0% dentro del plazo, pago mínimo = monto / plazo; proposedRate (o
+    -- counteredRate) aplica solo al saldo que quede al vencer el plazo.
+    paymentPlan         NVARCHAR(20)   NOT NULL CONSTRAINT DF_loanProposals_paymentPlan DEFAULT 'standard',
     created_At          DATETIME2      NOT NULL DEFAULT GETUTCDATE(),
     updated_at          DATETIME2      NULL
 )
@@ -77,6 +81,14 @@ IF COL_LENGTH('dbo.loanProposals', 'counteredTermMonths') IS NULL
 GO
 IF COL_LENGTH('dbo.loanProposals', 'counteredAt') IS NULL
     ALTER TABLE [dbo].[loanProposals] ADD counteredAt DATETIME2 NULL;
+GO
+IF COL_LENGTH('dbo.loanProposals', 'paymentPlan') IS NULL
+    ALTER TABLE [dbo].[loanProposals] ADD paymentPlan NVARCHAR(20) NOT NULL
+        CONSTRAINT DF_loanProposals_paymentPlan DEFAULT 'standard';
+GO
+IF NOT EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_loanProposals_paymentPlan')
+    ALTER TABLE [dbo].[loanProposals]
+        ADD CONSTRAINT CK_loanProposals_paymentPlan CHECK (paymentPlan IN ('standard', 'interest_free'));
 GO
 
 -- Indexes matching the read patterns in sp_loanProposals_all / sp_creditScore_data
@@ -123,18 +135,19 @@ BEGIN
         DECLARE @counteredAmount     DECIMAL(18,2) = JSON_VALUE(@pjsonfile, '$.loanProposals[0].counteredAmount')
         DECLARE @counteredRate       DECIMAL(5,2)  = JSON_VALUE(@pjsonfile, '$.loanProposals[0].counteredRate')
         DECLARE @counteredTermMonths INT           = JSON_VALUE(@pjsonfile, '$.loanProposals[0].counteredTermMonths')
+        DECLARE @paymentPlan    NVARCHAR(20)    = ISNULL(JSON_VALUE(@pjsonfile, '$.loanProposals[0].paymentPlan'), 'standard')
 
         IF @action = 1 -- CREATE
         BEGIN
             INSERT INTO [dbo].[loanProposals]
                 (companyId, lenderId, borrowerId, requestedAmount, proposedRate, termMonths,
-                 status, borrowerNote, lenderNote, pushNotificationId, expiresAt)
+                 status, borrowerNote, lenderNote, pushNotificationId, expiresAt, paymentPlan)
             VALUES
                 (@companyId, @lenderId, @borrowerId, @requestedAmount, @proposedRate, @termMonths,
-                 @status, @borrowerNote, @lenderNote, @pushNotificationId, @expiresAt)
+                 @status, @borrowerNote, @lenderNote, @pushNotificationId, @expiresAt, @paymentPlan)
 
             SELECT (SELECT TOP 1 proposalId, companyId, lenderId, borrowerId,
-                           requestedAmount, proposedRate, termMonths, status,
+                           requestedAmount, proposedRate, termMonths, paymentPlan, status,
                            borrowerNote, lenderNote,
                            counteredAmount, counteredRate, counteredTermMonths,
                            CONVERT(NVARCHAR, counteredAt, 127) AS counteredAt,
@@ -196,7 +209,7 @@ BEGIN
 
         SELECT ISNULL(
             (SELECT proposalId, companyId, lenderId, borrowerId,
-                    requestedAmount, proposedRate, termMonths, status,
+                    requestedAmount, proposedRate, termMonths, paymentPlan, status,
                     borrowerNote, lenderNote, pushNotificationId,
                     counteredAmount, counteredRate, counteredTermMonths,
                     CONVERT(NVARCHAR, counteredAt, 127)  AS counteredAt,

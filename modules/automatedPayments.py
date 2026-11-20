@@ -24,6 +24,7 @@ import stripe
 from fastapi.responses import JSONResponse
 from databases import connection
 from datetime import datetime, timezone, date
+from decimal import Decimal, ROUND_HALF_UP
 from dateutil.relativedelta import relativedelta
 from modules.stripe_payments import _sp_connected_accounts
 from modules.walletBalance import credit_wallet
@@ -620,4 +621,288 @@ async def charge_due_installments(payload: dict):
         "skipped": skipped,
         "total":   len(due_items),
         "details": details,
+    }, status_code=200)
+
+
+# ── RFC-019: interés posterior al plazo (plan 'interest_free') ───────────────
+#
+# Un préstamo 'interest_free' se crea al 0 %: cuotas iguales de monto ÷ plazo.
+# El capital que quede sin pagar al vencer la última cuota (M) genera
+# loans.postTermRate (anual %), por día natural (actual/365), sin capitalizar,
+# cobrado en una fila de loanInstallments por periodo mensual [M+(k-1)m, M+km).
+# El periodo se cobra al corte, o antes si todo el capital quedó pagado.
+# Las filas nunca se modifican; el job sólo registra un monto adeudado: no
+# mueve ni confirma dinero (D1/D5). Se pagan por SPEI con confirmación humana.
+
+POST_TERM_TYPE = "POST_TERM_INTEREST"
+POST_TERM_GRACE_DAYS = 10      # fecha límite = corte + 10 días (RFC-019 Q1)
+POST_TERM_DAY_BASIS = 365      # actual/365 (RFC-019 Q2)
+_MAX_POST_TERM_PERIODS = 600   # tope de seguridad del ciclo (50 años)
+_CENT = Decimal("0.01")
+
+
+def _dec(value) -> Decimal:
+    if value is None or value == "":
+        return Decimal("0")
+    return value if isinstance(value, Decimal) else Decimal(str(value))
+
+
+def _to_date(value):
+    """'YYYY-MM-DD' or ISO datetime → date (None if empty)."""
+    if not value:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    return date.fromisoformat(str(value)[:10])
+
+
+def _money(value: Decimal) -> Decimal:
+    return value.quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
+def compute_post_term_interest(json_file: dict) -> dict:
+    """
+    Pure calculation (no DB). json_file: {
+      "termMonths": int, "postTermRate": number (annual %),
+      "installments": [loanInstallments rows: installmentNumber, installmentType,
+                       dueDate, principal, interest, amount, status, paidAt],
+      "asOfDate": "YYYY-MM-DD" (default: today)
+    }
+    Returns Decimals: termEndDate, unpaidPrincipal, billedInterest,
+    billedUnpaidInterest, periodsDue (closed periods not billed yet),
+    accruedUnbilledInterest (periodsDue + the open period so far),
+    nextCutoffDate.
+    """
+    term_months = int(json_file.get("termMonths") or 0)
+    rate = _dec(json_file.get("postTermRate"))
+    as_of = _to_date(json_file.get("asOfDate")) or date.today()
+    rows = json_file.get("installments") or []
+
+    regular = [r for r in rows if (r.get("installmentType") or "REGULAR") != POST_TERM_TYPE]
+    interest_rows = [r for r in rows if r.get("installmentType") == POST_TERM_TYPE]
+    billed_numbers = {int(r.get("installmentNumber")) for r in interest_rows}
+    billed = sum((_dec(r.get("interest")) for r in interest_rows), Decimal("0"))
+    billed_unpaid = sum((_dec(r.get("interest")) for r in interest_rows if r.get("status") != "paid"), Decimal("0"))
+
+    result = {
+        "termEndDate": None, "unpaidPrincipal": Decimal("0"),
+        "billedInterest": _money(billed), "billedUnpaidInterest": _money(billed_unpaid),
+        "periodsDue": [], "accruedUnbilledInterest": Decimal("0.00"), "nextCutoffDate": None,
+    }
+    if not regular or term_months <= 0:
+        return result
+
+    last = next((r for r in regular if int(r.get("installmentNumber") or 0) == term_months), None)
+    term_end = _to_date(last.get("dueDate")) if last else max(_to_date(r.get("dueDate")) for r in regular)
+    result["termEndDate"] = term_end
+
+    # (capital, fecha en que dejó de deberse | None si sigue sin pagar)
+    debts = []
+    for r in regular:
+        paid_on = _to_date(r.get("paidAt")) if r.get("status") == "paid" else None
+        if r.get("status") == "paid" and paid_on is None:
+            paid_on = date.min  # pagada sin fecha: no genera interés
+        debts.append((_dec(r.get("principal")), paid_on))
+
+    def unpaid_at(day: date) -> Decimal:
+        return sum((p for p, end in debts if end is None or end > day), Decimal("0"))
+
+    result["unpaidPrincipal"] = _money(unpaid_at(as_of))
+    if as_of <= term_end or rate <= 0:
+        result["nextCutoffDate"] = term_end + relativedelta(months=1) if as_of <= term_end else None
+        return result
+
+    fully_paid_on = max(end for _, end in debts) if all(end is not None for _, end in debts) else None
+    daily = rate / Decimal("100") / Decimal(POST_TERM_DAY_BASIS)
+    pending_billing = Decimal("0")
+
+    for k in range(1, _MAX_POST_TERM_PERIODS + 1):
+        start = term_end + relativedelta(months=k - 1)
+        cutoff = term_end + relativedelta(months=k)
+        if fully_paid_on is not None and fully_paid_on <= start:
+            break
+        period_end = min(cutoff, fully_paid_on) if fully_paid_on is not None else cutoff
+        window_end = min(period_end, as_of)
+
+        accrued = Decimal("0")
+        for principal, end in debts:
+            stop = window_end if end is None else min(end, window_end)
+            days = (stop - start).days
+            if days > 0:
+                accrued += principal * days * daily
+        accrued = _money(accrued)
+
+        if as_of >= period_end:  # periodo cerrado
+            number = term_months + k
+            if number not in billed_numbers and accrued > 0:
+                result["periodsDue"].append({
+                    "periodNumber": k,
+                    "installmentNumber": number,
+                    "interestPeriodStart": start,
+                    "interestPeriodEnd": period_end,
+                    "interest": accrued,
+                    "remainingBalance": _money(unpaid_at(period_end)),
+                    "dueDate": max(period_end, as_of) + relativedelta(days=POST_TERM_GRACE_DAYS),
+                })
+                pending_billing += accrued
+            if fully_paid_on is not None and period_end == fully_paid_on:
+                break
+            continue
+
+        result["nextCutoffDate"] = cutoff  # periodo en curso
+        pending_billing += accrued
+        break
+
+    result["accruedUnbilledInterest"] = _money(pending_billing)
+    return result
+
+
+def _sp_installments_all(payload: dict) -> dict:
+    """Like _sp_installments but joins every row (FOR JSON splits large results)."""
+    conn = None
+    try:
+        conn = _conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC [dbo].[sp_loanInstallments] @pjsonfile = %s",
+            (json.dumps({"installments": [payload]}),)
+        )
+        rows = cursor.fetchall()
+        raw = "".join(r[0] for r in rows if r and r[0])
+        return json.loads(raw) if raw else {}
+    except Exception as e:
+        print(f"[automatedPayments] installments SP error: {e}")
+        return {"error": str(e)}
+    finally:
+        if conn:
+            conn.close()
+
+
+def _sp_loan_one(loan_id, company_id) -> dict:
+    conn = None
+    try:
+        conn = _conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "EXEC [dbo].[sp_loans_one] @pjsonfile = %s",
+            (json.dumps({"loans": [{"loanId": loan_id, "companyId": company_id}]}),)
+        )
+        row = cursor.fetchone()
+        loans = (json.loads(row[0]) if row and row[0] else {}).get("loans", [])
+        return loans[0] if loans else {}
+    except Exception as e:
+        print(f"[automatedPayments] sp_loans_one error loanId={loan_id}: {e}")
+        return {}
+    finally:
+        if conn:
+            conn.close()
+
+
+def _iso(value):
+    return value.isoformat() if isinstance(value, date) else value
+
+
+async def accrue_post_term_interest(json_file: dict):
+    """
+    Daily job (and worker-key endpoint). Bills every closed post-term period
+    of each active 'interest_free' loan as one immutable loanInstallments row.
+
+    Body: { "companyId"?: int (omit = global sweep), "asOfDate"?: "YYYY-MM-DD", "dryRun"?: bool }
+    Returns: { asOfDate, loans, created, skipped, dryRun, details: [...] }
+    """
+    as_of = _to_date(json_file.get("asOfDate")) or date.today()
+    dry_run = bool(json_file.get("dryRun", False))
+    query = {"action": "post_term_candidates", "asOfDate": as_of.isoformat()}
+    if json_file.get("companyId"):
+        query["companyId"] = int(json_file["companyId"])
+
+    data = _sp_installments_all(query)
+    if "error" in data:
+        return JSONResponse({"error": data["error"]}, status_code=500)
+
+    created = skipped = 0
+    details = []
+    candidates = data.get("loans", [])
+    for loan in candidates:
+        loan_id = loan.get("loanId")
+        installments = loan.get("installments") or []
+        calc = compute_post_term_interest({
+            "termMonths": loan.get("termMonths"), "postTermRate": loan.get("postTermRate"),
+            "installments": installments, "asOfDate": as_of.isoformat(),
+        })
+        parties = next((i for i in installments if i.get("clientId") and i.get("lenderId")), {})
+        for period in calc["periodsDue"]:
+            entry = {"loanId": loan_id, "installmentNumber": period["installmentNumber"],
+                     "interest": float(period["interest"])}
+            if dry_run:
+                details.append({**entry, "result": "dry_run"})
+                continue
+            res = _sp_installments({
+                "action": "insert_post_term_interest",
+                "loanId": loan_id, "companyId": loan.get("companyId"),
+                "clientId": parties.get("clientId"), "lenderId": parties.get("lenderId"),
+                "installmentNumber": period["installmentNumber"],
+                "dueDate": _iso(period["dueDate"]),
+                "interest": str(period["interest"]),
+                "remainingBalance": str(period["remainingBalance"]),
+                "interestPeriodStart": _iso(period["interestPeriodStart"]),
+                "interestPeriodEnd": _iso(period["interestPeriodEnd"]),
+            })
+            if res.get("created"):
+                created += 1
+                details.append({**entry, "result": "created", "installmentId": res.get("installmentId")})
+                log_workflow_step("Post-term interest billed", workflow_name="money_trail",
+                                  action="post_term_interest", entity="loanInstallments",
+                                  entity_id=res.get("installmentId"),
+                                  message=f"loanId={loan_id} periodo {period['periodNumber']}")
+            else:
+                skipped += 1
+                details.append({**entry, "result": res.get("error") or ("already_billed" if res else "sp_error")})
+
+    return JSONResponse({
+        "asOfDate": as_of.isoformat(), "dryRun": dry_run, "loans": len(candidates),
+        "created": created, "skipped": skipped, "details": details,
+    }, status_code=200)
+
+
+async def post_term_interest_status(json_file: dict):
+    """
+    Read-only summary for LoanDetailPage.
+
+    Body: { "loanId": int, "companyId": int, "asOfDate"?: "YYYY-MM-DD" }
+    Returns: { paymentPlan, postTermRate, termEndDate, unpaidPrincipal, billedInterest,
+               billedUnpaidInterest, accruedUnbilledInterest, nextCutoffDate }
+    """
+    loan_id = json_file.get("loanId")
+    company_id = json_file.get("companyId")
+    if not loan_id or not company_id:
+        return JSONResponse({"error": "loanId y companyId son obligatorios"}, status_code=400)
+
+    loan = _sp_loan_one(loan_id, company_id)
+    if not loan:
+        return JSONResponse({"error": "Préstamo no encontrado"}, status_code=404)
+    plan = loan.get("paymentPlan") or "standard"
+    if plan != "interest_free":
+        return JSONResponse({"loanId": loan_id, "paymentPlan": plan}, status_code=200)
+
+    data = _sp_installments_all({"action": "list", "loanId": loan_id, "companyId": company_id})
+    if "error" in data:
+        return JSONResponse({"error": data["error"]}, status_code=500)
+
+    calc = compute_post_term_interest({
+        "termMonths": loan.get("termMonths"), "postTermRate": loan.get("postTermRate"),
+        "installments": data.get("installments", []), "asOfDate": json_file.get("asOfDate"),
+    })
+    return JSONResponse({
+        "loanId": loan_id,
+        "paymentPlan": plan,
+        "postTermRate": float(_dec(loan.get("postTermRate"))),
+        "termEndDate": _iso(calc["termEndDate"]),
+        "unpaidPrincipal": float(calc["unpaidPrincipal"]),
+        "billedInterest": float(calc["billedInterest"]),
+        "billedUnpaidInterest": float(calc["billedUnpaidInterest"]),
+        "accruedUnbilledInterest": float(calc["accruedUnbilledInterest"]),
+        "nextCutoffDate": _iso(calc["nextCutoffDate"]),
     }, status_code=200)

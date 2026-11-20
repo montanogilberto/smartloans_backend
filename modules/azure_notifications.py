@@ -52,6 +52,25 @@ def generate_sas_token(uri: str, sas_key_name: str, sas_key: str) -> str:
     )
 
 
+def _safe_tag_value(value) -> str:
+    """Hub tags allow [A-Za-z0-9_@#.:-]; keep a short, lowercase subset."""
+    if value is None:
+        return ""
+    return "".join(c for c in str(value).strip().lower() if c.isalnum() or c in "-_")[:24]
+
+
+def _push_tag_expression(target_user_id) -> str:
+    """ServiceBusNotification-Tags for a send.
+
+    PUSH_TARGET_APP (e.g. "gmoprestamos") limits the send to devices that
+    registered with that app id: `user_{id} && app_{app}`. Unset → the old
+    behaviour (every app the user installed gets it)."""
+    if not target_user_id:
+        return ""
+    app = _safe_tag_value(os.getenv("PUSH_TARGET_APP", ""))
+    return f"user_{target_user_id} && app_{app}" if app else f"user_{target_user_id}"
+
+
 def _normalize_registration_platform(platform: str) -> str:
     platform_value = (platform or "").strip().lower()
     if platform_value == "android":
@@ -62,9 +81,16 @@ def _normalize_registration_platform(platform: str) -> str:
 
 
 def _build_installation_id(user_id, token: str, platform: str) -> str:
-    raw = f"{platform}:{user_id}:{token}"
+    """One installation per DEVICE (platform + token), not per user+device.
+
+    The id used to include the userId, so every account that logged in on a
+    phone left its own installation (tag user_{id}) behind: a Company/Role
+    broadcast then reached that phone once per account (4 identical pushes).
+    Keyed by token only, a new login PUTs over the same installation and
+    replaces the tags — the phone belongs to the last user who logged in."""
+    raw = f"{platform}:{token}"
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    return f"u{user_id}_{digest[:32]}"
+    return f"d_{digest[:40]}"
 
 
 def _build_payload_and_format(fmt: str, title: str, message: str, target_user_id,
@@ -104,10 +130,11 @@ async def _send_single(url: str, sas_token: str, fmt: str, payload: dict,
         "Content-Type": "application/json;charset=utf-8",
         "ServiceBusNotification-Format": nh_format,
     }
-    if target_user_id:
-        headers["ServiceBusNotification-Tags"] = f"user_{target_user_id}"
+    tag_expression = _push_tag_expression(target_user_id)
+    if tag_expression:
+        headers["ServiceBusNotification-Tags"] = tag_expression
 
-    _dbg("[azure_notifications] Sending %s push. tag=user_%s", nh_format, target_user_id)
+    _dbg("[azure_notifications] Sending %s push. tags=%s", nh_format, tag_expression)
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -126,9 +153,10 @@ async def _send_single(url: str, sas_token: str, fmt: str, payload: dict,
                 "status_code": 500, "error": str(e)}
 
 
-async def register_device_token(user_id, token: str, platform: str, app_env: str = None):
-    logger.info("[azure_notifications] register_device_token. user_id=%s platform=%s app_env=%s",
-                user_id, platform, app_env)
+async def register_device_token(user_id, token: str, platform: str, app_env: str = None,
+                                app_id: str = None):
+    logger.info("[azure_notifications] register_device_token. user_id=%s platform=%s app_env=%s app_id=%s",
+                user_id, platform, app_env, app_id)
 
     if user_id is None or not str(user_id).strip():
         return {"success": False, "reason": "missing_user_id", "status_code": 400}
@@ -167,6 +195,12 @@ async def register_device_token(user_id, token: str, platform: str, app_env: str
         safe_env = "".join(c for c in str(app_env).strip().lower() if c.isalnum() or c in "-_")[:24]
         if safe_env:
             tags.append(f"env_{safe_env}")
+    # Qué app instaló el dispositivo (el Hub es compartido por las apps GMO):
+    # app_gmoprestamos → GMO Prestamos. Permite que los pushes de préstamos no
+    # lleguen a otras apps (ver PUSH_TARGET_APP en send_azure_push).
+    safe_app = _safe_tag_value(app_id)
+    if safe_app:
+        tags.append(f"app_{safe_app}")
     payload = {
         "installationId": installation_id,
         "platform": nh_platform,

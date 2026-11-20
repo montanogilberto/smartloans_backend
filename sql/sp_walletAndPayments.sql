@@ -257,7 +257,7 @@ AS
 BEGIN
     SET NOCOUNT ON;
     BEGIN TRY
-        DECLARE @action          NVARCHAR(20)  = JSON_VALUE(@pjsonfile, '$.installments[0].action')
+        DECLARE @action          NVARCHAR(40)  = JSON_VALUE(@pjsonfile, '$.installments[0].action')
         DECLARE @installmentId   INT           = JSON_VALUE(@pjsonfile, '$.installments[0].installmentId')
         DECLARE @loanId          INT           = JSON_VALUE(@pjsonfile, '$.installments[0].loanId')
         DECLARE @clientId        INT           = JSON_VALUE(@pjsonfile, '$.installments[0].clientId')
@@ -276,17 +276,95 @@ BEGIN
         DECLARE @paidAt          DATETIME2     = JSON_VALUE(@pjsonfile, '$.installments[0].paidAt')
         DECLARE @lastAttemptAt   DATETIME2     = JSON_VALUE(@pjsonfile, '$.installments[0].lastAttemptAt')
         DECLARE @asOfDate        DATE          = ISNULL(JSON_VALUE(@pjsonfile, '$.installments[0].asOfDate'), CAST(GETUTCDATE() AS DATE))
+        -- RFC-019: 'REGULAR' | 'POST_TERM_INTEREST' + periodo cobrado
+        DECLARE @installmentType NVARCHAR(20)  = ISNULL(JSON_VALUE(@pjsonfile, '$.installments[0].installmentType'), 'REGULAR')
+        DECLARE @periodStart     DATE          = JSON_VALUE(@pjsonfile, '$.installments[0].interestPeriodStart')
+        DECLARE @periodEnd       DATE          = JSON_VALUE(@pjsonfile, '$.installments[0].interestPeriodEnd')
 
         IF @action = 'insert'
         BEGIN
+            -- Sólo cuotas REGULAR: las de interés posterior al plazo entran
+            -- por insert_post_term_interest (idempotente).
             INSERT INTO [dbo].[loanInstallments]
                 (loanId, clientId, companyId, lenderId, installmentNumber, dueDate,
-                 amount, principal, interest, remainingBalance, status)
+                 amount, principal, interest, remainingBalance, status, installmentType)
             VALUES
                 (@loanId, @clientId, @companyId, @lenderId, @instNum, @dueDate,
-                 @amount, @principal, @interest, @remaining, ISNULL(@status,'pending'))
+                 @amount, @principal, @interest, @remaining, ISNULL(@status,'pending'), 'REGULAR')
 
             SELECT (SELECT SCOPE_IDENTITY() AS installmentId FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
+        END
+
+        -- ── RFC-019: una fila de interés por periodo, una sola vez ──
+        -- La fila nunca se modifica después; el job puede correr N veces.
+        -- Sólo registra un monto adeudado: no mueve ni confirma dinero.
+        ELSE IF @action = 'insert_post_term_interest'
+        BEGIN
+            IF @interest IS NULL OR @interest <= 0 OR @periodStart IS NULL OR @periodEnd IS NULL
+            BEGIN
+                SELECT '{"error":"interest > 0, interestPeriodStart e interestPeriodEnd son obligatorios."}' AS [jsonResult]
+                RETURN
+            END
+            IF NOT EXISTS (SELECT 1 FROM [dbo].[loans]
+                           WHERE loanId = @loanId AND companyId = @companyId
+                             AND paymentPlan = 'interest_free')
+            BEGIN
+                SELECT '{"error":"El préstamo no tiene plan sin intereses."}' AS [jsonResult]
+                RETURN
+            END
+
+            DECLARE @newInstallmentId INT = NULL
+            BEGIN TRANSACTION
+                IF NOT EXISTS (SELECT 1 FROM [dbo].[loanInstallments] WITH (UPDLOCK, HOLDLOCK)
+                               WHERE loanId = @loanId AND installmentNumber = @instNum
+                                 AND installmentType = 'POST_TERM_INTEREST')
+                BEGIN
+                    INSERT INTO [dbo].[loanInstallments]
+                        (loanId, clientId, companyId, lenderId, installmentNumber, dueDate,
+                         amount, principal, interest, remainingBalance, status,
+                         installmentType, interestPeriodStart, interestPeriodEnd)
+                    VALUES
+                        (@loanId, @clientId, @companyId, @lenderId, @instNum, @dueDate,
+                         @interest, 0, @interest, ISNULL(@remaining, 0), 'pending',
+                         'POST_TERM_INTEREST', @periodStart, @periodEnd)
+                    SET @newInstallmentId = SCOPE_IDENTITY()
+                END
+            COMMIT TRANSACTION
+
+            SELECT (SELECT @newInstallmentId AS installmentId,
+                           CAST(CASE WHEN @newInstallmentId IS NULL THEN 0 ELSE 1 END AS BIT) AS created
+                    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
+        END
+
+        -- ── RFC-019: préstamos sin intereses cuyo plazo ya venció ──
+        -- companyId opcional (NULL = barrido global, como escalate_due).
+        ELSE IF @action = 'post_term_candidates'
+        BEGIN
+            SELECT ISNULL(
+                (SELECT l.loanId, l.companyId, l.termMonths, l.postTermRate, l.loanStatus,
+                        (SELECT i.installmentId, i.installmentNumber, i.installmentType,
+                                i.clientId, i.lenderId,
+                                CONVERT(NVARCHAR, i.dueDate, 23) AS dueDate,
+                                i.amount, i.principal, i.interest, i.status,
+                                CONVERT(NVARCHAR, i.paidAt, 127) AS paidAt,
+                                CONVERT(NVARCHAR, i.interestPeriodStart, 23) AS interestPeriodStart,
+                                CONVERT(NVARCHAR, i.interestPeriodEnd, 23) AS interestPeriodEnd
+                         FROM [dbo].[loanInstallments] i
+                         WHERE i.loanId = l.loanId
+                         ORDER BY i.installmentNumber
+                         FOR JSON PATH) AS installments
+                 FROM [dbo].[loans] l
+                 WHERE l.paymentPlan = 'interest_free'
+                   AND l.postTermRate IS NOT NULL
+                   AND l.loanStatus IN ('active', 'in_dispute', 'defaulted')
+                   AND (@companyId IS NULL OR l.companyId = @companyId)
+                   AND EXISTS (SELECT 1 FROM [dbo].[loanInstallments] r
+                               WHERE r.loanId = l.loanId AND r.installmentType = 'REGULAR'
+                                 AND r.installmentNumber = l.termMonths
+                                 AND r.dueDate < @asOfDate)
+                 FOR JSON PATH, ROOT('loans')),
+                '{"loans":[]}'
+            ) AS [jsonResult]
         END
 
         ELSE IF @action = 'update_status'
@@ -310,7 +388,10 @@ BEGIN
                         CONVERT(NVARCHAR,dueDate,23) AS dueDate,
                         amount, principal, interest, remainingBalance, status,
                         attemptCount,
-                        CONVERT(NVARCHAR,paidAt,127) AS paidAt
+                        CONVERT(NVARCHAR,paidAt,127) AS paidAt,
+                        installmentType,
+                        CONVERT(NVARCHAR,interestPeriodStart,23) AS interestPeriodStart,
+                        CONVERT(NVARCHAR,interestPeriodEnd,23) AS interestPeriodEnd
                  FROM [dbo].[loanInstallments]
                  WHERE loanId=@loanId AND companyId=@companyId
                  ORDER BY installmentNumber
@@ -332,6 +413,9 @@ BEGIN
                    AND dueDate <= @asOfDate
                    AND status IN ('pending','failed')
                    AND attemptCount < 3
+                   -- RFC-019: el interés posterior al plazo sólo se paga por
+                   -- SPEI con confirmación del prestamista, nunca con tarjeta.
+                   AND installmentType <> 'POST_TERM_INTEREST'
                  ORDER BY dueDate
                  FOR JSON PATH, ROOT('installments')),
                 '{"installments":[]}'
@@ -339,6 +423,7 @@ BEGIN
         END
     END TRY
     BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION
         SELECT ('{"error":"' + REPLACE(ERROR_MESSAGE(),'"','\"') + '"}') AS [jsonResult]
     END CATCH
 END

@@ -8,6 +8,8 @@ from modules.automatedPayments import (
     get_installment_schedule,
     charge_due_installments,
     pay_installment_spei,
+    accrue_post_term_interest,
+    post_term_interest_status,
 )
 
 router = APIRouter(prefix="/automated-payments", tags=["Automated Payments"])
@@ -122,3 +124,38 @@ Returns: { charged, failed, skipped, total, details: [...] }
 )
 async def charge_due(json: dict):
     return await charge_due_installments(json)
+
+
+@router.post(
+    "/post-term-interest",
+    summary="Post-term interest summary of an interest-free loan (RFC-019, read-only)",
+    description="""
+Préstamos con plan 'interest_free': 0 % dentro del plazo; el capital que quede
+sin pagar al vencer la última cuota genera loans.postTermRate (anual %, por día
+natural, sin capitalizar), cobrado en una cuota de interés por periodo mensual.
+
+Body: { "loanId": int, "companyId": int, "asOfDate"?: "YYYY-MM-DD" }
+Returns: { paymentPlan, postTermRate, termEndDate, unpaidPrincipal, billedInterest,
+           billedUnpaidInterest, accruedUnbilledInterest, nextCutoffDate }
+(Sólo { paymentPlan } para préstamos 'standard'.)
+""",
+)
+async def post_term_interest(json: dict):
+    return await post_term_interest_status(json)
+
+
+@router.post(
+    "/post-term-interest/accrue",
+    dependencies=[Depends(require_worker_key)],
+    summary="Bill closed post-term interest periods (RFC-019 daily job)",
+    description="""
+Agrega una fila POST_TERM_INTEREST de loanInstallments por cada periodo cerrado
+de cada préstamo 'interest_free' activo. Idempotente; nunca modifica una fila
+existente; no mueve ni confirma dinero. Corre a diario en el scheduler.
+
+Body: { "companyId"?: int (omitir = todas), "asOfDate"?: "YYYY-MM-DD", "dryRun"?: bool }
+Returns: { asOfDate, dryRun, loans, created, skipped, details: [...] }
+""",
+)
+async def post_term_interest_accrue(json: dict):
+    return await accrue_post_term_interest(json)

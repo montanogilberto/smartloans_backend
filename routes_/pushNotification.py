@@ -48,7 +48,9 @@ async def registerDevice(json: dict):
 @router.post(
     "/myNotifications",
     summary="Per-user notification inbox (bell icon)",
-    description="""Body: { "userId": int }
+    description="""Body: { "userId": int, "companyId"?: int, "clientId"?: int }
+companyId scopes the inbox to that company (and adds the Role broadcasts for the
+user's role there); a clientId that isn't the user's returns an empty inbox.
 Returns: { unreadCount, notifications: [{ pushNotificationId, title, message,
 notificationType, priority, navigationRoute, isRead, receivedAt }] } — newest
 first, top 50. Backed by NotificationDeliveries so the in-app history persists
@@ -61,8 +63,9 @@ def my_notifications(json: dict):
 @router.post(
     "/myNotifications/markRead",
     summary="Mark a user's notifications as read",
-    description="""Body: { "userId": int, "pushNotificationId"?: int } — omit
-pushNotificationId to mark ALL of the user's notifications read.""",
+    description="""Body: { "userId": int, "pushNotificationId"?: int, "companyId"?: int,
+"clientId"?: int } — omit pushNotificationId to mark ALL of the user's
+notifications read (only within companyId when given).""",
 )
 def my_notifications_mark_read(json: dict):
     return mark_notifications_read_sp(json)

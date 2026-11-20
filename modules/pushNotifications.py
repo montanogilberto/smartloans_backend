@@ -3,18 +3,20 @@ from databases import connection
 from modules.azure_notifications import send_azure_push, register_device_token
 import json
 
-# targetType values that can actually be resolved to a recipient list today.
-# 'Role' is exposed in the schema/UI but there is no user-role mapping
-# anywhere in the database, so it can't be resolved to anyone -- surface
-# that clearly instead of guessing. 'Company' IS resolvable via
-# users.companyId.
-_UNSUPPORTED_TARGET_TYPES = {"Role"}
+# targetType values that can't be resolved to a recipient list. 'Role' is
+# resolvable now: userCompanies holds each user's roleId/roleName per company
+# (sp_pushNotifications_activeUsers with roleId), so e.g. a system
+# notification with targetRoleId=admin reaches that company's admins.
+_UNSUPPORTED_TARGET_TYPES: set = set()
 
 
-def _get_active_user_ids(cursor, company_id=None) -> list:
+def _get_active_user_ids(cursor, company_id=None, role_id=None) -> list:
+    payload = {"companyId": company_id}
+    if role_id is not None:
+        payload["roleId"] = role_id
     cursor.execute(
         "EXEC [dbo].[sp_pushNotifications_activeUsers] @pjsonfile = %s",
-        (json.dumps({"companyId": company_id}),),
+        (json.dumps(payload),),
     )
     rows = cursor.fetchall()
     json_result = "".join(row[0] for row in rows if row and row[0])
@@ -103,12 +105,16 @@ async def pushNotifications_sp(json_file: dict):
             target_type = (payload_item.get("targetType") or "User") if isinstance(payload_item, dict) else "User"
             target_user_id = payload_item.get("targetUserId") if isinstance(payload_item, dict) else None
             target_company_id = payload_item.get("targetCompanyId") if isinstance(payload_item, dict) else None
+            target_role_id = _as_int(payload_item.get("targetRoleId")) if isinstance(payload_item, dict) else None
+            # A Role broadcast is scoped to one company: targetCompanyId, else
+            # the notification's own companyId (same rule the inbox SP uses).
+            role_company_id = (target_company_id or payload_item.get("companyId")) if isinstance(payload_item, dict) else None
             push_notification_id = parsed_content.get("pushNotificationId") if isinstance(parsed_content, dict) else None
             push_notification_id = int(push_notification_id) if push_notification_id else None
             print(
                 "[pushNotifications][module] action==1 and SP success, preparing Azure push:",
                 {"targetType": target_type, "targetUserId": target_user_id,
-                 "targetCompanyId": target_company_id}
+                 "targetCompanyId": target_company_id, "targetRoleId": target_role_id}
             )
 
             if target_type in _UNSUPPORTED_TARGET_TYPES:
@@ -124,11 +130,18 @@ async def pushNotifications_sp(json_file: dict):
                 print("[pushNotifications][module] Push not sent:", reason)
                 parsed_content["pushSendSkipped"] = True
                 parsed_content["pushSendReason"] = reason
+            elif target_type == "Role" and (target_role_id is None or not role_company_id):
+                reason = "targetType 'Role' requires targetRoleId and targetCompanyId (or companyId)."
+                print("[pushNotifications][module] Push not sent:", reason)
+                parsed_content["pushSendSkipped"] = True
+                parsed_content["pushSendReason"] = reason
             else:
                 if target_type == "All":
                     recipient_ids = _get_active_user_ids(cursor)
                 elif target_type == "Company":
                     recipient_ids = _get_active_user_ids(cursor, target_company_id)
+                elif target_type == "Role":
+                    recipient_ids = _get_active_user_ids(cursor, role_company_id, target_role_id)
                 else:
                     recipient_ids = [target_user_id] if target_user_id else []
 
@@ -150,15 +163,19 @@ async def pushNotifications_sp(json_file: dict):
                     if user_id != _as_int(rid):
                         print(f"[pushNotifications][module] mapped clientId {rid} → userId {user_id}")
                     resolved.append(user_id)
-                recipient_ids = resolved
+                # Two ids can map to the same user (clientId + userId) — one push each.
+                recipient_ids = list(dict.fromkeys(resolved))
 
                 print("[pushNotifications][module] Resolved recipients:", recipient_ids)
                 sent_count = 0
                 for user_id in recipient_ids:
                     try:
+                        # pushNotificationId: el toque abre el detalle exacto de
+                        # esta notificación en la app (no solo "abre la app").
+                        push_data = {"navigationRoute": navigation_route, "pushNotificationId": push_notification_id}
                         azure_result = await send_azure_push(
                             title, message, user_id,
-                            data={"navigationRoute": navigation_route} if navigation_route else None)
+                            data={k: v for k, v in push_data.items() if v} or None)
                         was_sent = bool(isinstance(azure_result, dict) and azure_result.get("sent") is True)
                         if was_sent:
                             sent_count += 1
@@ -221,7 +238,10 @@ def all_pushNotifications_sp(json_file: dict):
 
 def my_notifications_sp(json_file: dict):
     """Per-user notification inbox (bell icon): NotificationDeliveries joined
-    with content + unreadCount. Body: { userId }"""
+    with content + unreadCount. Body: { userId, companyId?, clientId? } —
+    companyId scopes the list to that company and pulls in the Role
+    broadcasts for the user's role there; a clientId not owned by userId
+    returns an empty inbox."""
     conn = None
     try:
         conn = connection()
@@ -230,7 +250,7 @@ def my_notifications_sp(json_file: dict):
         rows = cursor.fetchall()
         json_result = "".join(row[0] for row in rows if row and row[0])
         result = json.loads(json_result) if json_result else {"unreadCount": 0, "notifications": []}
-        print(f"[pushNotifications][inbox] userId={json_file.get('userId')} unread={result.get('unreadCount')} items={len(result.get('notifications', []))}")
+        print(f"[pushNotifications][inbox] userId={json_file.get('userId')} companyId={json_file.get('companyId')} unread={result.get('unreadCount')} items={len(result.get('notifications', []))}")
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
@@ -240,8 +260,9 @@ def my_notifications_sp(json_file: dict):
 
 
 def mark_notifications_read_sp(json_file: dict):
-    """Mark a user's deliveries read. Body: { userId, pushNotificationId? }
-    (omit pushNotificationId to mark ALL)."""
+    """Mark a user's deliveries read. Body: { userId, pushNotificationId?,
+    companyId?, clientId? } (omit pushNotificationId to mark ALL — within
+    companyId when given)."""
     conn = None
     try:
         conn = connection()
@@ -268,6 +289,7 @@ async def register_device_sp(json_file: dict):
         token = json_file.get("token") if isinstance(json_file, dict) else None
         platform = json_file.get("platform") if isinstance(json_file, dict) else None
         app_env = json_file.get("appEnv") if isinstance(json_file, dict) else None
+        app_id = json_file.get("appId") if isinstance(json_file, dict) else None
 
         if user_id is None or token is None or platform is None:
             return JSONResponse(
@@ -278,7 +300,8 @@ async def register_device_sp(json_file: dict):
                 status_code=400,
             )
 
-        result = await register_device_token(user_id=user_id, token=token, platform=platform, app_env=app_env)
+        result = await register_device_token(user_id=user_id, token=token, platform=platform,
+                                             app_env=app_env, app_id=app_id)
 
         if result.get("success"):
             return JSONResponse(

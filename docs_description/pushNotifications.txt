@@ -6,10 +6,12 @@ On action=1 (insert), the Azure push is sent based on targetType:
   - "All": sent to every active user (one push per user, each recorded in NotificationDeliveries).
   - "Company": sent to every active user where users.companyId = targetCompanyId (one push
     per user, each recorded in NotificationDeliveries). Requires targetCompanyId.
-  - "Role": NOT sent -- there is no user-role mapping anywhere in the database to resolve
-    recipients from. The response includes pushSendSkipped=true and a pushSendReason
-    explaining why. The notification row is still created/updated normally either way.
-On a successful "User"/"All"/"Company" send, the response also includes pushSendSkipped=false,
+  - "Role": sent to every active user holding targetRoleId in that company
+    (userCompanies.roleId, or roles.code = userCompanies.roleName). The company is
+    targetCompanyId, else the row's companyId. Requires targetRoleId. Use it for
+    system notifications per role (e.g. targetRoleId of 'admin' → that company's admins).
+    Users who sign up later pick it up in their inbox (sp_pushNotifications_forUser).
+On a successful "User"/"All"/"Company"/"Role" send, the response also includes pushSendSkipped=false,
 pushRecipientCount, and pushSentCount.
 
 Example:
