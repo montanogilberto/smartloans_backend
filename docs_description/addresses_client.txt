@@ -1,0 +1,6 @@
+Active addresses of one client, both sources ("ine" first, then "gps"). clientId goes in the body, never in the URL.
+
+Body: {"addresses": [{"companyId": int, "clientId": int}]}
+Returns {"addresses": [{addressId, companyId, clientId, clientFaceRecognitionId, source, fullAddress, street, postalCode, city, state, latitude, longitude, accuracyMeters, createdAt, updatedAt}]}
+
+Access: the client themself (session token), staff of that company, or the worker key.

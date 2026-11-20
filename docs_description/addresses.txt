@@ -1,0 +1,9 @@
+Save (upsert) or deactivate a client's address by source. Used by the SmartLoans KYC wizard: the "gps" row at the presence capture, the "ine" row when the contract is submitted.
+
+Body: {"addresses": [{"action": 1, "companyId": int, "clientId": int, "source": "ine"|"gps", "fullAddress": str (max 500), "clientFaceRecognitionId"?: int, "street"?: str, "postalCode"?: str, "city"?: str, "state"?: str, "latitude"?: number, "longitude"?: number, "accuracyMeters"?: number}]}
+action 1 updates the active row of (companyId, clientId, source) when it exists, otherwise inserts it. Coordinates are kept only for "gps".
+Deactivate: {"addresses": [{"action": 3, "companyId": int, "clientId": int, "addressId": int}]}
+
+Access: the client themself (session token), staff of that company, or the worker key.
+Returns {"status": "success", "message": str, "value": addressId} or 400 {"status": "error", "message": str}.
+Addresses are personal data: never in URLs or logs.

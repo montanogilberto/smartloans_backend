@@ -1,0 +1,6 @@
+One address row by id (active or not).
+
+Body: {"addresses": [{"companyId": int, "clientId": int, "addressId": int}]}
+Returns {"addresses": [{addressId, companyId, clientId, clientFaceRecognitionId, source, fullAddress, street, postalCode, city, state, latitude, longitude, accuracyMeters, isActive, createdAt, updatedAt}]}
+
+Access: the client themself (session token), staff of that company, or the worker key.

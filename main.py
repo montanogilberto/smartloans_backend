@@ -84,6 +84,7 @@ from routes_ import (
     laundryDevices,
     voiceCalls,
     serviceCompletionNotices,
+    address,
 )
 
 @asynccontextmanager
@@ -288,6 +289,7 @@ app.include_router(operationalNotice.router)
 app.include_router(locationHost.router)
 app.include_router(laundryDevices.router)
 app.include_router(voiceCalls.router)
+app.include_router(address.router)
 app.include_router(serviceCompletionNotices.router)
 
 # --------------------------------------------------
