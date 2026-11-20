@@ -10,11 +10,19 @@ orchestrator to address SPEI transfers.
 """
 
 import json
+import os
 import secrets
 from fastapi.responses import JSONResponse
 from databases import connection
 
 from modules.stpProvider import is_mock
+
+
+# RFC-018 §3.3: wrong micro-deposit guesses allowed before the account locks.
+MAX_VERIFICATION_ATTEMPTS = int(os.getenv("MICRODEPOSIT_MAX_ATTEMPTS", "3"))
+
+# Fields the public /bankAccounts passthrough may never set.
+_VERIFICATION_FIELDS = {"isVerified", "verificationCents", "verificationAttempts", "verifiedAt"}
 
 
 def _conn():
@@ -116,8 +124,11 @@ async def link_bank_account(payload: dict):
         return JSONResponse(result, status_code=400)
 
     # Real mode: send the actual micro-deposit via SPEI here (1–99 centavos to
-    # the CLABE) so the client can read it off their statement.
-    body = {**result, "status": "pending_verification", "verificationMethod": "micro_deposit"}
+    # the CLABE) so the client can read it off their statement. NOT implemented
+    # yet (and needs an RFC — SmartLoans is non-custodial), so report
+    # microDepositSent=False instead of letting the UI claim it was sent.
+    body = {**result, "status": "pending_verification", "verificationMethod": "micro_deposit",
+            "microDepositSent": False}
     if is_mock():
         # No real deposit exists to look up — surface the code so the flow is
         # testable end-to-end. Never present in real mode.
@@ -136,15 +147,44 @@ async def verify_bank_account(payload: dict):
 
     if not bank_account_id or amount_cents is None:
         return JSONResponse({"error": "bankAccountId y amountCents son requeridos"}, status_code=400)
+    try:
+        amount_cents = int(amount_cents)
+    except (TypeError, ValueError):
+        amount_cents = 0
+    if not 1 <= amount_cents <= 99:
+        # Malformed input never costs an attempt.
+        return JSONResponse({"verified": False, "error": "Ingresa los centavos recibidos (1–99)."}, status_code=400)
 
     row = _sp("sp_bankAccounts_one", {"bankAccounts": [{"bankAccountId": bank_account_id}]})
     if not row or row.get("clientId") != client_id:
         return JSONResponse({"error": "Cuenta bancaria no encontrada."}, status_code=404)
     if row.get("isVerified"):
         return JSONResponse({"verified": True, "message": "La cuenta ya estaba verificada."}, status_code=200)
-    if int(amount_cents) != int(row.get("verificationCents") or -1):
-        print(f"[bankAccounts] verify FAILED bankAccountId={bank_account_id} (centavos no coinciden)")
-        return JSONResponse({"verified": False, "error": "El monto no coincide. Revisa tu estado de cuenta."}, status_code=400)
+
+    # RFC-018 §3.3: the SP compares and counts in one transaction. Fail closed:
+    # if the SP can't count (migration / SP not deployed yet) nobody verifies.
+    attempt = _sp("sp_bankAccounts", {"bankAccounts": [{
+        "action": 4, "bankAccountId": bank_account_id, "clientId": client_id,
+        "amountCents": amount_cents, "maxAttempts": MAX_VERIFICATION_ATTEMPTS,
+    }]})
+    if not isinstance(attempt, dict) or "matched" not in attempt:
+        print(f"[bankAccounts] verify UNAVAILABLE bankAccountId={bank_account_id} "
+              f"(attempt counter missing: {attempt.get('error') if isinstance(attempt, dict) else type(attempt).__name__})")
+        return JSONResponse({"verified": False,
+                             "error": "No pudimos verificar tu cuenta en este momento. Intenta más tarde."},
+                            status_code=503)
+    remaining = attempt.get("attemptsRemaining", 0)
+    if not attempt.get("matched"):
+        if attempt.get("locked"):
+            print(f"[bankAccounts] verify LOCKED bankAccountId={bank_account_id} attempts={attempt.get('attempts')}")
+            return JSONResponse({"verified": False, "locked": True, "attemptsRemaining": 0,
+                                 "error": "Demasiados intentos. Contacta a soporte para desbloquear la verificación."},
+                                status_code=423)
+        print(f"[bankAccounts] verify FAILED bankAccountId={bank_account_id} (centavos no coinciden, quedan {remaining})")
+        plural = "intento" if remaining == 1 else "intentos"
+        return JSONResponse({"verified": False, "locked": False, "attemptsRemaining": remaining,
+                             "error": f"El monto no coincide. Te quedan {remaining} {plural}."},
+                            status_code=400)
 
     result = _sp("sp_bankAccounts", {"bankAccounts": [{
         "action": 2, "bankAccountId": bank_account_id, "companyId": company_id,
@@ -157,15 +197,51 @@ async def verify_bank_account(payload: dict):
 def bank_accounts_sp(json_file: dict):
     """CRUD passthrough (sp_bankAccounts). Prefer /bank-account/link for creates —
     it validates the CLABE and starts verification."""
+    # Verification state only changes through /bank-account/verify (attempt
+    # limit, RFC-018 §3.3). This route has no auth, so letting it set
+    # isVerified / the code / the counter would bypass verification entirely.
+    for req in (json_file.get("bankAccounts") or []):
+        if not isinstance(req, dict):
+            continue
+        blocked = _VERIFICATION_FIELDS.intersection(req)
+        if blocked or str(req.get("action")) == "4":
+            print(f"[bankAccounts] passthrough REJECTED verification fields={sorted(blocked)} action={req.get('action')}")
+            return JSONResponse({"error": "La verificación de la cuenta sólo se hace con /bank-account/verify."},
+                                status_code=403)
     try:
         return JSONResponse(_sp("sp_bankAccounts", json_file), status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def _annotate_verification(account: dict) -> dict:
+    """Tell the UI the truth about an unverified account's micro-deposit.
+
+    No real SPEI micro-deposit is sent yet (stpProvider has no real client), so
+    `microDepositSent` is always False. In MOCK mode the pending code is attached
+    as `mockVerificationCents` so the test flow survives a reload — never in
+    real mode."""
+    if account.get("isVerified"):
+        return account
+    account["microDepositSent"] = False
+    attempts = account.get("verificationAttempts")
+    if isinstance(attempts, int):  # absent until the migration has run
+        account["attemptsRemaining"] = max(MAX_VERIFICATION_ATTEMPTS - attempts, 0)
+        account["verificationLocked"] = attempts >= MAX_VERIFICATION_ATTEMPTS
+    if is_mock() and account.get("bankAccountId") and not account.get("verificationLocked"):
+        full = _sp("sp_bankAccounts_one", {"bankAccounts": [{"bankAccountId": account["bankAccountId"]}]})
+        if full.get("verificationCents"):
+            account["mockVerificationCents"] = full["verificationCents"]
+    return account
+
+
 def all_bank_accounts_sp(json_file: dict):
     try:
-        return JSONResponse(_sp("sp_bankAccounts_all", json_file), status_code=200)
+        result = _sp("sp_bankAccounts_all", json_file)
+        accounts = result.get("bankAccounts") if isinstance(result, dict) else None
+        if isinstance(accounts, list):
+            result["bankAccounts"] = [_annotate_verification(a) for a in accounts]
+        return JSONResponse(result, status_code=200)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

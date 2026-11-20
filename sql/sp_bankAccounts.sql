@@ -1,5 +1,8 @@
 -- ============================================================
--- sp_bankAccounts  (action 1=create, 2=update/verify, 3=soft delete)
+-- sp_bankAccounts  (action 1=create, 2=update/verify, 3=soft delete,
+--                   4=micro-deposit attempt: compare + count, RFC-018 §3.3)
+-- Action 4 and sp_bankAccounts_all read bankAccounts.verificationAttempts:
+-- run sql/migrations/2026-11-20_bankAccounts_verification_attempts.sql first.
 -- Verified CLABEs per client — SPEI payout/deposit destinations.
 -- Banking-first Phase 1 (docs/payment-banking-first-redesign.md).
 -- Spec: posgmo-factory/tests/prd_bankAccount.json
@@ -25,6 +28,7 @@ CREATE TABLE [dbo].[bankAccounts] (
     -- Centavos amount of the pending micro-deposit; NULLed once verified so it
     -- cannot be replayed. Never returned by the list/one SPs.
     verificationCents   INT            NULL,
+    verificationAttempts INT           NOT NULL CONSTRAINT DF_bankAccounts_verificationAttempts DEFAULT 0,
     verifiedAt          DATETIME2      NULL,
     isDefault           BIT            NOT NULL DEFAULT 0,
     isActive            BIT            NOT NULL DEFAULT 1,
@@ -66,6 +70,9 @@ BEGIN
         DECLARE @verificationCents  INT            = JSON_VALUE(@pjsonfile, '$.bankAccounts[0].verificationCents')
         DECLARE @isDefault          BIT            = JSON_VALUE(@pjsonfile, '$.bankAccounts[0].isDefault')
         DECLARE @isActive           BIT            = JSON_VALUE(@pjsonfile, '$.bankAccounts[0].isActive')
+        DECLARE @verificationAttempts INT          = JSON_VALUE(@pjsonfile, '$.bankAccounts[0].verificationAttempts')
+        DECLARE @amountCents        INT            = TRY_CAST(JSON_VALUE(@pjsonfile, '$.bankAccounts[0].amountCents') AS INT)
+        DECLARE @maxAttempts        INT            = ISNULL(TRY_CAST(JSON_VALUE(@pjsonfile, '$.bankAccounts[0].maxAttempts') AS INT), 3)
 
         IF @action = 1 -- CREATE (link)
         BEGIN
@@ -109,6 +116,8 @@ BEGIN
                 holderName        = ISNULL(@holderName, holderName),
                 isDefault         = ISNULL(@isDefault, isDefault),
                 isActive          = ISNULL(@isActive, isActive),
+                -- Support unlock (RFC-018 §3.3): verificationAttempts = 0.
+                verificationAttempts = ISNULL(@verificationAttempts, verificationAttempts),
                 updated_at        = GETUTCDATE()
             WHERE bankAccountId = @bankAccountId AND companyId = @companyId
 
@@ -160,6 +169,54 @@ BEGIN
             SELECT '{"message":"deleted","bankAccountId":' + CAST(@bankAccountId AS NVARCHAR(20)) + '}' AS [jsonResult]
         END
 
+        ELSE IF @action = 4 -- MICRO-DEPOSIT ATTEMPT (RFC-018 §3.3)
+        BEGIN
+            -- Compare and count in one locked transaction, so parallel guesses
+            -- can't each read the same count. A wrong amount costs one
+            -- attempt; at @maxAttempts the account is locked and even the
+            -- right amount is refused (unlock: action 2 verificationAttempts=0,
+            -- later a resend). Does NOT verify: on match the caller runs
+            -- action 2 isVerified=1, which owns the RFC-017 promotion.
+            DECLARE @storedCents INT, @attempts INT, @alreadyVerified BIT,
+                    @matched BIT = 0, @locked BIT = 0;
+
+            BEGIN TRANSACTION;
+            SELECT @storedCents = verificationCents, @attempts = verificationAttempts,
+                   @alreadyVerified = isVerified
+            FROM [dbo].[bankAccounts] WITH (UPDLOCK, HOLDLOCK)
+            WHERE bankAccountId = @bankAccountId AND clientId = @clientId AND isActive = 1;
+
+            IF @attempts IS NULL
+            BEGIN
+                COMMIT TRANSACTION;
+                SELECT '{"error":"not_found"}' AS [jsonResult];
+                RETURN;
+            END
+
+            IF @alreadyVerified = 1
+                SET @matched = 1;
+            ELSE IF @attempts >= @maxAttempts
+                SET @locked = 1;
+            ELSE IF @storedCents IS NOT NULL AND @amountCents = @storedCents
+                SET @matched = 1;
+            ELSE
+            BEGIN
+                SET @attempts = @attempts + 1;
+                UPDATE [dbo].[bankAccounts]
+                SET verificationAttempts = @attempts, updated_at = GETUTCDATE()
+                WHERE bankAccountId = @bankAccountId;
+                IF @attempts >= @maxAttempts SET @locked = 1;
+            END
+            COMMIT TRANSACTION;
+
+            SELECT (SELECT @matched AS matched, @locked AS locked,
+                           @alreadyVerified AS alreadyVerified,
+                           @attempts AS attempts, @maxAttempts AS maxAttempts,
+                           CASE WHEN @maxAttempts - @attempts < 0 THEN 0
+                                ELSE @maxAttempts - @attempts END AS attemptsRemaining
+                    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [jsonResult]
+        END
+
         ELSE
             SELECT '{"error":"Invalid action"}' AS [jsonResult]
     END TRY
@@ -196,7 +253,7 @@ BEGIN
         (SELECT bankAccountId, companyId, clientId,
                 RIGHT(clabe, 4) AS clabeLast4, bankCode, bankName, holderName,
                 isVerified, verificationMethod, isDefault, isActive,
-                accountStatus,
+                accountStatus, verificationAttempts,
                 CONVERT(NVARCHAR, verifiedAt, 127) AS verifiedAt,
                 CONVERT(NVARCHAR, created_At, 127) AS created_At
          FROM [dbo].[bankAccounts]

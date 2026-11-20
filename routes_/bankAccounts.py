@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from security.rate_limit import rate_limit
 from modules.bankAccounts import (
     link_bank_account, verify_bank_account, bank_accounts_sp, all_bank_accounts_sp,
     bank_accounts_lifecycle_sp,
@@ -30,8 +31,15 @@ async def bank_account_link(json: dict):
     description="""
 Body: { "clientId": int, "companyId": int, "bankAccountId": int, "amountCents": int }
 On match: marks the account verified (first verified account becomes default).
-Returns: { verified: true, … } | { verified: false, error }
+A wrong amount costs one attempt; after MICRODEPOSIT_MAX_ATTEMPTS (default 3)
+the account is locked (RFC-018 §3.3).
+Returns: { verified: true, … }
+       | 400 { verified: false, attemptsRemaining, error }
+       | 423 { verified: false, locked: true, error }
+       | 503 if the attempt counter isn't deployed (fails closed)
 """,
+    dependencies=[Depends(rate_limit("bank_verify", per_ip=30, per_target=10, window=900,
+                                     target=lambda body: body.get("bankAccountId")))],
 )
 async def bank_account_verify(json: dict):
     return await verify_bank_account(json)
