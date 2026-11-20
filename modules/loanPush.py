@@ -143,7 +143,11 @@ async def push_to_client(company_id, client_id, template: str, **params) -> bool
         stored = json.loads(row[0]) if row and row[0] else {}
         push_notification_id = int(stored["pushNotificationId"]) if stored.get("pushNotificationId") else None
 
-        result = await send_azure_push(title, message, user_id, data={"navigationRoute": route})
+        # pushNotificationId → el toque abre el detalle de ESTA notificación.
+        push_data = {"navigationRoute": route}
+        if push_notification_id:
+            push_data["pushNotificationId"] = push_notification_id
+        result = await send_azure_push(title, message, user_id, data=push_data)
         sent = bool(isinstance(result, dict) and result.get("sent") is True)
         if push_notification_id:
             _record_delivery(cursor, push_notification_id, user_id, sent)

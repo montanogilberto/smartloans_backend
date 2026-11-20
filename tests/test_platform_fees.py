@@ -55,6 +55,7 @@ def run(coro):
 
 class ChargeTest(unittest.TestCase):
     def setUp(self):
+        mock.patch.dict(os.environ, {"PLATFORM_FEE_CHARGE_ENABLED": "true"}).start()
         self.sp = FakeSP()
         mock.patch.object(fees, "_exec", self.sp).start()
         mock.patch.object(fees.stripe, "api_key", "sk_test_real").start()
@@ -112,6 +113,35 @@ class ChargeTest(unittest.TestCase):
     def test_centavos_round_half_up(self):
         self.assertEqual(fees._centavos(Decimal("580.005")), 58001)
         self.assertEqual(fees._centavos("29.00"), 2900)
+
+
+class ChargeSwitchTest(unittest.TestCase):
+    """PLATFORM_FEE_CHARGE_ENABLED off (the default): nothing is created or charged."""
+
+    def setUp(self):
+        mock.patch.dict(os.environ, {"PLATFORM_FEE_CHARGE_ENABLED": ""}).start()
+        self.sp = FakeSP()
+        mock.patch.object(fees, "_exec", self.sp).start()
+        self.create = mock.patch.object(fees.stripe.PaymentIntent, "create").start()
+
+    def tearDown(self):
+        mock.patch.stopall()
+
+    def test_charge_is_refused_and_touches_nothing(self):
+        with self.assertRaises(fees.FeeError):
+            fees.charge_fee(1008, 14, 2167)
+        self.assertEqual(self.sp.calls, [])
+        self.create.assert_not_called()
+
+    def test_background_charge_does_not_start(self):
+        with mock.patch("threading.Thread") as thread:
+            fees.charge_fee_in_background(1008, 14, 2167)
+        thread.assert_not_called()
+
+    def test_retry_explains_it_is_not_active(self):
+        r = run(fees.retry_fee({"companyId": 1008, "loanId": 14}, 2167))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("aún no está activo", json.loads(r.body)["error"])
 
 
 class WebhookTest(unittest.TestCase):
@@ -197,8 +227,13 @@ class FundingLockTest(unittest.TestCase):
         self._fee(None)
         with mock.patch.dict(os.environ, {"PLATFORM_FEE_ENFORCED": ""}):
             self.assertIsNone(fees.require_fee_paid(1008, 14))
-        with mock.patch.dict(os.environ, {"PLATFORM_FEE_ENFORCED": "true"}):
+        with mock.patch.dict(os.environ, {"PLATFORM_FEE_ENFORCED": "true", "PLATFORM_FEE_CHARGE_ENABLED": "true"}):
             self.assertIsNotNone(fees.require_fee_paid(1008, 14))
+
+    def test_enforced_without_charging_never_locks_a_loan_with_no_fee(self):
+        self._fee(None)
+        with mock.patch.dict(os.environ, {"PLATFORM_FEE_ENFORCED": "true", "PLATFORM_FEE_CHARGE_ENABLED": ""}):
+            self.assertIsNone(fees.require_fee_paid(1008, 14))
 
 
 class FundingIntentHookTest(unittest.TestCase):

@@ -281,11 +281,26 @@ CREATE PROCEDURE dbo.sp_pushNotifications_activeUsers
 AS
 BEGIN
     SET NOCOUNT ON;
-    -- @pjsonfile is a flat object (e.g. {"companyId": 5} or {"companyId": null}),
-    -- not an array, so JSON_VALUE reads straight off @pjsonfile -- OPENJSON
-    -- without an array path returns one row per key with a scalar `value`,
-    -- which JSON_VALUE(value, '$.key') can't re-parse.
+    -- @pjsonfile is a flat object ({"companyId": 5}, {"companyId": null} or
+    -- {"companyId": 1008, "roleId": 1}) — JSON_VALUE reads straight off it.
     DECLARE @companyId INT = JSON_VALUE(@pjsonfile, '$.companyId');
+    DECLARE @roleId    INT = JSON_VALUE(@pjsonfile, '$.roleId');
+
+    IF @roleId IS NOT NULL
+    BEGIN
+        -- targetType 'Role': active users holding that role in that company
+        -- (userCompanies.roleId, or roles.code = roleName when roleId is NULL).
+        SELECT DISTINCT u.userId
+        FROM userCompanies uc
+        INNER JOIN users u ON u.userId = uc.userId
+        LEFT JOIN roles r ON r.code = uc.roleName
+        WHERE u.active = '1'
+          AND uc.active = '1'
+          AND (@companyId IS NULL OR uc.companyId = @companyId)
+          AND ISNULL(uc.roleId, r.roleId) = @roleId
+        FOR JSON PATH, ROOT('users');
+        RETURN;
+    END
 
     -- @companyId NULL -> every active user (targetType 'All').
     -- @companyId set  -> active users in that company (targetType 'Company').

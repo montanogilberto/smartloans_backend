@@ -17,6 +17,9 @@ Rules this module keeps:
   * Funding stays locked until the fee is PAID (require_fee_paid), when
     PLATFORM_FEE_ENFORCED=true. Off by default so loans signed before the rollout
     keep working.
+  * Nothing is charged unless PLATFORM_FEE_CHARGE_ENABLED=true (off by default):
+    the app must first ship the fee-card and 3-D Secure screens, so no lender is
+    charged without seeing why. Refunds and webhooks always run.
   * Logs carry ids and statuses only — never card data, client_secret or amounts
     tied to a person's name.
 
@@ -49,8 +52,17 @@ def _stripe_ready() -> bool:
     return bool(key) and not key.startswith("sk_test_YOUR")
 
 
+def _flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true")
+
+
 def fee_enforced() -> bool:
-    return os.getenv("PLATFORM_FEE_ENFORCED", "").strip().lower() in ("1", "true")
+    return _flag("PLATFORM_FEE_ENFORCED")
+
+
+def charging_enabled() -> bool:
+    """Kill switch: no fee is created or charged until this is on."""
+    return _flag("PLATFORM_FEE_CHARGE_ENABLED")
 
 
 # ── sp_platformFees ──────────────────────────────────────────────────────────
@@ -163,6 +175,8 @@ def _lender_card(company_id: int, client_id: int) -> tuple[str, str] | None:
 def charge_fee(company_id, loan_id, lender_client_id) -> dict:
     """Create the loan's fee (if missing) and charge the lender's saved card.
     Idempotent per loan. Never marks PAID: the webhook does. Returns the fee row."""
+    if not charging_enabled():
+        raise FeeError("El cobro de la comisión aún no está activo.")
     company_id, loan_id, lender_client_id = int(company_id), int(loan_id), int(lender_client_id)
     fee = fee_for_loan(company_id, loan_id)
     if fee is None:
@@ -226,6 +240,10 @@ def charge_fee(company_id, loan_id, lender_client_id) -> dict:
 def charge_fee_in_background(company_id, loan_id, lender_client_id) -> None:
     """Fire-and-forget from the contract/funding flow: a fee problem never fails it."""
     import threading
+
+    if not charging_enabled():
+        logger.info("[platformFees] charging off (PLATFORM_FEE_CHARGE_ENABLED): loan=%s not charged", loan_id)
+        return
 
     def run():
         try:
@@ -400,7 +418,9 @@ def require_fee_paid(company_id, loan_id) -> str | None:
         logger.error("[platformFees] fee check loan=%s failed: %s", loan_id, e)
         return "No se pudo verificar la comisión de la plataforma." if fee_enforced() else None
     if fee is None:
-        return "La comisión de la plataforma no está pagada." if fee_enforced() else None
+        # With charging off no fee is ever created: a missing fee can't block
+        # funding then, or enforcement would lock every new loan for good.
+        return "La comisión de la plataforma no está pagada." if fee_enforced() and charging_enabled() else None
     return None if fee["status"] == "PAID" else "La comisión de la plataforma no está pagada."
 
 

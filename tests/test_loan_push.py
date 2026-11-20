@@ -46,7 +46,7 @@ class PushToClientTests(unittest.TestCase):
         ok, cursor, record, conn = self.run_push()
         self.assertTrue(ok)
         self.assertEqual(self.pushed[0]["user"], 1037)  # userId, never the clientId
-        self.assertEqual(self.pushed[0]["data"], {"navigationRoute": "/p2p-lending"})
+        self.assertEqual(self.pushed[0]["data"], {"navigationRoute": "/p2p-lending", "pushNotificationId": 555})
         stored = json.loads(cursor.execute.call_args.args[1][0])["pushNotifications"][0]
         self.assertEqual(stored["targetUserId"], 1037)
         self.assertEqual(stored["action"], 1)

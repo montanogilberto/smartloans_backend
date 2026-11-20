@@ -7,7 +7,9 @@ Request body (JSON):
 {
   "userId": 123,
   "token": "fcm_or_apns_device_token",
-  "platform": "android" // or "ios"
+  "platform": "android", // or "ios"
+  "appEnv": "prod",       // optional → tag env_{appEnv}
+  "appId": "gmoprestamos" // optional → tag app_{appId} (which GMO app installed it)
 }
 
 Behavior:
@@ -17,5 +19,7 @@ Behavior:
   - ios -> apns
 - Creates/updates an Azure Notification Hub Installation with:
   - pushChannel = token
-  - tags includes user_{userId}
+  - tags includes user_{userId} (+ env_{appEnv}, app_{appId} when sent)
+- With env PUSH_TARGET_APP=gmoprestamos, sends target "user_{id} && app_gmoprestamos",
+  so pushes reach only that app (not POS Vending installs of the same user).
 - Returns success/error details including upstream status code when available.

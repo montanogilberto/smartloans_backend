@@ -14,6 +14,8 @@
 --   disbursementDate     DATETIME2 NULL,
 --   maturityDate         DATETIME2 NULL,
 --   loanStatus           NVARCHAR(30) NOT NULL DEFAULT 'pending',
+--   paymentPlan          NVARCHAR(20) NOT NULL DEFAULT 'standard',  -- RFC-019
+--   postTermRate         DECIMAL(5,2) NULL,                         -- RFC-019
 --   notes                NVARCHAR(MAX) NULL,
 --   created_At           DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
 --   updated_at           DATETIME2 NULL,
@@ -47,20 +49,26 @@ BEGIN
         DECLARE @maturityDate        DATETIME2      = JSON_VALUE(@pjsonfile, '$.loans[0].maturityDate')
         DECLARE @loanStatus          NVARCHAR(30)   = ISNULL(JSON_VALUE(@pjsonfile, '$.loans[0].loanStatus'), 'pending')
         DECLARE @notes               NVARCHAR(MAX)  = JSON_VALUE(@pjsonfile, '$.loans[0].notes')
+        -- RFC-019: términos del plan, congelados al crear (update no los toca).
+        -- 'interest_free' = 0 % dentro del plazo; postTermRate (anual %) aplica
+        -- al capital que quede sin pagar al vencer la última cuota.
+        DECLARE @paymentPlan         NVARCHAR(20)   = ISNULL(JSON_VALUE(@pjsonfile, '$.loans[0].paymentPlan'), 'standard')
+        DECLARE @postTermRate        DECIMAL(5,2)   = JSON_VALUE(@pjsonfile, '$.loans[0].postTermRate')
+        IF @paymentPlan <> 'interest_free' SET @postTermRate = NULL
 
         IF @action = 1 -- CREATE
         BEGIN
             INSERT INTO [dbo].[loans]
                 (companyId, loanNumber, clientId, principalAmount, interestRate, termMonths,
                  paymentFrequency, approvedAmount, totalRepaymentAmount, disbursementDate,
-                 maturityDate, loanStatus, notes)
+                 maturityDate, loanStatus, notes, paymentPlan, postTermRate)
             VALUES
                 (@companyId, @loanNumber, @clientId, @principalAmount, @interestRate, @termMonths,
                  @paymentFrequency, @approvedAmount, @totalRepaymentAmount, @disbursementDate,
-                 @maturityDate, @loanStatus, @notes)
+                 @maturityDate, @loanStatus, @notes, @paymentPlan, @postTermRate)
 
             SELECT (SELECT TOP 1 loanId, companyId, loanNumber, clientId, principalAmount,
-                           interestRate, termMonths, paymentFrequency, approvedAmount,
+                           interestRate, paymentPlan, postTermRate, termMonths, paymentFrequency, approvedAmount,
                            totalRepaymentAmount,
                            CONVERT(NVARCHAR, disbursementDate, 127) AS disbursementDate,
                            CONVERT(NVARCHAR, maturityDate, 127) AS maturityDate,
@@ -181,7 +189,7 @@ BEGIN
 
         SELECT ISNULL(
             (SELECT loanId, companyId, loanNumber, clientId, principalAmount,
-                    interestRate, termMonths, paymentFrequency, approvedAmount,
+                    interestRate, paymentPlan, postTermRate, termMonths, paymentFrequency, approvedAmount,
                     totalRepaymentAmount,
                     CONVERT(NVARCHAR, disbursementDate, 127) AS disbursementDate,
                     CONVERT(NVARCHAR, maturityDate, 127) AS maturityDate,
@@ -219,7 +227,7 @@ BEGIN
 
         SELECT ISNULL(
             (SELECT TOP 1 loanId, companyId, loanNumber, clientId, principalAmount,
-                          interestRate, termMonths, paymentFrequency, approvedAmount,
+                          interestRate, paymentPlan, postTermRate, termMonths, paymentFrequency, approvedAmount,
                           totalRepaymentAmount,
                           CONVERT(NVARCHAR, disbursementDate, 127) AS disbursementDate,
                           CONVERT(NVARCHAR, maturityDate, 127) AS maturityDate,
