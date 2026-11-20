@@ -3,6 +3,11 @@
 -- Verified CLABEs per client — SPEI payout/deposit destinations.
 -- Banking-first Phase 1 (docs/payment-banking-first-redesign.md).
 -- Spec: posgmo-factory/tests/prd_bankAccount.json
+-- RFC-017 (POSVending docs/rfcs): a new CLABE is inserted PENDING_VERIFICATION
+-- and becomes PRIMARY only when verified (action 2). The SP references the
+-- accountStatus column, which sp_bankAccountsLifecycle.sql adds: on a fresh DB
+-- run that script first. Re-runnable. Rollback: re-run the previous version
+-- of this file from git — no data change to undo.
 -- ============================================================
 
 -- ── Table: bankAccounts ─────────────────────────────────────
@@ -46,6 +51,7 @@ CREATE PROCEDURE [dbo].[sp_bankAccounts]
 AS
 BEGIN
     SET NOCOUNT ON;
+    SET XACT_ABORT ON;  -- the verify → promote step below is one transaction
     BEGIN TRY
         DECLARE @action             INT            = JSON_VALUE(@pjsonfile, '$.bankAccounts[0].action')
         DECLARE @bankAccountId      INT            = JSON_VALUE(@pjsonfile, '$.bankAccounts[0].bankAccountId')
@@ -63,19 +69,18 @@ BEGIN
 
         IF @action = 1 -- CREATE (link)
         BEGIN
-            -- First account for the client becomes the default automatically.
-            DECLARE @firstForClient BIT =
-                CASE WHEN EXISTS (SELECT 1 FROM [dbo].[bankAccounts]
-                                  WHERE clientId = @clientId AND companyId = @companyId AND isActive = 1)
-                     THEN 0 ELSE 1 END;
-
+            -- RFC-017: a new CLABE is never a money destination until its
+            -- micro-deposit is confirmed. Set accountStatus explicitly: the
+            -- column default is 'PRIMARY' (sp_bankAccountsLifecycle.sql), which
+            -- made every freshly linked, unverified CLABE the client's PRIMARY.
+            -- It becomes PRIMARY + default on verification (action 2).
             INSERT INTO [dbo].[bankAccounts]
                 (companyId, clientId, clabe, bankCode, bankName, holderName,
-                 verificationMethod, verificationCents, isDefault)
+                 verificationMethod, verificationCents, isDefault, accountStatus)
             VALUES
                 (@companyId, @clientId, @clabe, @bankCode, @bankName, @holderName,
                  ISNULL(@verificationMethod, 'micro_deposit'), @verificationCents,
-                 ISNULL(@isDefault, @firstForClient))
+                 0, 'PENDING_VERIFICATION')
 
             SELECT (SELECT TOP 1 bankAccountId, companyId, clientId,
                            RIGHT(clabe, 4) AS clabeLast4, bankCode, bankName, holderName,
@@ -107,8 +112,39 @@ BEGIN
                 updated_at        = GETUTCDATE()
             WHERE bankAccountId = @bankAccountId AND companyId = @companyId
 
+            -- RFC-017: verifying the client's first usable CLABE makes it their
+            -- PRIMARY. "Usable" = a PRIMARY that is verified; a legacy PRIMARY
+            -- that was never verified is archived here, it never was a valid
+            -- destination. With a verified PRIMARY already in place the new
+            -- account stays PENDING_VERIFICATION (verified) and is activated
+            -- through promote_primary, which keeps the D18 active-loans block.
+            IF @isVerified = 1
+            BEGIN
+                DECLARE @verifiedClientId INT =
+                    (SELECT clientId FROM [dbo].[bankAccounts]
+                     WHERE bankAccountId = @bankAccountId AND companyId = @companyId
+                       AND accountStatus <> 'ARCHIVED' AND isActive = 1);
+                IF @verifiedClientId IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM [dbo].[bankAccounts]
+                    WHERE companyId = @companyId AND clientId = @verifiedClientId
+                      AND bankAccountId <> @bankAccountId
+                      AND accountStatus = 'PRIMARY' AND isVerified = 1 AND isActive = 1)
+                BEGIN
+                    BEGIN TRANSACTION;
+                    UPDATE [dbo].[bankAccounts]
+                    SET accountStatus = 'ARCHIVED', isDefault = 0, updated_at = GETUTCDATE()
+                    WHERE companyId = @companyId AND clientId = @verifiedClientId
+                      AND bankAccountId <> @bankAccountId
+                      AND accountStatus = 'PRIMARY' AND isVerified = 0;
+                    UPDATE [dbo].[bankAccounts]
+                    SET accountStatus = 'PRIMARY', isDefault = 1, updated_at = GETUTCDATE()
+                    WHERE bankAccountId = @bankAccountId AND companyId = @companyId;
+                    COMMIT TRANSACTION;
+                END
+            END
+
             SELECT (SELECT TOP 1 bankAccountId, clientId, RIGHT(clabe, 4) AS clabeLast4,
-                           bankName, isVerified, isDefault,
+                           bankName, isVerified, isDefault, accountStatus,
                            CONVERT(NVARCHAR, verifiedAt, 127) AS verifiedAt
                     FROM [dbo].[bankAccounts]
                     WHERE bankAccountId = @bankAccountId
@@ -128,6 +164,7 @@ BEGIN
             SELECT '{"error":"Invalid action"}' AS [jsonResult]
     END TRY
     BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
         SELECT ('{"error":"' + REPLACE(ERROR_MESSAGE(), '"', '\"') + '"}') AS [jsonResult]
     END CATCH
 END

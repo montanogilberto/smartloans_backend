@@ -55,7 +55,7 @@ from routes_ import (
     document_intelligence, geocoding, onboardingReminders, registrationReminders,
     clientFollowUps, clientContactPreferences,
     bankAccounts, walletTransactions, transfers, companyPaymentAccounts, walletTopUps,
-    paymentIntents, fundingTransactions, transferEvidence, paymentHistory, loanTickets,
+    paymentIntents, fundingTransactions, transferEvidence, paymentHistory, loanTickets, platformFees,
     featureFlags,
     arcade,
     arcadeStore,
@@ -85,6 +85,7 @@ from routes_ import (
     voiceCalls,
     serviceCompletionNotices,
     address,
+    loanPayments,
 )
 
 @asynccontextmanager
@@ -236,6 +237,7 @@ app.include_router(loanProposals.router)
 app.include_router(loanOffers.router)
 app.include_router(stripe_payments.router)
 app.include_router(paymentIntents.router)
+app.include_router(platformFees.router)
 app.include_router(fundingTransactions.router)
 app.include_router(loanTickets.router)  # RFC-014: /comprobante/{token}
 app.include_router(transferEvidence.router)
@@ -291,6 +293,7 @@ app.include_router(laundryDevices.router)
 app.include_router(voiceCalls.router)
 app.include_router(address.router)
 app.include_router(serviceCompletionNotices.router)
+app.include_router(loanPayments.router)
 
 # --------------------------------------------------
 # Daily automated-repayment job

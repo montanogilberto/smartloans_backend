@@ -176,6 +176,14 @@ def bank_accounts_lifecycle_sp(json_file: dict):
     (RFC-001, sql/sp_bankAccountsLifecycle.sql). Was defined in SQL since
     RFC-001 landed but never had a Python/route wiring until RFC-002 Phase 1
     needed snapshot_for_loan for paymentIntents.create's beneficiarySnapshotId."""
+    req = (json_file.get("bankAccounts") or [{}])[0]
+    if req.get("action") == "reveal_counterparty":
+        # RFC-016 fase 3b: no counterparty CLABE (so no SPEI) until the loan's
+        # platform fee is PAID.
+        from modules.platformFees import require_fee_paid
+        blocked = require_fee_paid(req.get("companyId"), req.get("loanId"))
+        if blocked:
+            return JSONResponse({"error": blocked, "code": "PLATFORM_FEE_UNPAID"}, status_code=409)
     try:
         return JSONResponse(_sp("sp_bankAccountsLifecycle", json_file), status_code=200)
     except Exception as e:

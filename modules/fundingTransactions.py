@@ -112,7 +112,13 @@ def funding_transactions_sp(json_file: dict):
 def funding_transactions_declare(json_file: dict):
     """sp_fundingTransactions 'declare' + the RFC-014 ticket to both parties
     (lender: "Fondeo declarado"; borrower: "Confirma tu fondeo"). The ticket
-    runs in the background and never changes this response."""
+    runs in the background and never changes this response.
+    RFC-016 fase 3b: refused while the loan's platform fee isn't PAID."""
+    from modules.platformFees import require_fee_paid
+    req = (json_file.get("fundingTransactions") or [{}])[0]
+    blocked = require_fee_paid(req.get("companyId"), req.get("loanId"))
+    if blocked:
+        return JSONResponse(content={"error": blocked, "code": "PLATFORM_FEE_UNPAID"}, status_code=409)
     result = _sp_raw(json_file)
     funding_id = result.get("fundingTransactionId") if isinstance(result, dict) else None
     if funding_id and "error" not in result:
